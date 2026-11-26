@@ -1,5 +1,5 @@
 {
- "built_at": "2026-11-26T22:54:03+00:00",
+ "built_at": "2026-11-26T23:07:56+00:00",
  "countries": [
   {
    "id": "lka",
@@ -211,7 +211,7 @@
   {
    "code": "preserve",
    "label": "Preserve",
-   "rule": "\u2265 50% protected area, or a national park with visitor statistics."
+   "rule": "\u2265 75% strictly protected (WDPA, IUCN categories Ia\u2013IV), or a national park with visitor statistics."
   }
  ],
  "terrain_codes": [

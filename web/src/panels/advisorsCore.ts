@@ -225,7 +225,7 @@ export function perCapMeasure(d: CountryData, key: string, per: number, label: s
   if (!m || !metricOf(d, 'pop')) return null
   const pm = metricOf(d, 'pop')!
   return {
-    id: `${key}/pop*${per}`, label, fmt: (v) => `${count(v)} ${unitText}`, sources: [...m.sources, ...pm.sources],
+    id: `${key}/pop*${per}`, label, fmt: (v) => (unitText ? `${count(v)} ${unitText}` : count(v)), sources: [...m.sources, ...pm.sources],
     vintage: m.vintage, better: m.better ?? 'neutral', ratio: true,
     calc: (get) => { const p = get('pop'); const v = get(key); return p > 0 && Number.isFinite(v) ? (v / p) * per : NaN },
   }

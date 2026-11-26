@@ -2,11 +2,12 @@
 // its own country, comparison with the other country's median unit, industry location quotients,
 // yields, hazards, land cover. Only loaded values are used; missing inputs skip the comment.
 import { adminUnitOfHex } from '../data/load'
-import type { CountryData, CountryId, YieldKey } from '../types'
+import { terrainLabel } from '../civ'
+import type { CountryData, CountryId, IndexJson, YieldKey } from '../types'
 import {
   ADJ, type AdvisorId, type Comment, count, counterpartLevel, fig, getter, levelNoun, type Measure, measureValue,
-  medianOf, metricMeasure, money, natAgg, nm, ok, ordinal, pct, percentileOf, perCapMeasure, type Place, prettyLabel,
-  type Seg, shareMeasure, SHORT, sortedColumn, times, tonnes, unitName, yieldColumn,
+  medianOf, metricMeasure, money, natAgg, nm, ok, ordinal, pct, percentileOf, perCapMeasure, type Place, poss, prettyLabel,
+  type Seg, SHORT, sortedColumn, times, tonnes, unitName, yieldColumn,
 } from './advisorsCore'
 
 export interface PlaceCtx {
@@ -63,9 +64,14 @@ function rankComment(ctx: PlaceCtx, id: string, icon: string, ms: Measure | null
     id, icon, segs, sources, pct: r.p, pctBetter: ms.better, meta: ms.vintage || undefined,
     weight: r.n >= 5 ? extreme : 0,
     verdict: [`${place.title} ranks in the `, fig(r.p >= 50 ? `top ${Math.max(1, Math.round(100 - r.p))}%` : `bottom ${Math.max(1, Math.round(r.p))}%`, home),
-      ` of ${ADJ[home]} ${levelNoun(place.d, place.level, r.n)} for ${ms.label.toLowerCase()} (`, fig(ms.fmt(r.v), home), ').'],
+      ` of ${ADJ[home]} ${levelNoun(place.d, place.level, r.n)} for ${lc1(ms.label.replace(/[:\s]+$/, ''))} (`, fig(ms.fmt(r.v), home), ').'],
   }
 }
+
+/** Counts reconciled onto units can be fractional: show whole numbers, "≈" when rounded. */
+const nCount = (v: number) => (Math.abs(v - Math.round(v)) > 0.05 && Math.abs(v) < 1000 ? `≈${count(Math.round(v))}` : count(v))
+
+const lc1 = (s: string) => (/^[A-Z][a-z]/.test(s) ? s.charAt(0).toLowerCase() + s.slice(1) : s)
 
 const mm = (d: CountryData | undefined, key: string, o?: Partial<Measure>) => (d ? metricMeasure(d, key, o) : null)
 const firstKey = (d: CountryData, keys: string[]) => keys.find((k) => d.metricByKey.has(k))
@@ -111,14 +117,13 @@ function yieldSources(place: Place, y: YieldKey, extra: string[] = []) {
 
 function yieldComment(place: Place, ys: YieldKey[]): Comment | null {
   const parts: Seg[] = []
-  let weight = 0, p0: number | undefined
+  let p0: number | undefined
   const home = place.country
   for (const y of ys) {
     const r = yieldRank(place, y)
     if (!r) continue
     if (parts.length) parts.push('; ')
     parts.push(`${YLABEL[y]} `, fig(count(r.v), home), ` (${pct(r.share)} of ${nm(home)}'s ${count(r.tot)})`)
-    weight = Math.max(weight, 0)
     p0 ??= r.p
   }
   if (!parts.length) return null
@@ -129,7 +134,7 @@ function yieldComment(place: Place, ys: YieldKey[]): Comment | null {
 // ---------------------------------------------------------------------------------------------
 // Industry mix: location quotients
 // ---------------------------------------------------------------------------------------------
-const cleanEmp = (l: string) => prettyLabel(l).replace(/^(employment|jobs|employed)\s*(in|:)?\s*/i, '').replace(/^[a-z]/, (c) => c.toUpperCase())
+const cleanEmp = (l: string) => prettyLabel(l).replace(/^(employment|jobs|employed)\s*(in|:)?\s*/i, '').replace(/\s+(jobs|employment|workers)(?=\s*(\(|$))/i, '')
 
 function lqComment(place: Place): Comment | null {
   const d = place.d
@@ -271,7 +276,7 @@ function military(ctx: PlaceCtx): Comment[] {
   if (pop) {
     out.push({
       id: 'manpower', icon: '👥', sources: d.metricByKey.get('pop')?.sources ?? [], meta: d.metricByKey.get('pop')?.vintage,
-      segs: ['Manpower: ', fig(count(pop.v), home), ` residents — ${pct(pop.share)} of ${poss2(home)} ${count(pop.tot)} people.`],
+      segs: ['Manpower: ', fig(count(pop.v), home), ` residents — ${pct(pop.share)} of ${poss(home)} ${count(pop.tot)} people.`],
     })
   }
   const ms = shareOfNation(place, 'military_sites')
@@ -279,8 +284,8 @@ function military(ctx: PlaceCtx): Comment[] {
     out.push({
       id: 'garrison', icon: '🏰', sources: d.metricByKey.get('military_sites')?.sources ?? [], meta: d.metricByKey.get('military_sites')?.vintage,
       segs: ms.v > 0
-        ? ['Garrisons: ', fig(count(ms.v), home), ` mapped military installation${ms.v === 1 ? '' : 's'} — ${pct(ms.share)} of ${poss2(home)} ${count(ms.tot)}.`]
-        : [`No mapped military installations here (${nm(home)} has `, fig(count(ms.tot), home), ').'],
+        ? ['Garrisons: ', fig(nCount(ms.v), home), ` mapped military installation${Math.round(ms.v) === 1 ? '' : 's'} — ${pct(ms.share)} of ${poss(home)} ${nCount(ms.tot)}.`]
+        : [`No mapped military installations here (${nm(home)} has `, fig(nCount(ms.tot), home), ').'],
     })
   }
   out.push(rankComment(ctx, 'soldiers', '💂', mm(d, 'cit_soldiers_pct', { label: 'Soldiers (share of workers)' }), mm(other, 'cit_soldiers_pct', { label: 'Soldiers (share of workers)' })))
@@ -304,7 +309,6 @@ function military(ctx: PlaceCtx): Comment[] {
   return out.filter(Boolean) as Comment[]
 }
 
-const poss2 = (c: CountryId) => (c === 'usa' ? "the United States'" : "Sri Lanka's")
 
 function cultural(ctx: PlaceCtx): Comment[] {
   const { place, other } = ctx
@@ -321,10 +325,10 @@ function cultural(ctx: PlaceCtx): Comment[] {
     heritage.push(`${w.length === 1 ? 'Wonder' : 'Wonders'} here: `, fig(w.slice(0, 3).map((x) => x.name).join(', ') + (w.length > 3 ? ` +${w.length - 3}` : ''), home))
     srcs.push(...w.flatMap((x) => x.sources ?? []))
   }
-  for (const [k, l] of [['museums', 'museums'], ['worship_sites', 'places of worship'], ['park_visitors', 'park visitors']] as const) {
+  for (const [k, one, many] of [['museums', 'museum', 'museums'], ['worship_sites', 'place of worship', 'places of worship'], ['park_visitors', 'park visitor', 'park visitors a year']] as const) {
     const s = shareOfNation(place, k)
     if (!s || !(s.v > 0)) continue
-    heritage.push(heritage.length ? '; ' : '', fig(count(s.v), home), ` ${l} (${pct(s.share)} of national)`)
+    heritage.push(heritage.length ? '; ' : '', fig(nCount(s.v), home), ` ${Math.round(s.v) === 1 ? one : many} (${pct(s.share)} of national)`)
     srcs.push(...(d.metricByKey.get(k)?.sources ?? []))
   }
   if (heritage.length) out.push({ id: 'heritage', icon: '🏛️', segs: ['Heritage: ', ...heritage, '.'], sources: srcs })
@@ -339,15 +343,23 @@ function scientific(ctx: PlaceCtx): Comment[] {
   const out: (Comment | null)[] = []
   const ek = firstKey(d, ['pct_bachelors', 'pct_secondary', 'literacy_rate'])
   if (ek) out.push(rankComment(ctx, 'edu', '🎓', mm(d, ek), mm(other, ek)))
-  const rw = perCapMeasure(d, 'research_works_5y', 1e6, 'Research output', 'works per million residents (5 yrs)')
-  const orw = other ? perCapMeasure(other, 'research_works_5y', 1e6, 'Research output', 'works per million residents (5 yrs)') : null
   const share = shareOfNation(place, 'research_works_5y')
-  out.push(rankComment(ctx, 'research', '📚', rw, orw, {
-    suffix: () => (share && share.v > 0 ? `; ${pct(share.share)} of ${poss2(home)} output` : ''),
-  }))
+  if (share && share.v > 0) {
+    const lab = 'Research works per million residents (5 yrs):'
+    const rw = perCapMeasure(d, 'research_works_5y', 1e6, lab, '')
+    const orw = other ? perCapMeasure(other, 'research_works_5y', 1e6, lab, '') : null
+    out.push(rankComment(ctx, 'research', '📚', rw, orw, {
+      suffix: () => `; ${count(share.v)} works in all, ${pct(share.share)} of ${poss(home)} output`,
+    }))
+  } else if (share) {
+    out.push({
+      id: 'research', icon: '📚', sources: d.metricByKey.get('research_works_5y')?.sources ?? [], meta: d.metricByKey.get('research_works_5y')?.vintage,
+      segs: [`No research output is attributed here; ${poss(home)} `, fig(count(share.tot), home), ' research works (5 yrs) come from other places.'],
+    })
+  }
   out.push(rankComment(ctx, 'engineers', '🧑‍🔬', mm(d, 'cit_engineers_pct', { label: 'Engineers (STEM share of workers)' }), mm(other, 'cit_engineers_pct', { label: 'Engineers' })))
   out.push(yieldComment(place, ['science']))
-  out.push(rankComment(ctx, 'schools', '🏫', perCapMeasure(d, 'schools', 1e4, 'Schools', 'per 10k residents'), other ? perCapMeasure(other, 'schools', 1e4, 'Schools', 'per 10k residents') : null))
+  out.push(rankComment(ctx, 'schools', '🏫', perCapMeasure(d, 'schools', 1e4, 'Schools per 10,000 residents:', ''), other ? perCapMeasure(other, 'schools', 1e4, 'Schools per 10,000 residents:', '') : null))
   return out.filter(Boolean) as Comment[]
 }
 
@@ -386,19 +398,20 @@ export function placeComments(advisor: AdvisorId, ctx: PlaceCtx): Comment[] {
 }
 
 /** Display name of a twin unit / tile. */
-export function twinName(d: CountryData, level: string, index: number): { title: string; subtitle: string } {
+export function twinName(d: CountryData, level: string, index: number, idx?: IndexJson | null): { title: string; subtitle: string } {
   if (level === 'hex') {
     const u2 = adminUnitOfHex(d, 'adm2', index)
     const u1 = adminUnitOfHex(d, 'adm1', index)
+    const terr = idx ? `${terrainLabel(idx.terrain_codes[d.hexes.terrain[index]] ?? 'plains', idx.feature_codes[d.hexes.feature[index]] ?? '', !!d.hexes.hills[index])} tile` : ''
     return {
       title: u2 ? `Tile in ${unitName(d, 'adm2', u2.unit)}` : `Tile ${d.hexes.h3[index]}`,
-      subtitle: d.id === 'lka' && u1 ? unitName(d, 'adm1', u1.unit) : d.hexes.h3[index],
+      subtitle: [terr, d.id === 'lka' && u1 ? unitName(d, 'adm1', u1.unit) : ''].filter(Boolean).join(' · '),
     }
   }
   const u = d.admin[level]?.units[index]
   if (!u) return { title: '?', subtitle: '' }
   const parent = level === 'adm2' ? d.admin.adm1?.units.find((x) => x.id === u.parent) : undefined
-  return { title: unitName(d, level, u), subtitle: d.id === 'lka' && parent ? unitName(d, 'adm1', parent) : d.meta.admin_levels[level]?.label ?? '' }
+  const sub = d.id === 'lka' ? (parent ? unitName(d, 'adm1', parent) : '') : level === 'adm2' ? (d.admin.adm1?.units.find((x) => x.id === u.parent)?.name ?? '') : ''
+  return { title: unitName(d, level, u), subtitle: sub || (d.meta.admin_levels[level]?.label ?? '') }
 }
 
-export { shareMeasure }

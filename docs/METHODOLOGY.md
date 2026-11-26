@@ -90,7 +90,7 @@ A tile receives every district whose rule it meets; the first in this priority o
 | Farmland | Food ≥ 5 and ≥ 40% cropland |
 | Fishery | sea tile with Food ≥ 4 |
 | Neighborhood | ≥ 1,500 people/km² |
-| Preserve | ≥ 50% protected area, or a national park with visitor statistics |
+| Preserve | ≥ 75% strictly protected (WDPA, IUCN Ia–IV), or a national park with visitor statistics |
 
 LQ = location quotient: the tile's share of employment in an industry divided by the national share.
 

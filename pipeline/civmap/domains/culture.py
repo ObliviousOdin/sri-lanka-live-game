@@ -142,8 +142,10 @@ METRICS = [
            "Museums with coordinates documented in Wikidata (count of points).",
            "Wikidata items instance of museum (Q33506) or any subclass (art, history, science, house "
            "museums...), country P17 = Sri Lanka / United States, with coordinates; items with a dissolution "
-           "(P576) or closure (P3999) date are dropped, one row per item (first coordinate). Points that do not "
-           "snap to the country grid (US territories) are dropped. Coverage reflects Wikidata completeness, "
+           "(P576) or closure (P3999) date are dropped, one row per item (first coordinate). Items whose only "
+           "museum-subclass types are visitor / nature / interpretation centres, heritage railways, film "
+           "archives, cinematheques or virtual museums are dropped, as are points that do not snap to the "
+           "country grid (US territories). kind = the most specific museum subclass of the item (P31). Coverage reflects Wikidata completeness, "
            "not an official museum census (the US IMLS universe lists far more institutions).", "higher"),
     Metric("protected_pct", "Protected area", "%", "environment", "intensive", "land", "hex",
            ["unep_wdpca"], "WDPCA 2026-11",
@@ -616,6 +618,10 @@ def parks_lka(loc: _Locator, wdpa: gpd.GeoDataFrame) -> pd.DataFrame:
 # ---------------------------------------------------------------------------------------------
 
 
+NON_MUSEUM_TYPES = {"visitor center", "National Park Service visitor center", "nature center",
+                    "interpretation centre", "heritage railway", "virtual museum", "film archive", "cinematheque"}
+
+
 def museums(country: str, loc: _Locator) -> pd.DataFrame:
     q = """SELECT ?m ?mLabel ?sitelinks (SAMPLE(STR(?coord)) AS ?coord1)
       (GROUP_CONCAT(DISTINCT ?tl; separator="; ") AS ?types) WHERE {
@@ -635,17 +641,25 @@ def museums(country: str, loc: _Locator) -> pd.DataFrame:
     n_out = int((~ok).sum())
     d = d[ok].copy()
 
+    def types_of(types) -> list[str]:
+        return [t for t in str(types or "").split("; ") if t and t != "nan"]
+
     def kind(types) -> str:
-        ts = [t for t in str(types or "").split("; ") if t and t != "nan"]
-        spec = [t for t in ts if t != "museum"]
+        spec = [t for t in types_of(types) if t != "museum"]
         return sorted(spec, key=len)[0] if spec else "museum"
+
+    # Wikidata files visitor centres, nature centres, heritage railways, archives and virtual museums under
+    # museum; drop items whose only museum-type classes are such non-museum facilities
+    not_museum = d.types.map(lambda t: bool(types_of(t)) and all(x in NON_MUSEUM_TYPES for x in types_of(t)))
+    n_nm = int(not_museum.sum())
+    d = d[~not_museum].copy()
 
     df = pd.DataFrame({
         "id": d.m.map(_qid), "name": d.mLabel, "lat": d.lat.round(6), "lon": d.lon.round(6),
         "kind": d.types.map(kind), "sitelinks": d.sitelinks.astype(int), "wikidata": d.m.map(_qid),
         "count": 1, "museums": 1,
     }).sort_values(["sitelinks", "name"], ascending=[False, True]).reset_index(drop=True)
-    print(f"  museums: {len(df)} (dropped {n_out} outside the grid); top kinds "
+    print(f"  museums: {len(df)} (dropped {n_out} outside the grid, {n_nm} non-museum facility types); top kinds "
           f"{df.kind.value_counts().head(5).to_dict()}")
     return df
 
@@ -700,17 +714,19 @@ def protected_hex(country: str, polys: gpd.GeoDataFrame) -> pd.DataFrame:
     pts = util.hex_children_points(cells, child)
     print(f"  protected areas: {len(polys)} polygons ({int(polys.strict.sum())} IUCN Ia-IV); "
           f"{len(pts):,} sample points (res {child})", flush=True)
-    geoms = polys.geometry.to_numpy()
-    tree = STRtree(geoms)
+    # the tree indexes the sample points and the polygons are the query geometries, so shapely
+    # prepares each polygon once (much faster than testing unprepared polygons per point)
     P = shapely.points(pts.lon.to_numpy(float), pts.lat.to_numpy(float))
+    tree = STRtree(P)
     hit_any = np.zeros(len(P), bool)
     hit_strict = np.zeros(len(P), bool)
+    geoms = polys.geometry.to_numpy()
     strict = polys.strict.to_numpy()
-    step = 250_000
-    for s in range(0, len(P), step):
-        ip, ig = tree.query(P[s:s + step], predicate="intersects")
-        hit_any[s + ip] = True
-        hit_strict[s + ip[strict[ig]]] = True
+    step = 5_000
+    for s in range(0, len(geoms), step):
+        ig, ip = tree.query(geoms[s:s + step], predicate="intersects")
+        hit_any[ip] = True
+        hit_strict[ip[strict[s + ig]]] = True
     print(f"    point-in-polygon done ({time.time() - t0:.0f}s)", flush=True)
     g = pd.DataFrame({"h3": pts.h3.to_numpy(), "a": hit_any, "s": hit_strict}).groupby("h3", sort=False).mean()
     out = pd.DataFrame({"h3": cells})

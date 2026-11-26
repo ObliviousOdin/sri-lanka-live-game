@@ -7,7 +7,7 @@ import { COUNTRY_META } from '../civ'
 import { SourceChips } from '../components/SourceChip'
 import { YieldIcon } from '../components/YieldIcon'
 import { adminUnitOfHex } from '../data/load'
-import { useNational, type AppData } from '../data/useData'
+import { useNational, useSources, type AppData } from '../data/useData'
 import { useStore } from '../store'
 import type { CountryData, CountryId, NationalIndicator, Selection, YieldKey } from '../types'
 import {
@@ -243,7 +243,7 @@ function PlaceCouncil({ app, place, back, onJump, onBack }: { app: AppData; plac
     for (const g of groups) for (const c of g.comments) if ((c.weight ?? 0) > (best?.weight ?? 0)) best = c
     const segs: Seg[] = best ? [...(best.verdict ?? best.segs)] : []
     if (twin.ok) {
-      const tn = twinName(app.countries[twin.country]!, twin.level, twin.matches[0].index)
+      const tn = twinName(app.countries[twin.country]!, twin.level, twin.matches[0].index, app.index)
       segs.push(`${segs.length ? ' ' : ''}Its closest twin across the ocean is `, fig(tn.title, twin.country), ` — ${closeness(twin.matches[0].dist)}.`)
     }
     if (!segs.length) return null
@@ -294,7 +294,7 @@ function TwinCard({ app, place, twin, onJump }: { app: AppData; place: Place; tw
   }
   const od = app.countries[twin.country]!
   const best = twin.matches[0]
-  const name = twinName(od, twin.level, best.index)
+  const name = twinName(od, twin.level, best.index, app.index)
   const feats = showAll ? best.feats : best.feats.slice(0, 3)
   const worst = best.feats.length > 3 ? best.feats[best.feats.length - 1] : null
   const target: Target = { country: twin.country, level: twin.level, index: best.index }
@@ -332,13 +332,13 @@ function TwinCard({ app, place, twin, onJump }: { app: AppData; place: Place; tw
         <button className="advisors-more" aria-expanded={showAll} onClick={() => setShowAll(!showAll)}>{showAll ? 'Show best matches only' : `All ${best.feats.length} indicators`}</button>
       )}
       {worst && !showAll && (
-        <p className="advisors-small">Biggest difference: {worst.f.label.toLowerCase()} — {fmtFeature(worst.f, worst.a)} here vs {fmtFeature(worst.f, worst.b)} there.</p>
+        <p className="advisors-small">Biggest difference: {worst.f.label} — {fmtFeature(worst.f, worst.a)} here vs {fmtFeature(worst.f, worst.b)} there.</p>
       )}
       {twin.matches.length > 1 && (
         <div className="row advisors-runners">
           <span className="advisors-small">Runners-up:</span>
           {twin.matches.slice(1).map((m) => {
-            const n = twinName(od, twin.level, m.index)
+            const n = twinName(od, twin.level, m.index, app.index)
             return (
               <button key={m.index} className={`chip advisors-chipbtn ${twin.country}`} onClick={() => onJump({ country: twin.country, level: twin.level, index: m.index })} title={`Show ${n.title} (Δ ${m.dist.toFixed(2)} SD)`}>
                 {n.title}
@@ -371,18 +371,30 @@ function Verdict({ lead, c }: { lead: string; c: Comment }) {
   )
 }
 
-/** Source chips, capped: long provenance lists collapse behind a "+N" toggle. */
+/** Source chips, capped: one chip per publisher first, the rest behind a "+N" toggle. */
 function Sources({ ids, max = 3 }: { ids: string[]; max?: number }) {
   const [all, setAll] = useState(false)
-  const uniq = useMemo(() => [...new Set(ids.filter(Boolean))], [ids])
-  if (!uniq.length) return null
-  const shown = all ? uniq : uniq.slice(0, max)
+  const catalog = useSources()
+  const ordered = useMemo(() => {
+    const uniq = [...new Set(ids.filter(Boolean))]
+    const pub = (id: string) => catalog.find((x) => x.id === id)?.publisher ?? id
+    const seen = new Set<string>()
+    const first: string[] = [], rest: string[] = []
+    for (const id of uniq) {
+      const p = pub(id)
+      if (seen.has(p)) rest.push(id)
+      else { seen.add(p); first.push(id) }
+    }
+    return [...first, ...rest]
+  }, [ids, catalog])
+  if (!ordered.length) return null
+  const shown = all ? ordered : ordered.slice(0, max)
   return (
     <span className="advisors-sources">
       <SourceChips ids={shown} />
-      {uniq.length > max && (
-        <button className="chip advisors-chipbtn" aria-expanded={all} onClick={() => setAll(!all)} title={all ? 'Show fewer sources' : `${uniq.length - max} more sources`}>
-          {all ? '−' : `+${uniq.length - max}`}
+      {ordered.length > max && (
+        <button className="chip advisors-chipbtn" aria-expanded={all} onClick={() => setAll(!all)} title={all ? 'Show fewer sources' : `${ordered.length - max} more sources`}>
+          {all ? '−' : `+${ordered.length - max}`}
         </button>
       )}
     </span>
