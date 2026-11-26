@@ -1,5 +1,5 @@
 // Sources tab: data pipeline overview + every source with what it feeds and how it was downloaded.
-import { useMemo, useState, type ReactNode } from 'react'
+import { memo, useMemo, useState, type ReactNode } from 'react'
 import { getHexagonEdgeLengthAvg, UNITS } from 'h3-js'
 import { COUNTRY_META } from '../civ'
 import type { AppData } from '../data/useData'
@@ -21,7 +21,8 @@ const GROUPS: { id: Group; label: string; blurb: string }[] = [
 const fmtDate = (s: string | null | undefined) => (s ? s.slice(0, 10) : '–')
 const host = (u: string) => { try { return new URL(u).hostname.replace(/^www\./, '') } catch { return u } }
 
-export function Sources({ app }: { app: AppData }) {
+// memo: App re-renders on every store change (e.g. map pan/zoom); skip unless the data changes
+export const Sources = memo(function Sources({ app }: { app: AppData }) {
   const sources = useSources()
   const national = useNational()
   const [q, setQ] = useState('')
@@ -124,7 +125,7 @@ export function Sources({ app }: { app: AppData }) {
       })}
     </div>
   )
-}
+})
 
 function SourceCard({ s, labelOf, national, wonders }: {
   s: Source

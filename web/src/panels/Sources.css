@@ -42,8 +42,8 @@
 .sources-item { padding: 9px 11px; }
 .sources-title { font-family: var(--serif); font-size: 14px; color: var(--text); line-height: 1.3; overflow-wrap: anywhere; }
 .sources-pub { font-size: 12px; color: var(--muted); margin-top: 1px; }
-.sources-meta { display: grid; grid-template-columns: repeat(4, minmax(0, auto)); justify-content: start; gap: 2px 14px; margin: 6px 0 4px; font-size: 11.5px; }
-.sources-meta > div { min-width: 0; }
+.sources-meta { display: flex; flex-wrap: wrap; gap: 3px 16px; margin: 6px 0 4px; font-size: 11.5px; }
+.sources-meta > div { flex: 0 0 auto; max-width: 100%; min-width: 0; }
 .sources-meta dt { font-size: 9.5px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); }
 .sources-meta dd { margin: 0; overflow-wrap: anywhere; }
 .sources-url { font-size: 12px; overflow-wrap: anywhere; }
@@ -70,6 +70,4 @@
 .sources-dl ul { margin: 3px 0 0; padding-left: 16px; }
 .sources-dl li { margin-bottom: 3px; overflow-wrap: anywhere; }
 
-@media (max-width: 900px) {
-  .sources-meta { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-}
+

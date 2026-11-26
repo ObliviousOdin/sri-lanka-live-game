@@ -1,5 +1,5 @@
 // Inspect tab: tile / admin-unit inspector and, with nothing selected, a Civilization summary.
-import { useMemo } from 'react'
+import { memo, useMemo } from 'react'
 import { cellToLatLng, getHexagonEdgeLengthAvg, UNITS } from 'h3-js'
 import { COUNTRY_META, DISTRICT_META, TERRAIN_META, YIELD_META, terrainLabel } from '../civ'
 import { rgbCss } from '../color'
@@ -23,7 +23,8 @@ const ordinal = (p: number) => {
   return `${n}${s}`
 }
 
-export function TilePanel({ app }: { app: AppData }) {
+// memo: App re-renders on every store change (e.g. map pan/zoom); this panel only needs `app` + its own store slices
+export const TilePanel = memo(function TilePanel({ app }: { app: AppData }) {
   const selection = useStore((s) => s.selection)
   const idx = app.index
   if (!idx) return <div className="loading">Loading…</div>
@@ -42,7 +43,7 @@ export function TilePanel({ app }: { app: AppData }) {
     return <AdminInspector key={`${d.id}:${selection.id}`} d={d} idx={idx} level={level} ui={ui} />
   }
   return <OtherSelection d={d} sel={selection} />
-}
+})
 
 function NotFound({ what }: { what: string }) {
   return (
@@ -73,7 +74,7 @@ function HexInspector({ d, idx, i }: { d: CountryData; idx: IndexJson; i: number
   const f = idx.feature_codes[d.hexes.feature[i]] ?? ''
   const hills = !!d.hexes.hills[i]
   const ring = d.hexes.ring[i]
-  const dist = idx.districts[d.hexes.district[i]] ?? idx.districts[0]
+  const dist = idx.districts[d.hexes.district[i]] ?? { code: '', label: '', rule: '' }
   const allDistricts = (d.hexes.districts_all?.[i] ?? '').split(',').filter(Boolean)
   const [lat, lon] = useMemo(() => cellToLatLng(h3), [h3])
   const yields = useMemo(() => Object.fromEntries(YIELDS.map((y) => [y, d.hexes.yields?.[y]?.[i] ?? 0])) as Record<YieldKey, number>, [d, i])
@@ -82,7 +83,7 @@ function HexInspector({ d, idx, i }: { d: CountryData; idx: IndexJson; i: number
   const wonders = useMemo(() => d.wonders.filter((w) => w.h3 === h3), [d, h3])
   const crumbs = useMemo(() => Object.keys(d.meta.admin_levels).map((lvl) => ({ lvl, u: adminUnitOfHex(d, lvl, i) })).filter((c) => c.u), [d, i])
   const terrainRgb = TERRAIN_META[t]?.rgb ?? [120, 120, 120]
-  const scope = `Percentiles rank this tile among ${d.meta.name}'s ${fmtInt(d.meta.land_hex_count)} land tiles (extensive metrics per km², like the map lens).`
+  const scope = `Percentiles rank this ${ring > 0 ? 'sea ' : ''}tile against ${d.meta.name}'s ${fmtInt(d.meta.land_hex_count)} land tiles (extensive metrics per km², like the map lens).`
 
   const rows = useMemo<MetricRowData[]>(() => d.meta.metrics.map((m) => {
     const raw = d.matrix[m.col * d.n + i]
@@ -93,7 +94,8 @@ function HexInspector({ d, idx, i }: { d: CountryData; idx: IndexJson; i: number
       rank: () => {
         const { pct, n } = hexPercentile(d, m, i)
         if (pct == null) return null
-        return { pct, text: `P${Math.round(pct)}`, title: `${ordinal(pct)} percentile of ${fmtInt(n)} ${d.meta.name} land tiles${hasDensity(m) ? ' (per km²)' : ''}` }
+        const p = Math.min(99, Math.floor(pct))
+        return { pct, text: `P${p}`, title: `${ordinal(p)} percentile of ${fmtInt(n)} ${d.meta.name} land tiles${hasDensity(m) ? ' (per km²)' : ''}` }
       },
     }
   }), [d, i])
@@ -149,9 +151,9 @@ function HexInspector({ d, idx, i }: { d: CountryData; idx: IndexJson; i: number
         ) : (
           <div className="tilepanel-dname muted">No specialist district on this tile</div>
         )}
-        {allDistricts.length > 1 && (
-          <div className="tilepanel-dall">
-            <span className="muted">Qualifies for:</span>
+        {allDistricts.some((c) => c !== dist.code) && (
+          <div className="tilepanel-dall" title="Every district rule this tile meets, in priority order; the first one becomes the tile's district.">
+            <span className="muted">{dist.code ? 'All qualifying:' : 'Qualifies for:'}</span>
             {allDistricts.map((c) => {
               const def = idx.districts.find((x) => x.code === c)
               return <span key={c} className="chip" title={def?.rule}>{DISTRICT_META[c]?.icon} {def?.label || DISTRICT_META[c]?.label || c}</span>
@@ -440,7 +442,7 @@ function Overview({ app, idx }: { app: AppData; idx: IndexJson }) {
       </div>
       <p className="muted tilepanel-small">
         Yields are computed per tile from per-km² densities on a shared log scale, so totals grow with both land area and intensity.
-        Data built {idx.built_at.slice(0, 16).replace('T', ' ')} UTC. <SourceChips ids={['worldpop_2020', 'uber_h3']} />
+        Data built {(idx.built_at ?? '').slice(0, 16).replace('T', ' ')} UTC. <SourceChips ids={['worldpop_2020', 'uber_h3']} />
       </p>
     </div>
   )

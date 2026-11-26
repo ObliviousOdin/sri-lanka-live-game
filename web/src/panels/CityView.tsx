@@ -426,8 +426,8 @@ function CityRing({ d, city, idx, selectedHex }: { d: CountryData; city: City; i
             const dm = DISTRICT_META[t.district ?? '']
             const fm = FEATURE_META[t.feature ?? '']
             const ws = wondersBy.get(c.h3)
-            const anyYield = t.yields.some((v) => v > 0)
-            const label = `${isCentre ? 'City centre: ' : `Ring ${t.d}: `}${terrainLabel(t.terrain, t.feature, t.hills)}${dm?.label && t.district ? `, ${dm.label}` : ''}; yields ${YIELDS.map((y, j) => `${YIELD_META[y].label} ${t.yields[j] ?? 0}`).join(', ')}; population ${fmtNumber(t.pop)}`
+            const anyYield = (t.yields ?? []).some((v) => v > 0)
+            const label = `${isCentre ? 'City centre: ' : `Ring ${t.d}: `}${terrainLabel(t.terrain, t.feature, t.hills)}${dm?.label && t.district ? `, ${dm.label}` : ''}; yields ${YIELDS.map((y, j) => `${YIELD_META[y].label} ${t.yields?.[j] ?? 0}`).join(', ')}; population ${fmtNumber(t.pop)}`
             return (
               <g
                 key={c.h3}
@@ -472,12 +472,12 @@ function CityRing({ d, city, idx, selectedHex }: { d: CountryData; city: City; i
           </g>
         </svg>
         {at && tipStyle && (
-          <div className={`cityview-tip ${above ? 'above' : 'below'}`} style={tipStyle} role="status">
+          <div className={`cityview-tip ${above ? 'above' : 'below'}`} style={tipStyle} aria-hidden>
             <div className="cityview-tip-title">
               {t_district(at) ? <>{DISTRICT_META[at.district].icon} {DISTRICT_META[at.district].label}</> : terrainLabel(at.terrain, at.feature, at.hills)}
             </div>
             {t_district(at) && <div className="muted">{terrainLabel(at.terrain, at.feature, at.hills)}</div>}
-            <YieldRow values={at.yields} size={12} />
+            <YieldRow values={at.yields ?? []} size={12} />
             <div className="cityview-tip-meta">
               <span>{fmtNumber(at.pop)} people</span>
               <span className="muted">{at.d === 0 ? 'centre tile' : `ring ${at.d}`}</span>
@@ -494,8 +494,8 @@ function CityRing({ d, city, idx, selectedHex }: { d: CountryData; city: City; i
           {YIELD_SLOTS.map((s) => <YieldIcon key={s.y} y={s.y} size={11} />)}
         </span>
         <span>yield slots in each tile</span>
-        <span className="cityview-key centre" aria-hidden /> <span>city centre</span>
-        {layout.cells.some((c) => c.ghost) && <><span className="cityview-key ghost" aria-hidden /> <span>outside map grid</span></>}
+        <span className="cityview-legitem"><span className="cityview-key centre" aria-hidden /> city centre</span>
+        {layout.cells.some((c) => c.ghost) && <span className="cityview-legitem"><span className="cityview-key ghost" aria-hidden /> outside map grid</span>}
       </div>
       {layout.method !== 'h3-ij' && (
         <p className="cityview-foot">Layout: {layout.method === 'mixed' ? 'H3 local IJ with lat/lon fallback for some tiles' : 'lat/lon projection'}.</p>

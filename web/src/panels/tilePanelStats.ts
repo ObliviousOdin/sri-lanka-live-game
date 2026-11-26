@@ -296,19 +296,22 @@ export function explainYields(d: CountryData, idx: IndexJson, i: number): YieldE
       const v = d.matrix[m.col * d.n + i]
       return { v: Number.isFinite(v) ? v : 0, from: `metric ${m.key}`, sources: m.sources }
     }
-    const avail = layers.filter((l) => d.points?.[l])
-    if (!avail.length) return null
+    // first available layer only (the pipeline reads one table per bonus; summing layers could double count)
+    const layer = layers.find((l) => d.points?.[l])
+    if (!layer) return null
+    const pl = d.points[layer]
     let v = 0
     for (const p of pts) {
-      if (!avail.includes(p.layer)) continue
+      if (p.layer !== layer) continue
       if (col === 'count') v += 1
       else { const x = pointValue(p); if (Number.isFinite(x)) v += x }
     }
-    return { v, from: `${avail.join(' + ')} points` }
+    const partial = pl.total > pl.rows.length ? `, top ${fmtNumber(pl.rows.length)} of ${fmtNumber(pl.total)} shipped` : ''
+    return { v, from: `${layer.replace(/_/g, ' ')} points${partial}` }
   }
   const bonusPart = (label: string, amt: ReturnType<typeof tileAmount>, unit: string, points: (v: number) => number, rule: string): YieldPart =>
     amt
-      ? { label, amount: `${fmtNumber(amt.v)} ${unit}`.trim(), detail: `${rule} · from ${amt.from}`, points: points(amt.v), counted: true, sources: amt.sources }
+      ? { label, amount: `${fmtNumber(amt.v)} ${amt.v === 1 ? unit.replace(/s$/, '') : unit}`.trim(), detail: `${rule} · from ${amt.from}`, points: points(amt.v), counted: true, sources: amt.sources }
       : { label, amount: 'awaiting data', detail: rule, points: 0, counted: true, missing: true }
 
   const stepsText = (steps: [number, number][], unit: string) => steps.map(([t, b]) => `≥ ${fmtNumber(t)} ${unit} +${b}`).join(' · ')

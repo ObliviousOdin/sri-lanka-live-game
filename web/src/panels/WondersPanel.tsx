@@ -118,6 +118,7 @@ export function WondersPanel({ app }: { app: AppData }) {
               </button>
             ))}
           </div>
+          {!usa && filter !== 'lka' && <p className="muted wonders-note">Loading United States…</p>}
           {groups.map((g) => {
             const present = shownCountries.filter((c) => app.countries[c])
             if (!present.some((c) => g.by[c]?.length) && filter !== 'all') return null
@@ -184,7 +185,6 @@ export function WondersPanel({ app }: { app: AppData }) {
                     </div>
                   )
                 })}
-                {!usa && filter !== 'lka' && <p className="muted wonders-note">Loading United States…</p>}
               </section>
             )
           })}

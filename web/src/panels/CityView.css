@@ -87,7 +87,8 @@
 
 .cityview-ringlegend { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; font-size: 11px; color: var(--muted); margin-top: 6px; }
 .cityview-slots { display: inline-grid; grid-template-columns: repeat(3, 11px); gap: 1px 2px; padding: 2px 3px; background: #0b1422; border-radius: 4px; }
-.cityview-key { display: inline-block; width: 13px; height: 13px; clip-path: polygon(50% 0, 100% 25%, 100% 75%, 50% 100%, 0 75%, 0 25%); margin-left: 6px; }
+.cityview-legitem { display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; margin-left: 6px; }
+.cityview-key { display: inline-block; width: 13px; height: 13px; clip-path: polygon(50% 0, 100% 25%, 100% 75%, 50% 100%, 0 75%, 0 25%); }
 .cityview-key.centre { background: var(--brass2); }
 .cityview-key.ghost { background: var(--line2); opacity: .7; }
 

@@ -1,5 +1,5 @@
 // Grouped, filterable "All metrics" list used by the Tile inspector for tiles and admin units.
-import { useMemo, useState } from 'react'
+import { memo, useMemo, useState } from 'react'
 import { SourceChip, SourceChips } from '../components/SourceChip'
 import { YieldIcon } from '../components/YieldIcon'
 import { useStore } from '../store'
@@ -93,7 +93,7 @@ export function MetricGroups({ rows, scopeLabel }: { rows: MetricRowData[]; scop
   )
 }
 
-function MetricRow({ r, scopeLabel }: { r: MetricRowData; scopeLabel: string }) {
+const MetricRow = memo(function MetricRow({ r, scopeLabel }: { r: MetricRowData; scopeLabel: string }) {
   const [open, setOpen] = useState(false)
   const rank = useMemo(() => (Number.isFinite(r.raw) ? r.rank() : null), [r])
   const m = r.metric
@@ -143,7 +143,7 @@ function MetricRow({ r, scopeLabel }: { r: MetricRowData; scopeLabel: string }) 
       )}
     </div>
   )
-}
+})
 
 /** At most two compact source chips per row (all of them are listed when the row is expanded). */
 function RowSources({ ids }: { ids: string[] }) {

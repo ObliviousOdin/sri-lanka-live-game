@@ -8,10 +8,11 @@ Outputs (data/interim/<country>/economy/):
   report.json      reconciliation checks against published national totals
 
 United States
-  * GDP: BEA CAGDP2 (county GDP by industry, current dollars, 2024).  Suppressed "(D)" cells are
-    filled top-down through BEA's own line identities (exactly where only one term is missing),
-    otherwise by RAS balancing seeded with ACS 2020-2024 C24030 industry employment, so every
-    county satisfies the parent/child identities and every state matches its published total.
+  * GDP: BEA CAGDP2 (county GDP by industry, current dollars, 2024).  Suppressed "(D)" cells of
+    the 20 leaf industries are estimated per state by multi-margin iterative proportional fitting
+    (seeded with ACS 2020-2024 C24030 industry employment) so that every disclosed county aggregate
+    (private total, goods/services-producing, manufacturing, FIRE, ...) and every state industry
+    total published by BEA are reproduced.
     BEA's Virginia independent-city combinations and Maui + Kalawao are split into the Census 2023
     counties in proportion to population (civmap.core pieces).
   * Income / poverty: ACS 2020-2024 5-year B19013 and B17001.
@@ -150,18 +151,21 @@ SOURCES: list[Source] = [
 
 _US_GDP_METHOD = (
     "BEA CAGDP2, year {y}, current dollars (thousands x 1,000). Lines: total = 1; agriculture = 3 (NAICS "
-    "11); industry = 6 + 10 + 11 + 12 (mining, utilities, construction, manufacturing); services = "
-    "total - agriculture - industry (includes government, line 83); manufacturing = 12; finance = "
-    "51 + 56 + 60 (finance & insurance; real estate & rental/leasing; professional, scientific & "
-    "technical services). Suppressed '(D)' cells: (1) solved exactly from BEA identities when only "
-    "one term is missing (1=2+83, 2=91+92, 91=87+11+12, 87=3+6, 12=13+25, 92=10+34+35+36+45+50+59+68+75+82, "
-    "50=51+56, 59=60+64+65, 68=69+70, 75=76+79, 88=34+35, 89=10+36, 90=12+45); (2) otherwise, top-down "
-    "through the identity tree, the county remainder (parent - disclosed children) and the state "
-    "residual of each line (state value - disclosed counties) are balanced by RAS/IPF seeded with ACS "
-    "{acs} 5-year C24030 employment of the matching industry, so county identities hold exactly and "
-    "state totals within rounding. BEA combination areas (23 Virginia county+city combinations, "
-    "Maui + Kalawao) are split to Census 2023 counties pro rata to 2023 population. "
-    "Allocation to hexes: population-weighted within each county."
+    "11); industry = 6 + 10 + 11 + 13 + 25 (mining, utilities, construction, durable + nondurable "
+    "manufacturing); services = total - agriculture - industry (includes government, line 83); "
+    "manufacturing = 13 + 25 (= line 12); finance = 51 + 56 + 60 (finance & insurance; real estate & "
+    "rental/leasing; professional, scientific & technical services). Suppressed '(D)' county cells "
+    "(18,737 in {y}; BEA suppresses complementary cells, so no identity has a single unknown) are "
+    "estimated for the 20 leaf industries that partition line 2 (private industries) by multi-margin "
+    "iterative proportional fitting within each state, seeded with ACS {acs} 5-year C24030 employment "
+    "of the matching industry (+1). Margins: every disclosed county aggregate (lines 2, 91, 92, 87, 12, "
+    "50, 59, 68, 75, 88, 89, 90, minus its disclosed leaves) and every state leaf total (state value "
+    "minus disclosed counties). County private totals are reproduced exactly and state industry totals "
+    "to within 0.01 %; national sector totals equal the sum of BEA state rows. BEA combination areas "
+    "(23 Virginia county + independent-city combinations, Maui + Kalawao) are split to Census 2023 "
+    "counties pro rata to 2023 population. Totals are the sum of the 50 states + DC (BEA's US total "
+    "also includes overseas federal activity, ~0.5 %). Allocation to hexes: population-weighted within "
+    "each county."
 ).format(y=US_YEAR, acs=ACS_YEAR)
 
 _LKA_GDP_METHOD = (
@@ -240,7 +244,7 @@ METRICS: list[Metric] = [
            ["census_acs5_2024", "dcs_poverty2019"],
            f"USA ACS {ACS_YEAR - 4}-{ACS_YEAR}; Sri Lanka HIES {HIES_YEAR}",
            "Share of people living below the national official poverty line.",
-           f"USA: ACS 5-year B17001_E002 / B17001_E001 x 100 (people below the Census Bureau's "
+           "USA: ACS 5-year B17001_E002 / B17001_E001 x 100 (people below the Census Bureau's "
            "income-based official poverty thresholds, by family size/composition; universe = people for "
            "whom poverty status is determined). | Sri Lanka: DCS Poverty Indicators 2019 Table 04 "
            "headcount index under the UPDATED official poverty line (consumption-based, Rs 6,966 per "
@@ -582,20 +586,6 @@ def build_lka() -> dict:
 
 LINES_NEEDED = [1, 2, 3, 6, 10, 11, 12, 13, 25, 34, 35, 36, 45, 50, 51, 56, 59, 60, 64, 65, 68, 69, 70,
                 75, 76, 79, 82, 83, 87, 88, 89, 90, 91, 92]
-# parent = sum(children); processed top-down for the RAS step
-IDENT_TREE = [
-    (2, [91, 92]),
-    (91, [87, 11, 12]),
-    (87, [3, 6]),
-    (12, [13, 25]),
-    (92, [10, 34, 35, 36, 45, 50, 59, 68, 75, 82]),
-    (50, [51, 56]),
-    (59, [60, 64, 65]),
-    (68, [69, 70]),
-    (75, [76, 79]),
-]
-IDENT_CROSS = [(1, [2, 83]), (88, [34, 35]), (89, [10, 36]), (90, [12, 45])]
-
 # ACS C24030 column numbers (male block; female = +27) for each BEA line
 _ACS = {3: [4], 6: [5], 10: [12], 11: [6], 12: [7], 13: [7], 25: [7], 34: [8], 35: [9], 36: [11], 45: [13],
         51: [15], 56: [16], 60: [18], 64: [19], 65: [20], 69: [22], 70: [23], 76: [25], 79: [26], 82: [27],
@@ -683,7 +673,7 @@ def _exact_pass(V: pd.DataFrame) -> int:
     filled = 0
     for _ in range(10):
         n0 = filled
-        for parent, kids in IDENT_TREE + IDENT_CROSS:
+        for parent, kids in [(1, [2, 83]), *AGGREGATES.items()]:
             cols = [parent] + kids
             M = V[cols]
             one = M.isna().sum(axis=1) == 1
@@ -701,56 +691,87 @@ def _exact_pass(V: pd.DataFrame) -> int:
     return filled
 
 
-def _ras(seed: np.ndarray, row_t: np.ndarray, col_t: np.ndarray, iters: int = 500) -> np.ndarray:
-    x = seed.astype(float).copy()
-    for _ in range(iters):
+# leaf industries (they partition line 2 = private industries) and the aggregates BEA publishes
+LEAVES = [3, 6, 11, 13, 25, 10, 34, 35, 36, 45, 51, 56, 60, 64, 65, 69, 70, 76, 79, 82]
+AGGREGATES = {  # aggregate line -> its leaves; order = IPF block order (line 2 last: county totals exact)
+    91: [3, 6, 11, 13, 25],
+    92: [10, 34, 35, 36, 45, 51, 56, 60, 64, 65, 69, 70, 76, 79, 82],
+    87: [3, 6],
+    12: [13, 25],
+    50: [51, 56],
+    59: [60, 64, 65],
+    68: [69, 70],
+    75: [76, 79],
+    88: [34, 35],
+    89: [10, 36],
+    90: [13, 25, 45],
+    2: LEAVES,
+}
+
+
+def _ipf_state(L: np.ndarray, A: dict[int, np.ndarray], leaf_t: np.ndarray, seed: np.ndarray,
+               iters: int = 2000, tol: float = 1e-7) -> tuple[np.ndarray, float]:
+    """Fill unknown leaf cells of one state by multi-margin IPF.
+
+    L: counties x leaves with NaN = unknown; A: aggregate line -> county values (NaN = unknown);
+    leaf_t: state total of each leaf; seed: positive prior for every cell.
+    Margins: every known county aggregate (sum of its leaves) and every state leaf total.
+    """
+    U = np.isnan(L)
+    K = np.where(U, 0.0, L)
+    x = np.where(U, seed, 0.0)
+    col_idx = {ln: i for i, ln in enumerate(LEAVES)}
+    blocks = []
+    for agg, leaves in AGGREGATES.items():
+        cols = [col_idx[c] for c in leaves]
+        a = A[agg]
+        rows = np.where(np.isfinite(a) & U[:, cols].any(axis=1))[0]
+        if len(rows):
+            tgt = np.clip(a[rows] - K[np.ix_(rows, cols)].sum(axis=1), 0, None)
+            blocks.append((rows, np.array(cols), tgt))
+    col_t = np.clip(leaf_t - K.sum(axis=0), 0, None)
+    err = np.inf
+    for it in range(iters):
         cs = x.sum(axis=0)
-        x *= np.divide(col_t, cs, out=np.zeros_like(cs), where=cs > 0)
-        rs = x.sum(axis=1)
-        x *= np.divide(row_t, rs, out=np.zeros_like(rs), where=rs > 0)[:, None]
-        cs = x.sum(axis=0)
-        if np.allclose(cs, col_t, rtol=1e-6, atol=1.0):
-            break
-    # rows with a positive target but an all-zero seed row: spread evenly
-    rs = x.sum(axis=1)
-    bad = (rs <= 0) & (row_t > 0)
-    if bad.any():
-        x[bad] = (seed[bad] > 0).astype(float)
-        x[bad] *= (row_t[bad] / x[bad].sum(axis=1))[:, None]
-    return x
+        x *= np.divide(col_t, cs, out=np.ones_like(cs), where=cs > 0)
+        for rows, cols, tgt in blocks:
+            sub = x[np.ix_(rows, cols)]
+            rs = sub.sum(axis=1)
+            f = np.divide(tgt, rs, out=np.ones_like(rs), where=rs > 0)
+            x[np.ix_(rows, cols)] = sub * f[:, None]
+        if it % 10 == 9:
+            cs = x.sum(axis=0)
+            err = float(np.max(np.abs(cs - col_t) / np.maximum(col_t, 1000.0)))
+            if err < tol:
+                break
+    return np.where(U, x, L), err
 
 
 def _fill_bea(V: pd.DataFrame, S: pd.DataFrame, prox: pd.DataFrame) -> dict:
     n_sup = int(V.isna().sum().sum())
     n_exact = _exact_pass(V)
-    n_ras = 0
-    for parent, kids in IDENT_TREE:
-        for st in S.index:
-            rows = V.index[(V.index.str[:2] == st[:2]) & V[kids].isna().any(axis=1)]
-            if len(rows) == 0:
-                continue
-            if V.loc[rows, parent].isna().any():
-                raise RuntimeError(f"parent line {parent} unknown in {st} during RAS")
-            sub = V.loc[rows, kids]
-            mask = sub.isna().to_numpy()
-            row_t = (V.loc[rows, parent] - sub.sum(axis=1, skipna=True)).clip(lower=0).to_numpy()
-            in_state = V.index.str[:2] == st[:2]
-            known_sum = V.loc[in_state, kids].sum(axis=0, skipna=True)
-            col_t = (S.loc[st, kids] - known_sum).clip(lower=0).to_numpy()
-            col_t = np.where(mask.any(axis=0), col_t, 0.0)
-            seed = prox.loc[rows, kids].to_numpy() + 1.0
-            seed = np.where(mask, seed, 0.0)
-            # if the state residual is ~0 for a line but counties still need value, keep a tiny column target
-            x = _ras(seed, row_t, np.maximum(col_t, np.where(mask.any(axis=0), 1e-6, 0.0)))
-            vals = sub.to_numpy(dtype=float, copy=True)
-            vals[mask] = x[mask]
-            V.loc[rows, kids] = vals
-            n_ras += int(mask.sum())
-    _exact_pass(V)  # no-op unless cross identities had single unknowns left
-    left = int(V.isna().sum().sum())
+    n_ipf = 0
+    worst = 0.0
+    for st in S.index:
+        rows = V.index[V.index.str[:2] == st[:2]]
+        L = V.loc[rows, LEAVES].to_numpy(dtype=float, copy=True)
+        if not np.isnan(L).any():
+            continue
+        A = {agg: V.loc[rows, agg].to_numpy(dtype=float) for agg in AGGREGATES}
+        seed = prox.loc[rows, LEAVES].to_numpy(dtype=float) + 1.0
+        filled, err = _ipf_state(L, A, S.loc[st, LEAVES].to_numpy(dtype=float), seed)
+        worst = max(worst, err)
+        n_ipf += int(np.isnan(L).sum())
+        V.loc[rows, LEAVES] = filled
+    # suppressed aggregates = sum of their (now complete) leaves
+    for agg, leaves in AGGREGATES.items():
+        miss = V[agg].isna()
+        V.loc[miss, agg] = V.loc[miss, leaves].sum(axis=1)
+    left = int(V[LEAVES + list(AGGREGATES)].isna().sum().sum())
     if left:
         raise RuntimeError(f"{left} BEA cells still unknown")
-    return {"suppressed_cells": n_sup, "solved_exactly": n_exact, "filled_by_ras": n_ras}
+    return {"suppressed_cells": n_sup, "solved_exactly": n_exact, "leaf_cells_filled_by_ipf": n_ipf,
+            "worst_state_leaf_residual": round(worst, 8)}
 
 
 def build_usa() -> dict:
@@ -770,8 +791,8 @@ def build_usa() -> dict:
     k = 1000.0
     u["gdp_usd"] = V[1] * k
     u["gdp_agri_usd"] = V[3] * k
-    u["gdp_industry_usd"] = (V[6] + V[10] + V[11] + V[12]) * k
-    u["gdp_manufacturing_usd"] = V[12] * k
+    u["gdp_industry_usd"] = (V[6] + V[10] + V[11] + V[13] + V[25]) * k
+    u["gdp_manufacturing_usd"] = (V[13] + V[25]) * k
     u["gdp_finance_usd"] = (V[51] + V[56] + V[60]) * k
     over = u.gdp_agri_usd + u.gdp_industry_usd - u.gdp_usd
     if (over > 1000).any():
@@ -799,9 +820,11 @@ def build_usa() -> dict:
 
     inc = util.acs_table("B19013", ACS_YEAR)
     pov = util.acs_table("B17001", ACS_YEAR)
-    out["hh_income_usd"] = inc.B19013_E001.reindex(out.index)
-    out["poverty_rate"] = (100 * pov.B17001_E002 / pov.B17001_E001).round(2).reindex(out.index)
-    out["poor_persons"] = pov.B17001_E002.reindex(out.index)
+    # ACS "jam" values (e.g. -666666666 = estimate not available) -> missing
+    out["hh_income_usd"] = inc.B19013_E001.where(inc.B19013_E001 > 0).reindex(out.index)
+    pv_ok = (pov.B17001_E001 > 0) & (pov.B17001_E002 >= 0)
+    out["poverty_rate"] = (100 * pov.B17001_E002 / pov.B17001_E001).where(pv_ok).round(2).reindex(out.index)
+    out["poor_persons"] = pov.B17001_E002.where(pv_ok).reindex(out.index)
     out = out.reset_index()
     util.write_admin(cc, DOMAIN, "adm2", out)
 
