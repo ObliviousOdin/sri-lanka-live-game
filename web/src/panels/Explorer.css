@@ -1,0 +1,109 @@
+/* Explorer tab — all classes prefixed explorer- */
+.explorer { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.explorer-head h2 { font-size: 18px; color: var(--brass2); }
+.explorer-head p { margin: 2px 0 0; font-size: 12px; color: var(--muted); }
+
+/* controls */
+.explorer-controls {
+  display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 6px 8px; align-items: center;
+  background: var(--bg2); border: 1px solid var(--line); border-radius: var(--radius); padding: 8px 10px;
+}
+.explorer-lab { color: var(--muted); font-size: 10.5px; text-transform: uppercase; letter-spacing: .08em; }
+.explorer-seg { display: flex; flex-wrap: wrap; gap: 2px; background: var(--bg); border: 1px solid var(--line2); border-radius: 8px; padding: 2px; min-width: 0; justify-self: start; max-width: 100%; }
+.explorer-seg button { background: none; border: 0; border-radius: 6px; padding: 3px 8px; color: var(--muted); font-size: 12px; white-space: nowrap; }
+.explorer-seg button:hover:not(:disabled) { color: var(--text); }
+.explorer-seg button[aria-pressed='true'] { background: #d9a44126; color: var(--brass2); box-shadow: inset 0 0 0 1px var(--brass); }
+.explorer-seg button:disabled { opacity: .4; cursor: not-allowed; }
+.explorer-seg button:focus-visible, .explorer-sort:focus-visible, .explorer-table tr:focus-visible { outline: 2px solid var(--brass); outline-offset: -2px; }
+.explorer-inline { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; min-width: 0; }
+.explorer-swap { padding: 3px 8px; font-size: 12px; }
+.explorer-axis { display: flex; gap: 6px; align-items: center; min-width: 0; }
+.explorer-axis select { flex: 1 1 auto; min-width: 0; width: 100%; font-size: 12.5px; }
+.explorer-log { display: inline-flex; gap: 3px; align-items: center; font-size: 12px; color: var(--muted); white-space: nowrap; flex: none; }
+.explorer-log.blocked { opacity: .55; text-decoration: line-through; }
+.explorer-map { padding: 3px 7px; font-size: 11.5px; white-space: nowrap; flex: none; }
+.explorer-map.on { border-color: var(--brass); color: var(--brass2); background: #d9a44122; }
+
+/* plot */
+.explorer-axis-title { font-size: 12px; line-height: 1.3; min-width: 0; overflow-wrap: anywhere; }
+.explorer-axis-title b { color: var(--brass2); margin-right: 3px; }
+.explorer-axis-title.y { margin-bottom: -4px; }
+.explorer-axis-title.x { text-align: right; margin-top: -4px; }
+.explorer-plot { position: relative; width: 100%; min-width: 0; user-select: none; -webkit-user-select: none; touch-action: none; border-radius: 8px; background: #0a1322; }
+.explorer-plot:focus-visible { outline: 2px solid var(--brass); outline-offset: 2px; }
+.explorer-plot canvas, .explorer-svg { position: absolute; left: 0; top: 0; }
+.explorer-svg { cursor: crosshair; }
+.explorer-frame { fill: none; stroke: var(--line2); }
+.explorer-ticks line { stroke: var(--muted); stroke-opacity: .55; }
+.explorer-ticks text { fill: var(--muted); font-size: 10.5px; font-variant-numeric: tabular-nums; }
+.explorer-selring circle { fill: none; stroke: var(--brass2); stroke-width: 2.2; }
+.explorer-selring circle.inner { stroke: #fff; stroke-width: 1.6; }
+.explorer-hoverring { fill: none; stroke: #fff; stroke-width: 1.6; }
+.explorer-brush { fill: #d9a4411f; stroke: var(--brass); stroke-dasharray: 4 3; }
+.explorer-empty { position: absolute; inset: 0; display: grid; place-items: center; color: var(--muted); font-size: 12.5px; pointer-events: none; padding: 20px; text-align: center; }
+.explorer-tip {
+  position: absolute; z-index: 3; pointer-events: none; width: max-content; max-width: min(250px, 80%);
+  background: #0b1422f2; border: 1px solid var(--brass); border-radius: 8px; padding: 6px 8px; font-size: 12px; line-height: 1.35;
+  box-shadow: 0 6px 18px #0009;
+}
+.explorer-tip-title { font-weight: 700; color: var(--brass2); margin-bottom: 2px; }
+.explorer-tip-sub { color: var(--muted); font-size: 11.5px; margin-bottom: 3px; }
+.explorer-tip-yields { margin-bottom: 3px; }
+.explorer-tip-kv { display: flex; justify-content: space-between; gap: 10px; }
+.explorer-tip-kv span { color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.explorer-tip-kv b { white-space: nowrap; font-variant-numeric: tabular-nums; }
+.explorer-tip-hint { color: var(--muted); font-size: 10.5px; margin-top: 3px; }
+.explorer-sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+
+/* stats & brush */
+.explorer-stats { display: flex; flex-direction: column; gap: 3px; font-size: 12px; }
+.explorer-stat { display: flex; flex-wrap: wrap; gap: 2px 8px; align-items: center; }
+.explorer-swatch { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
+.explorer-swatch.lka { background: var(--lka); }
+.explorer-swatch.usa { background: var(--usa); }
+.explorer-note { color: var(--muted); font-size: 11.5px; margin: 0; }
+.explorer-brushbar { font-size: 12.5px; background: var(--bg2); border: 1px dashed var(--line2); border-radius: 8px; padding: 5px 8px; min-height: 34px; }
+.explorer-brushbar .btn { padding: 2px 9px; font-size: 12px; }
+
+/* definitions */
+.explorer-defs { display: flex; flex-direction: column; gap: 0; }
+.explorer-def { margin-bottom: 8px; }
+.explorer-def-head { display: flex; gap: 8px; align-items: center; min-width: 0; }
+.explorer-def-head h3 { margin: 0; flex: 1; min-width: 0; font-size: 14.5px; }
+.explorer-def-axis { flex: none; width: 20px; height: 20px; border-radius: 5px; display: grid; place-items: center; background: var(--brass); color: #1a1206; font-weight: 700; font-size: 12px; }
+.explorer-def-desc { margin: 5px 0; font-size: 12.5px; }
+.explorer-def-meta { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 5px; }
+.explorer-def-method { font-size: 12px; color: var(--muted); margin-bottom: 5px; }
+.explorer-def-method summary { cursor: pointer; color: var(--text); }
+.explorer-def-method p { margin: 4px 0; overflow-wrap: anywhere; }
+.explorer-def-src { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.explorer-def-src .chip, .explorer-def-meta .chip { white-space: normal; max-width: 100%; }
+.explorer-def-srcrow { display: flex; gap: 6px; align-items: flex-start; }
+
+/* table */
+.explorer-table-cap { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; flex-wrap: wrap; font-size: 11.5px; }
+.explorer-table-cap .section-title { margin: 6px 0 2px; }
+.explorer-table-wrap { max-height: 360px; overflow: auto; border: 1px solid var(--line); border-radius: 8px; position: relative; }
+.explorer-table { table-layout: fixed; }
+.explorer-table col.c-rank { width: 34px; }
+.explorer-table col.c-val { width: 70px; }
+.explorer-table th { z-index: 1; padding: 0; }
+.explorer-table th.num:first-child { padding: 4px 6px; }
+.explorer-sort { background: none; border: 0; width: 100%; padding: 5px 6px; color: var(--muted); font-weight: 600; text-align: inherit; font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.explorer-sort small { display: block; font-weight: 400; font-size: 10px; opacity: .8; overflow: hidden; text-overflow: ellipsis; }
+.explorer-table th.num .explorer-sort { text-align: right; }
+.explorer-sort.on { color: var(--brass2); }
+.explorer-table td.explorer-name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.explorer-table td.explorer-name .chip { padding: 0 5px; font-size: 10px; }
+.explorer-table tbody tr { cursor: pointer; }
+.explorer-table tbody tr:hover td { background: #ffffff08; }
+.explorer-table tr.explorer-sel td { background: #d9a44124; }
+.explorer-table tr.explorer-sel td:first-child { box-shadow: inset 3px 0 0 var(--brass); color: var(--brass2); }
+.explorer-table tr.explorer-pinned td { border-bottom: 2px solid var(--line2); }
+.explorer-empty-row { padding: 14px; text-align: center; }
+
+@media (max-width: 900px) {
+  .explorer-controls { grid-template-columns: max-content minmax(0, 1fr); padding: 7px 8px; gap: 6px; }
+  .explorer-table col.c-val { width: 62px; }
+  .explorer-table-wrap { max-height: 300px; }
+}

@@ -537,3 +537,31 @@ export function unitCaption(unit: string): string {
   if (isUsd(unit)) return 'US$' + prettyUnit(unit.replace(/^(usd|us\$)/i, ''))
   return prettyUnit(unit)
 }
+
+// ---------------------------------------------------------------------------------------------
+// Provenance (derived metrics such as GDP per capita list no sources of their own)
+// ---------------------------------------------------------------------------------------------
+
+export interface Provenance { sources: string[]; vintage: string; via: string[] }
+
+/** Sources & vintage of a metric; for derived metrics, those of the metric keys named in its method. */
+export function provenance(d: CountryData, key: string): Provenance {
+  const m = d.metricByKey.get(key)
+  if (!m) return { sources: [], vintage: '', via: [] }
+  if (m.sources.length && m.vintage) return { sources: m.sources, vintage: countryVintage(m.vintage, d.id), via: [] }
+  const via = [...new Set((m.method.match(/[a-z][a-z0-9_]+/g) ?? []).filter((t) => t !== key && d.metricByKey.has(t)))]
+  const parts = via.map((k) => d.metricByKey.get(k)!)
+  const sources = m.sources.length ? m.sources : [...new Set(parts.flatMap((p) => p.sources))]
+  const vintage = m.vintage
+    ? countryVintage(m.vintage, d.id)
+    : [...new Set(parts.map((p) => countryVintage(p.vintage, d.id)).filter(Boolean))].join(', ')
+  return { sources, vintage, via }
+}
+
+/** "USA 2024; Sri Lanka 2023" → the part for this country ("2023"); other strings unchanged. */
+export function countryVintage(v: string, c: CountryId): string {
+  if (!v || !v.includes(';')) return v
+  const names = c === 'lka' ? /^(sri lanka|lka|lk)\b[:\s]*/i : /^(usa|united states|us)\b[:\s]*/i
+  const part = v.split(';').map((x) => x.trim()).find((x) => names.test(x))
+  return part ? part.replace(names, '').trim() || v : v
+}
