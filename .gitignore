@@ -1,0 +1,10 @@
+# data pipeline
+data/cache/
+data/interim/
+*.pyc
+__pycache__/
+.venv*/
+# web
+web/node_modules/
+web/dist/
+.DS_Store
