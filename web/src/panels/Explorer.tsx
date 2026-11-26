@@ -207,14 +207,16 @@ export const Explorer = memo(function Explorer({ app }: { app: AppData }) {
                 <i className={`explorer-swatch ${sg.country}`} aria-hidden />
                 <b>{COUNTRY_META[sg.country].name}</b>
                 {sg.fit ? (
-                  <span>r = <b>{sg.fit.r.toFixed(2)}</b> · slope {fmtSlope(sg.fit.slope)}{plot.logX && plot.logY ? ' (log–log)' : ''}</span>
+                  Number.isFinite(sg.fit.r)
+                    ? <span>r = <b>{sg.fit.r.toFixed(2)}</b> · slope {fmtSlope(sg.fit.slope)}{plot.logX && plot.logY ? ' (log–log)' : ''}</span>
+                    : <span className="muted">r n/a (Y is constant)</span>
                 ) : <span className="muted">too few points for a fit</span>}
                 <span className="muted">n = {(sg.end - sg.start).toLocaleString()}</span>
               </div>
             ))}
             {(hidden > 0 || missingNotes.length > 0) && (
               <div className="explorer-note">
-                {hidden > 0 && <span>{hidden.toLocaleString()} {nounAll.toLowerCase()} with values ≤ 0 are hidden on the log axis. </span>}
+                {hidden > 0 && <span>{hidden.toLocaleString()} {levelNoun(ds, level, hidden !== 1).toLowerCase()} with values ≤ 0 {hidden === 1 ? 'is' : 'are'} hidden on the log axis. </span>}
                 {missingNotes.join(' ')}
               </div>
             )}

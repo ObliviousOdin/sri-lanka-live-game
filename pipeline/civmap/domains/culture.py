@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import html
 import json
+from io import StringIO
 import math
 import re
 import sys
@@ -368,11 +369,14 @@ def heritage(country: str, loc: _Locator) -> pd.DataFrame:
     for gid, mem in groups.items():
         mem = sorted(mem, key=lambda m: -m["sitelinks"])
         placed = None
-        for m in mem:
-            for (la, lo) in m["coords"]:
-                p = loc.locate(la, lo, max_km=250.0)
-                if p is not None:
-                    placed = (m, p, (la, lo))
+        for max_km in (0.0, 250.0):   # any coordinate on the grid first, then the nearest-land fallback
+            for m in mem:
+                for (la, lo) in m["coords"]:
+                    p = loc.locate(la, lo, max_km=max_km)
+                    if p is not None:
+                        placed = (m, p, (la, lo))
+                        break
+                if placed:
                     break
             if placed:
                 break
@@ -484,7 +488,6 @@ def parks_usa(loc: _Locator) -> pd.DataFrame:
     p, year = _nps_ranking_csv()
     lines = p.read_text(encoding="utf-8-sig").splitlines()
     hdr = next(i for i, l in enumerate(lines) if l.startswith("ParkName,"))
-    from io import StringIO
     nps = pd.read_csv(StringIO("\n".join(lines[hdr:])), dtype=str)
     nps = nps[nps.ParkName.notna() & nps.Value.notna()]
     nps["visitors"] = nps.Value.str.replace(",", "").astype(float)
@@ -551,7 +554,8 @@ def parks_usa(loc: _Locator) -> pd.DataFrame:
         out.append(dict(id=f"nps:{qid}", name=getattr(hit, "pLabel", None) or hit.l, lat=round(la, 6),
                         lon=round(lo, 6), kind="national park and preserve" if "PRES" in name else "national park",
                         nps_name=name, visitors=vis, park_visitors=vis, visitors_year=year,
-                        area_km2=round(float(area), 2) if np.isfinite(area) else np.nan, wikidata=qid))
+                        area_km2=round(float(area), 2) if np.isfinite(area) else np.nan,
+                        area_source="Wikidata" if np.isfinite(area) else "", wikidata=qid))
     df = pd.DataFrame(out).sort_values("park_visitors", ascending=False).reset_index(drop=True)
     print(f"  parks: {len(df)} US national parks, {df.park_visitors.sum():,.0f} recreation visits ({year}); "
           f"report total {nps.visitors.sum():,.0f} for {len(nps)} units; dropped: {dropped}")

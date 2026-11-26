@@ -24,16 +24,17 @@ const mantissa = (v: number) => Math.round(v / Math.pow(10, Math.floor(Math.log1
 function axisTicks(sc: Scale, log: boolean, dom: [number, number], px: number) {
   const target = Math.max(2, Math.min(7, Math.floor(px / 64)))
   if (!log) return { major: sc.ticks(target), minor: [] as number[] }
-  const all = sc.ticks()
-  const decades = Math.log10(dom[1] / dom[0])
-  let major: number[]
-  if (decades > 1.6) {
-    major = all.filter((v) => mantissa(v) === 1)
-    while (major.length > target + 1) major = major.filter((_, i) => i % 2 === 0)
-  } else if (decades > 0.7) major = all.filter((v) => [1, 2, 5].includes(mantissa(v)))
-  else major = all
-  while (major.length > target + 2) major = major.filter((_, i) => i % 2 === 0)
-  if (major.length < 2) major = all.slice(0, target)
+  const all = sc.ticks().filter((v) => v > 0)
+  // richest mantissa set that still fits: 1 → 1,3 → 1,2,5 → every tick
+  const sets = [[1], [1, 3], [1, 2, 5], [1, 2, 3, 4, 5, 6, 7, 8, 9]]
+  let major = all.filter((v) => mantissa(v) === 1)
+  for (const set of sets.slice(1)) {
+    const c = all.filter((v) => set.includes(mantissa(v)))
+    if (c.length <= target + 1) major = c
+    else break
+  }
+  while (major.length > target + 1) major = major.filter((_, i) => i % 2 === 0)
+  if (major.length < 2) major = all.slice(0, Math.max(2, target))
   const ms = new Set(major)
   return { major, minor: all.filter((v) => !ms.has(v)) }
 }

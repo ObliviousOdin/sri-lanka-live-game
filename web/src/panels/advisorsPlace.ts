@@ -38,7 +38,7 @@ function otherMedian(ctx: PlaceCtx, ms: Measure | null) {
 }
 
 /** "<label> X — Nth percentile of M Sri Lankan districts; US median county: Y — k× higher here." */
-function rankComment(ctx: PlaceCtx, id: string, icon: string, ms: Measure | null, msOther: Measure | null, opts: { lead?: string; suffix?: (r: Rank) => string } = {}): Comment | null {
+function rankComment(ctx: PlaceCtx, id: string, icon: string, ms: Measure | null, msOther: Measure | null, opts: { lead?: string; suffix?: (r: Rank) => string; vlabel?: string } = {}): Comment | null {
   if (!ms) return null
   const { place } = ctx
   const r = rankOf(place, ms)
@@ -64,7 +64,7 @@ function rankComment(ctx: PlaceCtx, id: string, icon: string, ms: Measure | null
     id, icon, segs, sources, pct: r.p, pctBetter: ms.better, meta: ms.vintage || undefined,
     weight: r.n >= 5 ? extreme : 0,
     verdict: [`${place.title} ranks in the `, fig(r.p >= 50 ? `top ${Math.max(1, Math.round(100 - r.p))}%` : `bottom ${Math.max(1, Math.round(r.p))}%`, home),
-      ` of ${ADJ[home]} ${levelNoun(place.d, place.level, r.n)} for ${lc1(ms.label.replace(/[:\s]+$/, ''))} (`, fig(ms.fmt(r.v), home), ').'],
+      ` of ${ADJ[home]} ${levelNoun(place.d, place.level, r.n)} for ${opts.vlabel ?? lc1(ms.label.replace(/[:\s]+$/, ''))} (`, fig(ms.fmt(r.v), home), ').'],
   }
 }
 
@@ -123,7 +123,7 @@ function yieldComment(place: Place, ys: YieldKey[]): Comment | null {
     const r = yieldRank(place, y)
     if (!r) continue
     if (parts.length) parts.push('; ')
-    parts.push(`${YLABEL[y]} `, fig(count(r.v), home), ` (${pct(r.share)} of ${nm(home)}'s ${count(r.tot)})`)
+    parts.push(`${YLABEL[y]} `, fig(count(r.v), home), ` (${pct(r.share)} of ${poss(home)} ${count(r.tot)})`)
     p0 ??= r.p
   }
   if (!parts.length) return null
@@ -291,6 +291,7 @@ function military(ctx: PlaceCtx): Comment[] {
   out.push(rankComment(ctx, 'soldiers', '💂', mm(d, 'cit_soldiers_pct', { label: 'Soldiers (share of workers)' }), mm(other, 'cit_soldiers_pct', { label: 'Soldiers (share of workers)' })))
   out.push(rankComment(ctx, 'slope', '⛰️', mm(d, 'slope_mean_deg', { label: 'Defensive ground — mean slope', ratio: true }), mm(other, 'slope_mean_deg', { ratio: true }), {
     suffix: (r) => (r.p >= 75 ? ' (rough terrain favours defenders)' : r.p <= 25 ? ' (open ground, hard to hold)' : ''),
+    vlabel: 'rugged terrain (mean slope)',
   }))
   // strategic assets
   const assets: Seg[] = []

@@ -15,7 +15,7 @@ export interface LensDef {
   /** candidate metric keys, first available is the default */
   metrics?: string[]
   /** for dominant lenses: metric key prefix & suffix filter, or explicit keys */
-  dominant?: { prefix: string; suffix?: string; exclude?: string[]; byLQ?: boolean }
+  dominant?: { prefix: string; suffix?: string; exclude?: string[]; byLQ?: boolean; aggregates?: Record<string, string[]> }
   palette?: keyof typeof PALETTES
   log?: boolean
   description: string
@@ -34,7 +34,7 @@ export const LENSES: LensDef[] = [
   { id: 'population', label: 'Population density', group: 'People', icon: '👥', kind: 'metric', metrics: ['pop_density', 'pop'], palette: 'magma', log: true, description: 'Residents per km² (WorldPop distribution scaled to official 2023 totals).' },
   { id: 'income', label: 'Income', group: 'Economy', icon: '💵', kind: 'metric', metrics: ['hh_income_usd', 'gdp_per_capita_usd', 'poverty_rate', 'rwi'], palette: 'viridis', log: false, description: 'Household income, GDP per capita, poverty and (Sri Lanka) the Relative Wealth Index.' },
   { id: 'education', label: 'Education', group: 'People', icon: '🎓', kind: 'metric', metrics: ['pct_bachelors', 'pct_secondary', 'literacy_rate', 'schools'], palette: 'blues', log: false, description: 'Educational attainment of adults and schools.' },
-  { id: 'religion', label: 'Religion', group: 'People', icon: '🪔', kind: 'dominant', dominant: { prefix: 'rel_', suffix: '_pct', exclude: ['rel_unclaimed_pct'] }, metrics: ['religious_diversity'], description: 'Largest religious tradition (shade = its share). Sri Lanka: Census; US: 2020 U.S. Religion Census adherents.' },
+  { id: 'religion', label: 'Religion', group: 'People', icon: '🪔', kind: 'dominant', dominant: { prefix: 'rel_', suffix: '_pct', exclude: ['rel_unclaimed_pct'], aggregates: { rel_christian_pct: ['rel_evangelical_pct', 'rel_catholic_pct', 'rel_mainline_pct', 'rel_black_protestant_pct', 'rel_orthodox_pct', 'rel_lds_pct'] } }, metrics: ['religious_diversity'], description: 'Largest religious tradition (shade = its share). Sri Lanka: Census; US: 2020 U.S. Religion Census adherents.' },
   { id: 'ethnicity', label: 'Ethnicity', group: 'People', icon: '🧑‍🤝‍🧑', kind: 'dominant', dominant: { prefix: 'eth_', suffix: '_pct' }, metrics: ['ethnic_diversity'], description: 'Largest ethnic group (shade = its share). Sri Lanka: Census; US: ACS race & Hispanic origin.' },
   { id: 'workforce', label: 'Workforce', group: 'People', icon: '👷', kind: 'dominant', dominant: { prefix: 'cit_', suffix: '_pct', byLQ: true }, description: 'Most over-represented citizen class (highest location quotient vs the national mix).' },
   { id: 'disasters', label: 'Disasters', group: 'Environment', icon: '🌪️', kind: 'metric', metrics: ['hazard_index', 'cyclone_tracks', 'quakes_m5', 'tsunami_runups', 'nri_risk_score', 'nri_eal_usd', 'disaster_deaths_per_100k', 'flood_events', 'landslide_events'], palette: 'hazard', log: false, description: 'Tropical cyclones (IBTrACS), earthquakes (USGS), tsunami run-ups (NOAA) and national loss databases.' },
@@ -100,9 +100,11 @@ export function lensMetricKeys(lens: LensDef, d: CountryData[]): string[] {
 
 function dominantKeys(lens: LensDef, d: CountryData) {
   const dm = lens.dominant!
-  return d.meta.metrics
+  const keys = d.meta.metrics
     .map((m) => m.key)
     .filter((k) => k.startsWith(dm.prefix) && (!dm.suffix || k.endsWith(dm.suffix)) && !(dm.exclude ?? []).includes(k))
+  // drop aggregate categories (e.g. all-Christian) when their components are published
+  return keys.filter((k) => !(dm.aggregates?.[k] ?? []).some((c) => keys.includes(c)))
 }
 
 /** Values used for colouring a metric lens (densities for extensive metrics). */

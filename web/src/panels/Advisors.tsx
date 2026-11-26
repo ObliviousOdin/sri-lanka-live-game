@@ -1,7 +1,7 @@
 // Advisors tab: five advisors comment on Sri Lanka vs the United States — nationally (World Bank
 // indicators + the map's own metrics) or about the selected tile / admin unit / city, with the
 // "twin across the ocean" finder. All sentences are generated from loaded data only.
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { cellToLatLng } from 'h3-js'
 import { COUNTRY_META } from '../civ'
 import { SourceChips } from '../components/SourceChip'
@@ -250,9 +250,12 @@ function PlaceCouncil({ app, place, back, onJump, onBack }: { app: AppData; plac
     return { segs, sources: best?.sources ?? [] }
   }, [groups, twin, app.countries])
   const otherName = otherOf(place.country)
+  const root = useRef<HTMLDivElement>(null)
+  // a new place: bring the panel back to the top (the panel body is the scroll container)
+  useEffect(() => { root.current?.closest('.panel-body')?.scrollTo({ top: 0 }) }, [])
 
   return (
-    <div className="advisors">
+    <div className="advisors" ref={root}>
       <header className="advisors-head">
         <div className="advisors-head-text">
           <div className="row advisors-chips">
