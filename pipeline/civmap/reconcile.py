@@ -28,7 +28,7 @@ import pandas as pd
 from .config import COUNTRIES, INTERIM
 from .core import load_hexes, load_pieces
 
-SKIP_DIRS = {"core", "national", "core_r5"}
+SKIP_DIRS = {"core", "national", "core_r5", "reconciled", "civ"}
 
 
 def load_domain_metrics(country: str) -> tuple[list[dict], list[dict]]:

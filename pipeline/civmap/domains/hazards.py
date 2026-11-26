@@ -17,6 +17,7 @@ memoised in-process, whichever country is being built).
 """
 from __future__ import annotations
 
+import dataclasses
 import json
 import math
 import zipfile
@@ -774,6 +775,7 @@ def build(country: str) -> None:
           f"with M5+ quakes {(raw.quakes_m5[land] > 0).mean():.1%}, with tsunami runups "
           f"{(raw.tsunami_runups[land] > 0).mean():.1%}", flush=True)
 
+    metrics = METRICS
     if country == "usa":
         adm = _usa_admin()
         util.write_admin(country, DOMAIN, "adm2", adm)
@@ -786,7 +788,13 @@ def build(country: str) -> None:
               f"datacards {DESINV_MIN_YEAR}-{stats['last_year']}; deaths {adm.disaster_deaths.sum():,.0f}, "
               f"affected {adm.disaster_affected.sum():,.0f}, houses destroyed {adm.houses_destroyed.sum():,.0f}",
               flush=True)
-    schema.write_domain_meta(config.interim_dir(country, DOMAIN), METRICS, SOURCES, country)
+        if stats["last_year"] != 2020:   # e.g. HDX fallback (to 2014): keep vintages/labels truthful
+            span = f"{DESINV_MIN_YEAR}-{stats['last_year']}"
+            metrics = [dataclasses.replace(m, vintage=span, label=m.label.replace("1990-2020", span),
+                                           method=m.method.replace("1990-2020", span).replace(
+                                               "31 years", f"{stats['n_years']} years"))
+                       if "desinventar_lka" in m.sources else m for m in METRICS]
+    schema.write_domain_meta(config.interim_dir(country, DOMAIN), metrics, SOURCES, country)
 
 
 if __name__ == "__main__":

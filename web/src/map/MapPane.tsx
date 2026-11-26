@@ -61,16 +61,20 @@ export function MapPane({ country, data, app, lens, compact }: Props) {
     setSize({ w: el.clientWidth, h: el.clientHeight })
     return () => ro.disconnect()
   }, [])
+  // fit the country on first render, and again on resize until the user moves the map
+  const userMoved = useRef(false)
   useEffect(() => {
-    if (!size || view || size.w < 10) return
+    if (!size || size.w < 10 || (view && userMoved.current)) return
     const vp = new WebMercatorViewport({ width: size.w, height: size.h })
     const { longitude, latitude, zoom } = vp.fitBounds(INITIAL_BOUNDS[country], { padding: Math.min(40, size.w / 10) })
-    setView({ longitude, latitude, zoom, pitch: 0, bearing: 0 })
-  }, [size, view, country])
+    setView((v) => ({ ...(v ?? { pitch: 0, bearing: 0 }), longitude, latitude, zoom }))
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [size, country])
 
   // ---- fly-to requests
   useEffect(() => {
     if (!flyTo || flyTo.country !== country || !view) return
+    userMoved.current = true
     setView({ ...view, longitude: flyTo.lon, latitude: flyTo.lat, zoom: flyTo.zoom ?? Math.max(view.zoom, country === 'lka' ? 9 : 7.5),
       transitionDuration: 900, transitionInterpolator: new FlyToInterpolator() } as MapViewState)
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -90,6 +94,7 @@ export function MapPane({ country, data, app, lens, compact }: Props) {
   const onViewStateChange = ({ viewState, interactionState }: { viewState: MapViewState; interactionState?: { isDragging?: boolean; isZooming?: boolean; isPanning?: boolean } }) => {
     setView(viewState)
     if (interactionState && (interactionState.isZooming || interactionState.isDragging || interactionState.isPanning)) {
+      userMoved.current = true
       useStore.setState((s) => ({ zoomRef: { ...s.zoomRef, [country]: { zoom: viewState.zoom, lat: viewState.latitude } } }))
     }
   }

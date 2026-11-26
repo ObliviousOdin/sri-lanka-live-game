@@ -89,16 +89,20 @@ def classify_terrain(H: pd.DataFrame) -> pd.DataFrame:
 
     base = np.full(len(H), "plains", dtype=object)
     veg_open = lc["grass"] + lc["shrub"] + lc["crop"]
-    wet = precip >= 700
+    # Grassland = humid or well-watered farmland; Plains = drier open country (prairie, dry farming)
+    wet = (precip >= 1000) | ((lc["crop"] >= 0.4) & (precip >= 700))
     base = np.where((lc["crop"] + lc["grass"] + lc["tree"] >= 0.35) & wet, "grassland", base)
     base = np.where(~wet & (veg_open + lc["tree"] >= 0.3), "plains", base)
-    base = np.where((lc["bare"] >= 0.35) | ((precip < 250) & (lc["bare"] + lc["shrub"] >= 0.5)), "desert", base)
+    base = np.where((lc["bare"] >= 0.35) | ((precip < 330) & (lc["bare"] + lc["shrub"] >= 0.5)), "desert", base)
     base = np.where((lc["moss"] >= 0.2) | ((temp < -3) & (lc["tree"] < 0.3)), "tundra", base)
     base = np.where(lc["snow"] >= 0.35, "snow", base)
     mountains = ((slope >= 16) & (emax >= 900)) | ((elev >= 2200) & (slope >= 9)) | ((relief >= 1600) & (slope >= 11))
     hills = ~mountains & ((slope >= 6) | (relief >= 500))
     base = np.where(mountains & (ring == 0), "mountains", base)
-    base = np.where((ring == 0) & (lc["water"] >= 0.6), "lake", base)
+    land_frac = np.nan_to_num(H["land_km2"].to_numpy(float) / H["hex_km2"].to_numpy(float))
+    # mostly-sea coastal tiles read as Coast; water inside the boundary reads as Lake
+    base = np.where((ring == 0) & (land_frac < 0.35), "coast", base)
+    base = np.where((ring == 0) & (land_frac >= 0.35) & (lc["water"] >= 0.55), "lake", base)
     base = np.where(ring == 1, "coast", base)
     base = np.where(ring >= 2, "ocean", base)
 
