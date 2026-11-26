@@ -30,6 +30,9 @@ interface State {
     logX: boolean
     logY: boolean
     brushed: Partial<Record<CountryId, Set<number>>>
+    adminLevel?: 'adm1' | 'adm2'
+    norm?: 'total' | 'density' | 'capita'
+    colorBy?: 'country' | 'lens'
   }
   flyTo: FlyTo | null
   zoomRef: Partial<Record<CountryId, { zoom: number; lat: number }>>

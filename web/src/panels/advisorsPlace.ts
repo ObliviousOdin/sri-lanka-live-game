@@ -3,7 +3,7 @@
 // yields, hazards, land cover. Only loaded values are used; missing inputs skip the comment.
 import { adminUnitOfHex } from '../data/load'
 import { terrainLabel } from '../civ'
-import type { CountryData, CountryId, IndexJson, YieldKey } from '../types'
+import type { CountryData, IndexJson, YieldKey } from '../types'
 import {
   ADJ, type AdvisorId, type Comment, count, counterpartLevel, fig, getter, levelNoun, type Measure, measureValue,
   medianOf, metricMeasure, money, natAgg, nm, ok, ordinal, pct, percentileOf, perCapMeasure, type Place, poss, prettyLabel,
@@ -38,7 +38,7 @@ function otherMedian(ctx: PlaceCtx, ms: Measure | null) {
 }
 
 /** "<label> X — Nth percentile of M Sri Lankan districts; US median county: Y — k× higher here." */
-function rankComment(ctx: PlaceCtx, id: string, icon: string, ms: Measure | null, msOther: Measure | null, opts: { lead?: string; suffix?: (r: Rank) => string; vlabel?: string } = {}): Comment | null {
+function rankComment(ctx: PlaceCtx, id: string, icon: string, ms: Measure | null, msOther: Measure | null, opts: { lead?: string; suffix?: (r: Rank) => string; vlabel?: string; minor?: boolean } = {}): Comment | null {
   if (!ms) return null
   const { place } = ctx
   const r = rankOf(place, ms)
@@ -62,7 +62,8 @@ function rankComment(ctx: PlaceCtx, id: string, icon: string, ms: Measure | null
   const extreme = Math.abs(r.p - 50) / 50
   return {
     id, icon, segs, sources, pct: r.p, pctBetter: ms.better, meta: ms.vintage || undefined,
-    weight: r.n >= 5 ? extreme : 0,
+    // verdict weight: how extreme the rank is; zero values (zero-inflated pools) and minor indicators count less
+    weight: r.n >= 5 && r.v !== 0 ? extreme * (opts.minor ? 0.8 : 1) : 0,
     verdict: [`${place.title} ranks in the `, fig(r.p >= 50 ? `top ${Math.max(1, Math.round(100 - r.p))}%` : `bottom ${Math.max(1, Math.round(r.p))}%`, home),
       ` of ${ADJ[home]} ${levelNoun(place.d, place.level, r.n)} for ${opts.vlabel ?? lc1(ms.label.replace(/[:\s]+$/, ''))} (`, fig(ms.fmt(r.v), home), ').'],
   }
@@ -71,7 +72,8 @@ function rankComment(ctx: PlaceCtx, id: string, icon: string, ms: Measure | null
 /** Counts reconciled onto units can be fractional: show whole numbers, "≈" when rounded. */
 const nCount = (v: number) => (Math.abs(v - Math.round(v)) > 0.05 && Math.abs(v) < 1000 ? `≈${count(Math.round(v))}` : count(v))
 
-const lc1 = (s: string) => (/^[A-Z][a-z]/.test(s) ? s.charAt(0).toLowerCase() + s.slice(1) : s)
+/** Lower-case a plain label's first letter ("Mean elevation" → "mean elevation"; "GDP per capita" stays). */
+const lc1 = (s: string) => (/^[A-Z][^A-Z]*$/.test(s) ? s.charAt(0).toLowerCase() + s.slice(1) : s)
 
 const mm = (d: CountryData | undefined, key: string, o?: Partial<Measure>) => (d ? metricMeasure(d, key, o) : null)
 const firstKey = (d: CountryData, keys: string[]) => keys.find((k) => d.metricByKey.has(k))
@@ -121,7 +123,7 @@ function yieldComment(place: Place, ys: YieldKey[]): Comment | null {
   const home = place.country
   for (const y of ys) {
     const r = yieldRank(place, y)
-    if (!r) continue
+    if (!r || !(r.v > 0)) continue
     if (parts.length) parts.push('; ')
     parts.push(`${YLABEL[y]} `, fig(count(r.v), home), ` (${pct(r.share)} of ${poss(home)} ${count(r.tot)})`)
     p0 ??= r.p
@@ -209,7 +211,7 @@ function dominant(place: Place, prefix: string, suffix: string, exclude: string[
   return best && best.v > 0 ? best : null
 }
 
-const catName = (d: CountryData, k: string) => prettyLabel(d.metricByKey.get(k)?.label ?? k).replace(/\s*\((share|%)\)$/i, '').replace(/^(Religion|Ethnicity|Adherents)\s*:\s*/i, '')
+const catName = (d: CountryData, k: string) => prettyLabel(d.metricByKey.get(k)?.label ?? k).replace(/\s*\((share|%[^)]*)\)$/i, '').replace(/^(Religion|Ethnicity|Adherents)\s*:\s*/i, '')
 
 function dominantComment(place: Place, other: CountryData | undefined, id: string, icon: string, lead: string, prefix: string, suffix: string, scale: number, exclude: string[] = []): Comment | null {
   const b = dominant(place, prefix, suffix, exclude)
@@ -218,12 +220,11 @@ function dominantComment(place: Place, other: CountryData | undefined, id: strin
   const home = place.country
   const nat = natAgg(d, b.k)
   const segs: Seg[] = [lead, catName(d, b.k), ' ', fig(pct(b.v * scale), home)]
-  if (ok(nat)) segs.push(` (${nm(home)}: ${pct(nat * scale)}`)
-  if (other?.metricByKey.has(b.k)) {
-    const on = natAgg(other, b.k)
-    if (ok(on)) segs.push(`${ok(nat) ? '; ' : ' ('}${SHORT[other.id]}: `, fig(pct(on * scale), other.id))
-  }
-  if (ok(nat) || other?.metricByKey.has(b.k)) segs.push(')')
+  const on = other?.metricByKey.has(b.k) ? natAgg(other, b.k) : NaN
+  const notes: Seg[] = []
+  if (ok(nat)) notes.push(`${SHORT[home]} overall ${pct(nat * scale)}`)
+  if (ok(on)) notes.push(notes.length ? '; ' : '', `${SHORT[other!.id]} `, fig(pct(on * scale), other!.id))
+  if (notes.length) segs.push(' (', ...notes, ')')
   segs.push('.')
   return { id, icon, segs, sources: d.metricByKey.get(b.k)?.sources ?? [], meta: d.metricByKey.get(b.k)?.vintage }
 }
@@ -262,7 +263,7 @@ function economic(ctx: PlaceCtx): Comment[] {
   out.push(rankComment(ctx, 'hh_income', '💵', mm(d, 'hh_income_usd'), mm(other, 'hh_income_usd')))
   out.push(rankComment(ctx, 'poverty', '🥣', mm(d, 'poverty_rate'), mm(other, 'poverty_rate')))
   out.push(lqComment(place))
-  out.push(rankComment(ctx, 'rwi', '📈', mm(d, 'rwi'), mm(other, 'rwi')))
+  out.push(rankComment(ctx, 'rwi', '📈', mm(d, 'rwi'), mm(other, 'rwi'), { minor: true }))
   out.push(yieldComment(place, ['gold', 'production']))
   return out.filter(Boolean) as Comment[]
 }
@@ -273,7 +274,7 @@ function military(ctx: PlaceCtx): Comment[] {
   const home = place.country
   const out: (Comment | null)[] = []
   const pop = shareOfNation(place, 'pop')
-  if (pop) {
+  if (pop && pop.v > 0) {
     out.push({
       id: 'manpower', icon: '👥', sources: d.metricByKey.get('pop')?.sources ?? [], meta: d.metricByKey.get('pop')?.vintage,
       segs: ['Manpower: ', fig(count(pop.v), home), ` residents — ${pct(pop.share)} of ${poss(home)} ${count(pop.tot)} people.`],
@@ -283,15 +284,18 @@ function military(ctx: PlaceCtx): Comment[] {
   if (ms) {
     out.push({
       id: 'garrison', icon: '🏰', sources: d.metricByKey.get('military_sites')?.sources ?? [], meta: d.metricByKey.get('military_sites')?.vintage,
-      segs: ms.v > 0
+      segs: ms.v >= 0.5
         ? ['Garrisons: ', fig(nCount(ms.v), home), ` mapped military installation${Math.round(ms.v) === 1 ? '' : 's'} — ${pct(ms.share)} of ${poss(home)} ${nCount(ms.tot)}.`]
-        : [`No mapped military installations here (${nm(home)} has `, fig(nCount(ms.tot), home), ').'],
+        : ms.v > 0
+          ? [`Less than one mapped military installation is attributed here (a share of a tile it overlaps); ${nm(home)} has `, fig(nCount(ms.tot), home), '.']
+          : [`No mapped military installations here (${nm(home)} has `, fig(nCount(ms.tot), home), ').'],
     })
   }
-  out.push(rankComment(ctx, 'soldiers', '💂', mm(d, 'cit_soldiers_pct', { label: 'Soldiers (share of workers)' }), mm(other, 'cit_soldiers_pct', { label: 'Soldiers (share of workers)' })))
+  out.push(rankComment(ctx, 'soldiers', '💂', mm(d, 'cit_soldiers_pct', { label: 'Soldiers (share of workers)' }), mm(other, 'cit_soldiers_pct', { label: 'Soldiers (share of workers)' }), { minor: true }))
   out.push(rankComment(ctx, 'slope', '⛰️', mm(d, 'slope_mean_deg', { label: 'Defensive ground — mean slope', ratio: true }), mm(other, 'slope_mean_deg', { ratio: true }), {
     suffix: (r) => (r.p >= 75 ? ' (rough terrain favours defenders)' : r.p <= 25 ? ' (open ground, hard to hold)' : ''),
     vlabel: 'ruggedness — mean slope',
+    minor: true,
   }))
   // strategic assets
   const assets: Seg[] = []
@@ -328,12 +332,12 @@ function cultural(ctx: PlaceCtx): Comment[] {
   }
   for (const [k, one, many] of [['museums', 'museum', 'museums'], ['worship_sites', 'place of worship', 'places of worship'], ['park_visitors', 'park visitor', 'park visitors a year']] as const) {
     const s = shareOfNation(place, k)
-    if (!s || !(s.v > 0)) continue
+    if (!s || !(s.v >= 0.5)) continue
     heritage.push(heritage.length ? '; ' : '', fig(nCount(s.v), home), ` ${Math.round(s.v) === 1 ? one : many} (${pct(s.share)} of national)`)
     srcs.push(...(d.metricByKey.get(k)?.sources ?? []))
   }
   if (heritage.length) out.push({ id: 'heritage', icon: '🏛️', segs: ['Heritage: ', ...heritage, '.'], sources: srcs })
-  out.push(rankComment(ctx, 'rel_div', '☯️', mm(d, 'religious_diversity'), mm(other, 'religious_diversity')))
+  out.push(rankComment(ctx, 'rel_div', '☯️', mm(d, 'religious_diversity'), mm(other, 'religious_diversity'), { minor: true }))
   return out.filter(Boolean) as Comment[]
 }
 
@@ -360,7 +364,7 @@ function scientific(ctx: PlaceCtx): Comment[] {
   }
   out.push(rankComment(ctx, 'engineers', '🧑‍🔬', mm(d, 'cit_engineers_pct', { label: 'Engineers (STEM share of workers)' }), mm(other, 'cit_engineers_pct', { label: 'Engineers' })))
   out.push(yieldComment(place, ['science']))
-  out.push(rankComment(ctx, 'schools', '🏫', perCapMeasure(d, 'schools', 1e4, 'Schools per 10,000 residents:', ''), other ? perCapMeasure(other, 'schools', 1e4, 'Schools per 10,000 residents:', '') : null))
+  out.push(rankComment(ctx, 'schools', '🏫', perCapMeasure(d, 'schools', 1e4, 'Schools per 10,000 residents:', ''), other ? perCapMeasure(other, 'schools', 1e4, 'Schools per 10,000 residents:', '') : null, { minor: true }))
   return out.filter(Boolean) as Comment[]
 }
 
@@ -375,12 +379,12 @@ function environmental(ctx: PlaceCtx): Comment[] {
   }))
   const g = getter(d, place.level, place.index)
   out.push(rankComment(ctx, 'elev', '🏔️', mm(d, 'elev_mean_m', { label: 'Mean elevation' }), mm(other, 'elev_mean_m'), {
-    suffix: () => (ok(g('elev_min_m')) && ok(g('elev_max_m')) ? `; range ${Math.round(g('elev_min_m'))}–${Math.round(g('elev_max_m'))} m` : ''),
+    suffix: () => (ok(g('elev_min_m')) && ok(g('elev_max_m')) ? `; range ${Math.round(g('elev_min_m'))} to ${Math.round(g('elev_max_m'))} m` : ''),
   }))
   out.push(rankComment(ctx, 'hazard', '🌪️', mm(d, 'hazard_index', { label: 'Natural hazard index', ratio: true }), mm(other, 'hazard_index', { ratio: true })))
-  if (home === 'lka') out.push(rankComment(ctx, 'deaths', '🕯️', mm(d, 'disaster_deaths_per_100k', { label: 'Disaster deaths', ratio: true }), null))
-  else out.push(rankComment(ctx, 'nri', '🧯', mm(d, 'nri_risk_score', { label: 'FEMA risk score', ratio: true }), null))
-  out.push(rankComment(ctx, 'protected', '🦌', mm(d, 'protected_pct', { label: 'Protected land' }), mm(other, 'protected_pct')))
+  if (home === 'lka') out.push(rankComment(ctx, 'deaths', '🕯️', mm(d, 'disaster_deaths_per_100k', { label: 'Disaster deaths', ratio: true }), null, { minor: true }))
+  else out.push(rankComment(ctx, 'nri', '🧯', mm(d, 'nri_risk_score', { label: 'FEMA risk score', ratio: true }), null, { minor: true }))
+  out.push(rankComment(ctx, 'protected', '🦌', mm(d, 'protected_pct', { label: 'Protected land' }), mm(other, 'protected_pct'), { minor: true }))
   out.push(rankComment(ctx, 'rain', '🌧️', mm(d, 'precip_mm', { label: 'Rainfall' }), mm(other, 'precip_mm'), {
     suffix: () => (ok(g('temp_mean_c')) ? `; mean temperature ${g('temp_mean_c').toFixed(1)} °C` : ''),
   }))

@@ -48,8 +48,18 @@ export function MapPane({ country, data, app, lens, compact }: Props) {
   const ref = useRef<HTMLDivElement>(null)
   const [size, setSize] = useState<{ w: number; h: number } | null>(null)
   const [view, setView] = useState<MapViewState | null>(null)
-  const st = useStore()
-  const { lensId, extrude, basemap, showAdmin, showIcons, sameScale, pickLevel, selection, explorer, flyTo, mode } = st
+  const lensId = useStore((s) => s.lensId)
+  const lensMetricSel = useStore((s) => s.lensMetric[s.lensId])
+  const extrude = useStore((s) => s.extrude)
+  const basemap = useStore((s) => s.basemap)
+  const showAdmin = useStore((s) => s.showAdmin)
+  const showIcons = useStore((s) => s.showIcons)
+  const sameScale = useStore((s) => s.sameScale)
+  const pickLevel = useStore((s) => s.pickLevel)
+  const selection = useStore((s) => s.selection)
+  const brushedAll = useStore((s) => s.explorer.brushed)
+  const flyTo = useStore((s) => s.flyTo)
+  const mode = useStore((s) => s.mode)
   const lensDef = LENS_BY_ID.get(lensId)!
 
   // ---- sizing / initial view
@@ -63,6 +73,7 @@ export function MapPane({ country, data, app, lens, compact }: Props) {
   }, [])
   // fit the country on first render, and again on resize until the user moves the map
   const userMoved = useRef(false)
+  const appliedFly = useRef<number | null>(null)
   useEffect(() => {
     if (!size || size.w < 10 || (view && userMoved.current)) return
     const vp = new WebMercatorViewport({ width: size.w, height: size.h })
@@ -73,12 +84,13 @@ export function MapPane({ country, data, app, lens, compact }: Props) {
 
   // ---- fly-to requests
   useEffect(() => {
-    if (!flyTo || flyTo.country !== country || !view) return
+    if (!flyTo || flyTo.country !== country || !view || flyTo.ts === appliedFly.current) return
+    appliedFly.current = flyTo.ts
     userMoved.current = true
     setView({ ...view, longitude: flyTo.lon, latitude: flyTo.lat, zoom: flyTo.zoom ?? Math.max(view.zoom, country === 'lka' ? 9 : 7.5),
       transitionDuration: 900, transitionInterpolator: new FlyToInterpolator() } as MapViewState)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [flyTo?.ts])
+  }, [flyTo?.ts, view === null])
 
   // ---- same-scale linking between the two panes
   const other: CountryId = country === 'lka' ? 'usa' : 'lka'
@@ -112,16 +124,17 @@ export function MapPane({ country, data, app, lens, compact }: Props) {
 
   // ---- colours with brushing / admin-selection emphasis
   const indices = useMemo(() => Array.from({ length: data.n }, (_, i) => i), [data])
-  const brushed = explorer.brushed[country]
+  const brushed = brushedAll[country]
+  const anyBrush = Object.values(brushedAll).some((b) => b && [...b].some((i) => i >= 0))
   const colors = useMemo(() => {
     if (!lens) return null
-    if (!brushed || !brushed.size) return lens.colors
+    if (!anyBrush || !brushed) return lens.colors
     const c = lens.colors.slice()
     for (let i = 0; i < data.n; i++) {
       if (!brushed.has(i)) { c[i * 4] *= 0.25; c[i * 4 + 1] *= 0.25; c[i * 4 + 2] *= 0.25 }
     }
     return c
-  }, [lens, brushed, data])
+  }, [lens, brushed, anyBrush, data])
 
   // ---- selection geometry
   const selectedHexes = useMemo(() => {
@@ -252,10 +265,12 @@ export function MapPane({ country, data, app, lens, compact }: Props) {
     }
     if (id.startsWith('hex-') && typeof info.index === 'number' && info.index >= 0) {
       const i = info.index
-      if (pickLevel === 'hex') useStore.getState().select({ country, kind: 'hex', id: data.hexes.h3[i] }, 'tile')
+      const cur = useStore.getState().panel
+      const tab = cur === 'advisors' || cur === 'explorer' ? cur : 'tile'
+      if (pickLevel === 'hex') useStore.getState().select({ country, kind: 'hex', id: data.hexes.h3[i] }, tab)
       else {
         const u = adminUnitOfHex(data, pickLevel, i)
-        if (u) useStore.getState().select({ country, kind: 'admin', id: `${pickLevel}:${u.index}` }, 'tile')
+        if (u) useStore.getState().select({ country, kind: 'admin', id: `${pickLevel}:${u.index}` }, tab)
       }
     }
   }
@@ -263,7 +278,7 @@ export function MapPane({ country, data, app, lens, compact }: Props) {
   const getTooltip = (info: PickingInfo) => {
     if (!info.layer) return null
     if (info.layer.id.startsWith('hex-') && typeof info.index === 'number' && info.index >= 0) {
-      return { html: hexTooltip(data, app, info.index, lensId, st.lensMetric[lensId]), className: 'deck-tip' }
+      return { html: hexTooltip(data, app, info.index, lensId, lensMetricSel), className: 'deck-tip' }
     }
     if (info.layer.id.startsWith('icons-')) return { html: `<b>${(info.object as { label: string }).label}</b>`, className: 'deck-tip' }
     if (info.layer.id.startsWith('pts-')) {

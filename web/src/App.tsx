@@ -25,16 +25,30 @@ const TABS: { id: PanelTab; label: string; icon: string }[] = [
 
 export default function App() {
   const app = useAppData()
-  const st = useStore()
-  const { mode, panel, panelOpen } = st
+  const mode = useStore((s) => s.mode)
+  const panel = useStore((s) => s.panel)
+  const panelOpen = useStore((s) => s.panelOpen)
+  const sharedScale = useStore((s) => s.sharedScale)
+  const sameScale = useStore((s) => s.sameScale)
+  const extrude = useStore((s) => s.extrude)
+  const pickLevel = useStore((s) => s.pickLevel)
+  const basemap = useStore((s) => s.basemap)
+  const lensId = useStore((s) => s.lensId)
+  const set = useStore((s) => s.set)
+  const st = { sharedScale, sameScale, extrude, pickLevel, basemap, set, lensId }
   const lka = app.countries.lka
   const usa = app.countries.usa
   const lensLka = useLens(lka, app)
   const lensUsa = useLens(usa, app)
-  const lens = LENS_BY_ID.get(st.lensId)
+  const lens = LENS_BY_ID.get(lensId)
 
   useEffect(() => {
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') useStore.getState().select(null) }
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return
+      const s = useStore.getState()
+      s.select(null)
+      s.setExplorer({ brushed: {} })
+    }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
   }, [])

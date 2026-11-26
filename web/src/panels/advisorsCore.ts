@@ -47,8 +47,6 @@ export interface Comment {
   verdict?: Seg[]
 }
 
-export const segText = (segs: Seg[]) => segs.map((s) => (typeof s === 'string' ? s : s.t)).join('')
-
 // ---------------------------------------------------------------------------------------------
 // Names
 // ---------------------------------------------------------------------------------------------
@@ -139,6 +137,7 @@ export function fmtMetric(unit: string, v: number): string {
 
 export function tonnes(v: number) {
   if (!ok(v)) return '–'
+  if (Math.abs(v) >= 1e9) return `${count(v / 1e6)} Mt`
   if (Math.abs(v) >= 1e6) return `${(v / 1e6).toPrecision(3)} Mt`
   if (Math.abs(v) >= 1e3) return `${(v / 1e3).toPrecision(3)} kt`
   return `${count(v)} t`
@@ -231,17 +230,6 @@ export function perCapMeasure(d: CountryData, key: string, per: number, label: s
   }
 }
 
-/** 100 × a / b (e.g. industry GVA as % of GDP). */
-export function shareMeasure(d: CountryData, key: string, den: string, label: string): Measure | null {
-  const m = metricOf(d, key), md = metricOf(d, den)
-  if (!m || !md) return null
-  return {
-    id: `${key}/${den}`, label, fmt: pct, sources: [...m.sources, ...md.sources], vintage: m.vintage,
-    better: 'neutral', ratio: true,
-    calc: (get) => { const b = get(den); const a = get(key); return b > 0 && Number.isFinite(a) ? (100 * a) / b : NaN },
-  }
-}
-
 export type Level = string // 'hex' | 'adm1' | 'adm2' | 'adm3'
 
 export function levelSize(d: CountryData, level: Level) {
@@ -328,11 +316,6 @@ export function medianOf(sorted: Float32Array) {
   return n % 2 ? sorted[(n - 1) >> 1] : (sorted[n / 2 - 1] + sorted[n / 2]) / 2
 }
 
-/** Sum of a metric over a country's land tiles or admin units (for "share of national"). */
-export function nationalTotal(d: CountryData, key: string) {
-  return natAgg(d, key)
-}
-
 // ---------------------------------------------------------------------------------------------
 // Admin helpers & yields per unit
 // ---------------------------------------------------------------------------------------------
@@ -385,10 +368,6 @@ export function yieldSums(d: CountryData, level: string): Record<YieldKey, Float
   }
   cache.set(level, r)
   return r
-}
-
-export function yieldMeasure(y: YieldKey, label: string): Measure {
-  return { id: `yield:${y}`, label, fmt: (v) => count(v), sources: [], vintage: '', better: 'higher', ratio: true, calc: () => NaN }
 }
 
 /** Yield of a place (tile value or unit sum) and the rank pool for it. */

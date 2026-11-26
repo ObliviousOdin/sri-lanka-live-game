@@ -38,6 +38,9 @@ YIELD_BASES = {
 }
 POWER_BONUS = [(100, 1), (1000, 2), (3000, 3)]              # MW in tile -> +Production
 RESEARCH_BONUS = [(1_000, 1), (10_000, 2), (50_000, 3)]      # works in last 5 years -> +Science
+CULTURE_BONUS = {"per_whs": 2, "max_whs": 2, "museums_min": 3, "museums_bonus": 1,
+                 "park_visitors_min": 1_000_000, "park_bonus": 1}
+FAITH_BONUS = {"per_holy_site": 2, "max_holy_sites": 1}
 YIELDS = ["gold", "production", "food", "science", "culture", "faith"]
 
 
@@ -237,12 +240,15 @@ def build_tiles(country: str) -> tuple[pd.DataFrame, dict]:
     parks = pts.get("parks")
     vcol = first_col(parks, "park_visitors", "visitors")
     park_vis = point_sum(parks, vcol, idx) if vcol else pd.Series(0.0, index=idx)
+    cb = CULTURE_BONUS
     Y["culture"] = (log_yield(dens("emp_arts_accommodation"), YIELD_BASES["culture"][1])
-                    + 2 * np.minimum(whs, 2).astype(int) + (museums >= 3).astype(int)
-                    + (park_vis >= 1_000_000).astype(int))
+                    + cb["per_whs"] * np.minimum(whs, cb["max_whs"]).astype(int)
+                    + cb["museums_bonus"] * (museums >= cb["museums_min"]).astype(int)
+                    + cb["park_bonus"] * (park_vis >= cb["park_visitors_min"]).astype(int))
     holy = pts.get("holy_sites")
     holy_n = point_count(holy, idx)
-    Y["faith"] = log_yield(dens("worship_sites"), YIELD_BASES["faith"][1]) + 2 * np.minimum(holy_n, 1).astype(int)
+    Y["faith"] = (log_yield(dens("worship_sites"), YIELD_BASES["faith"][1])
+                  + FAITH_BONUS["per_holy_site"] * np.minimum(holy_n, FAITH_BONUS["max_holy_sites"]).astype(int))
     Y = Y.clip(upper=YIELD_CAP + 4).astype(int)
     sea = H.ring.to_numpy() > 0
     for c in ("science", "culture", "faith"):
@@ -371,6 +377,7 @@ def build_wonders(country: str, pts: dict, tiles: pd.DataFrame, sources_by_domai
                 "h3": r["h3"], "kind": str(r.get("kind", "")), "rule": rule,
                 "value": (float(r[vc]) if vc else None), "unit": unit,
                 "domain": r.get("domain"), "sources": sources_by_domain.get(r.get("domain"), []),
+                "cap": n if n < 99 else None, "candidates": int(len(df)),
             }
             for extra in ("visitors_year", "year", "rd_usd", "primary_fuel", "wikidata", "iata", "inscribed"):
                 if extra in r.index and pd.notna(r[extra]):
@@ -465,6 +472,7 @@ def build_cities(country: str, tiles: pd.DataFrame, H: pd.DataFrame, wonders: li
             "official_gdp_usd": m.get("gdp_usd"), "official_gdp_year": m.get("gdp_year"),
             "admin_ids": m.get("admin_ids"), "wikidata": m.get("wikidata"),
             "size": size, "citizens": cit, "citizen_icons": icons,
+            "employed": float(sub["employed"].sum()) if "employed" in sub else None,
             "yields": {y: int(t[f"y_{y}"].sum()) for y in YIELDS},
             "industries": industries[:6],
             "wonders": [w["name"] for w in wonders if w.get("h3") in ring_set],

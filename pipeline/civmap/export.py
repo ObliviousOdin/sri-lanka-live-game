@@ -8,8 +8,8 @@ from datetime import datetime, timezone
 import numpy as np
 import pandas as pd
 
-from .civ import (DISTRICT_ORDER, DISTRICT_RULES, DISTRICTS, FEATURES, POWER_BONUS, RESEARCH_BONUS,
-                  TERRAIN, YIELD_BASES, YIELD_CAP, YIELDS, load_points)
+from .civ import (CULTURE_BONUS, DISTRICT_ORDER, DISTRICT_RULES, DISTRICTS, FAITH_BONUS, FEATURES, POWER_BONUS,
+                  RESEARCH_BONUS, TERRAIN, YIELD_BASES, YIELD_CAP, YIELDS, load_points)
 from .config import COUNTRIES, INTERIM, WEB_DATA, web_dir
 from .core import load_admin, load_hexes
 from .fetch import manifest
@@ -88,10 +88,14 @@ def export_country(country: str) -> dict:
     R["pop_density"] = np.where(core.land_km2 > 0.5, core["pop"] / core.land_km2.clip(lower=1e-9), np.nan)
     if "gdp_usd" in R:
         R["gdp_per_capita_usd"] = np.where(R["pop"] > 50, R["gdp_usd"] / R["pop"].clip(lower=1), np.nan)
+        g = next((m for m in metrics if m["key"] == "gdp_usd"), {})
+        pm = next((m for m in metrics if m["key"] == "pop"), {})
         derived.append({"key": "gdp_per_capita_usd", "label": "GDP per capita", "unit": "USD", "category": "economy",
-                        "kind": "intensive", "weight": "pop", "better": "higher", "sources": [],
+                        "kind": "intensive", "weight": "pop", "better": "higher",
+                        "sources": list(dict.fromkeys(g.get("sources", []) + pm.get("sources", []))),
                         "description": "GDP allocated to the tile divided by its population.",
-                        "method": "gdp_usd / pop (tiles with ≥ 50 residents)", "domain": "derived", "vintage": ""})
+                        "method": "gdp_usd / pop (tiles with ≥ 50 residents). GDP: " + g.get("method", ""),
+                        "domain": "derived", "vintage": g.get("vintage", "")})
     if "employed" in R:
         for k in [c for c in R.columns if c.startswith("cit_")]:
             R[k + "_pct"] = np.where(R["employed"] > 0, 100 * R[k] / R["employed"], np.nan)
@@ -162,6 +166,15 @@ def export_country(country: str) -> dict:
     }
     for lvl in levels:
         hexes[lvl] = [adm_index[lvl].get(str(a), -1) for a in core[lvl]]
+    # per-tile yield bonus inputs (sparse: tile indices + values) so the app can explain yields exactly
+    bonus = {}
+    for k in ("works_5y", "capacity_mw", "whs", "museums", "holy_sites", "park_visitors", "military_sites",
+              "port_cargo_t", "airport_pax"):
+        if k in tiles.columns:
+            v = tiles[k].to_numpy(float)
+            nz = np.nonzero(np.nan_to_num(v) > 0)[0]
+            bonus[k] = {"i": nz.tolist(), "v": [_round(float(x)) for x in v[nz]]}
+    hexes["bonus"] = bonus
     dump(out / "hexes.json", hexes)
 
     # points
@@ -246,7 +259,8 @@ def export_global() -> dict:
                        "admin_levels": cfg["admin_levels"]} for cc, cfg in COUNTRIES.items()],
         "yields": YIELDS,
         "yield_scale": {"cap": YIELD_CAP, "bases": {k: {"metric": v[0], "base": v[1], "unit": v[2]} for k, v in YIELD_BASES.items()},
-                        "power_bonus": POWER_BONUS, "research_bonus": RESEARCH_BONUS},
+                        "power_bonus": POWER_BONUS, "research_bonus": RESEARCH_BONUS,
+                        "culture_bonus": CULTURE_BONUS, "faith_bonus": FAITH_BONUS},
         "terrain": TERRAIN, "features": FEATURES,
         "districts": [{"code": c, "label": DISTRICTS.get(c, ""), "rule": DISTRICT_RULES.get(c, "")} for c in [""] + DISTRICT_ORDER],
         "terrain_codes": list(TERRAIN), "feature_codes": list(FEATURES),

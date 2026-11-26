@@ -1,5 +1,5 @@
 {
- "built_at": "2026-11-26T23:14:06+00:00",
+ "built_at": "2026-11-26T23:25:31+00:00",
  "countries": [
   {
    "id": "lka",
@@ -95,7 +95,19 @@
     50000,
     3
    ]
-  ]
+  ],
+  "culture_bonus": {
+   "per_whs": 2,
+   "max_whs": 2,
+   "museums_min": 3,
+   "museums_bonus": 1,
+   "park_visitors_min": 1000000,
+   "park_bonus": 1
+  },
+  "faith_bonus": {
+   "per_holy_site": 2,
+   "max_holy_sites": 1
+  }
  },
  "terrain": {
   "ocean": "Ocean",

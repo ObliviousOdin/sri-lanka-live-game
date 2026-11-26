@@ -160,10 +160,10 @@ export function yearsText(home: CountryId, ya: number | null, rival: CountryId, 
   return `${SHORT[home]} ${ya ?? 'n/a'}, ${SHORT[rival]} ${yb ?? 'n/a'}`
 }
 
-function statusOf(better: 'higher' | 'lower' | 'neutral', va: number, vb: number): Comment['status'] {
+function statusOf(better: 'higher' | 'lower' | 'neutral', va: number, vb: number, fmt?: Fmt): Comment['status'] {
   if (better === 'neutral') return undefined
   const m = Math.max(Math.abs(va), Math.abs(vb))
-  if (!m || Math.abs(va - vb) / m < 0.03) return 'even'
+  if (fmt === 'years' ? Math.abs(va - vb) < 0.3 : !m || Math.abs(va - vb) / m < 0.03) return 'even'
   return (va > vb) === (better === 'higher') ? 'ahead' : 'behind'
 }
 
@@ -190,9 +190,11 @@ export function compareSentence(o: { say?: string; short: string; fmt: Fmt; unit
   const possV: Seg[] = [poss(small) + ' ', fig(F(vSmall), small)]
   if (!(vBig > 0 && vSmall > 0)) return [...head, ', against ', ...possV]
   const k = vBig / vSmall
+  if (o.fmt === 'years') {
+    return vBig - vSmall < 0.3 ? [...head, ', level with ', ...possV] : [...head, `, ${(vBig - vSmall).toFixed(1)} years more than `, ...possV]
+  }
   if ((vBig - vSmall) / vBig < 0.03) return [...head, ', level with ', ...possV]
   if (o.fmt === 'pct' && k < 2.5) return [...head, `, ${(vBig - vSmall).toFixed(1)} points above `, ...possV]
-  if (o.fmt === 'years') return [...head, `, ${(vBig - vSmall).toFixed(1)} years more than `, ...possV]
   if (k < 2) return [...head, `, ${Math.round((k - 1) * 100)}% higher than `, ...possV]
   return [...head, ` — about ${times(k)} `, ...possV]
 }
@@ -256,7 +258,7 @@ export function rowComment(row: NationalIndicator, ctx: NatCtx): Comment | null 
   return {
     id: spec?.key ?? row.code, icon: o.icon, segs, sources,
     meta: [r.name ?? row.label, row.code, org && org.length < 70 ? `via ${org}` : ''].filter(Boolean).join(' · '),
-    status: statusOf(better, a.v, b.v),
+    status: statusOf(better, a.v, b.v, o.fmt),
     weight: spec?.headline && sameEra ? k : 0,
   }
 }

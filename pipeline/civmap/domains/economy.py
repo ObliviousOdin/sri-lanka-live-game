@@ -93,11 +93,13 @@ SOURCES: list[Source] = [
            "Statistical Abstract 2025, Table 10.2: Gross Domestic Product by major economic activity at "
            "current market prices 2019-2024",
            "Department of Census and Statistics, Sri Lanka", URL["abstract"], "open (DCS dissemination policy)",
-           "2024 (provisional)", ["lka"],
-           "Rs. million, 2015 base. 2024 column: Agriculture 2,481,487; Manufacturing, mining & other "
+           "2024", ["lka"],
+           "Rs. million, 2015 base. 2024 column (last column; the PDF flags 2020-22 and 2024 with '*' = "
+           "revised and 2023 with (1) = provisional): Agriculture 2,481,487; Manufacturing, mining & other "
            "industries 5,988,981; Construction 1,643,766; seven service activities summing to 17,182,560; "
            "GVA 27,296,792; taxes on products 2,641,646; subsidies 39,873; GDP 29,898,564. Values are "
-           "transcribed in the module and verified against the cached PDF text at build time."),
+           "transcribed in the module and verified at build time to be the last (2024) value of a row of "
+           "the cached PDF text. The World Bank's 2024 NY.GDP.MKTP.CD is ~0.7 % higher (probably a later revision; see report.json)."),
     Source("cbsl_pgdp2024_press",
            "Provincial Gross Domestic Product 2024 (Central Bank of Sri Lanka statement, 24 Dec 2025), "
            "as reported by EconomyNext: \"Sri Lanka's regional economic disparities narrow: central bank\"",
@@ -136,7 +138,8 @@ SOURCES: list[Source] = [
            "https://data.humdata.org/dataset/relative-wealth-index", "CC BY-NC 4.0 (Data for Good)", "2021",
            ["lka"],
            "Predicted relative standard of living for 2.4 km Bing tiles (zoom 14), relative within "
-           "the country (mean ~0, unitless). 8,336 tiles for Sri Lanka."),
+           "the country (unitless; not comparable across countries). 8,336 populated tiles for Sri Lanka "
+           "(uninhabited areas such as Yala and Wilpattu national parks have no tile). Released April 2021."),
     Source("worldbank_wdi", "World Development Indicators", "World Bank",
            "https://data.worldbank.org", "CC BY 4.0", "2019-2024", ["lka", "usa"],
            "PA.NUS.FCRF (official LKR per USD, period average) for currency conversion; "
@@ -160,12 +163,13 @@ _US_GDP_METHOD = (
     "iterative proportional fitting within each state, seeded with ACS {acs} 5-year C24030 employment "
     "of the matching industry (+1). Margins: every disclosed county aggregate (lines 2, 91, 92, 87, 12, "
     "50, 59, 68, 75, 88, 89, 90, minus its disclosed leaves) and every state leaf total (state value "
-    "minus disclosed counties). County private totals are reproduced exactly and state industry totals "
-    "to within 0.01 %; national sector totals equal the sum of BEA state rows. BEA combination areas "
+    "minus disclosed counties). Disclosed county aggregates are reproduced to within BEA's own rounding "
+    "(a few $ thousand) and state industry totals to within 0.02 % (see report.json); national sector "
+    "totals equal the sum of BEA state rows. BEA combination areas "
     "(23 Virginia county + independent-city combinations, Maui + Kalawao) are split to Census 2023 "
-    "counties pro rata to 2023 population. Totals are the sum of the 50 states + DC (BEA's US total "
-    "also includes overseas federal activity, ~0.5 %). Allocation to hexes: population-weighted within "
-    "each county."
+    "counties pro rata to 2023 population (Census PEP vintage 2023). Totals are the sum of the 50 states "
+    "+ DC; BEA's US row also includes overseas federal government activity (the whole ~0.55 % gap is in "
+    "line 83, government). Allocation to hexes: population-weighted within each county."
 ).format(y=US_YEAR, acs=ACS_YEAR)
 
 _LKA_GDP_METHOD = (
@@ -189,8 +193,8 @@ _LKA_GDP_METHOD = (
 
 
 def _gdp_metric(key, label, desc, method_us, method_lka, weight="pop", countries=("lka", "usa"), extra_src=()):
-    srcs = ["bea_cagdp2", "census_acs5_2024", "dcs_abstract2025", "cbsl_pgdp2024_press", "dose_v29",
-            "dcs_lfs2024", "dcs_hies2019", "worldbank_wdi", *extra_src]
+    srcs = ["bea_cagdp2", "census_acs5_2024", "census_pep_2023", "dcs_abstract2025", "cbsl_pgdp2024_press",
+            "dose_v29", "dcs_lfs2024", "dcs_hies2019", "worldbank_wdi", *extra_src]
     method = " | ".join(m for m in (
         ("USA: " + method_us) if "usa" in countries else "",
         ("Sri Lanka: " + method_lka) if "lka" in countries else "") if m)
@@ -221,13 +225,17 @@ METRICS: list[Metric] = [
                 "scientific & technical services (NAICS 52, 53, 54).",
                 _US_GDP_METHOD, "", countries=("usa",)),
     Metric("gdp_pc_usd", "GDP per capita", "USD/person", "economy", "intensive", "pop", "admin_adm2",
-           ["bea_cagdp2", "census_pep_2023", "dcs_abstract2025", "cbsl_pgdp2024_press", "dose_v29",
-            "dcs_lfs2024", "unfpa_codps_lka", "worldbank_wdi"],
-           f"GDP {US_YEAR}/{LKA_YEAR}; population 2023",
+           ["bea_cagdp2", "census_acs5_2024", "census_pep_2023", "dcs_abstract2025", "cbsl_pgdp2024_press",
+            "dose_v29", "dcs_lfs2024", "dcs_hies2019", "unfpa_codps_lka", "worldbank_wdi"],
+           f"GDP {US_YEAR if US_YEAR == LKA_YEAR else f'{US_YEAR}/{LKA_YEAR}'}; population 2023",
            "GDP per resident at current prices.",
            "gdp_usd of the county/district divided by its 2023 population used by the core grid "
-           "(US Census PEP vintage 2023; Sri Lanka DCS mid-2023 estimates via COD-PS). Workplace-based "
-           "GDP over resident population: commuter hubs (e.g. Colombo, Manhattan, DC) are inflated.",
+           "(US Census PEP vintage 2023; Sri Lanka DCS mid-2023 estimates via COD-PS). USA: BEA county "
+           "GDP is workplace-based, so commuter and resource hubs (Manhattan, DC, oil counties such as "
+           "Loving County TX with 43 residents) are strongly inflated. Sri Lanka: provincial GDP is "
+           "workplace-based, but the district split uses LFS employment by place of residence, so "
+           "commuting into Colombo district is NOT captured (Colombo likely understated, Gampaha/Kalutara "
+           "overstated).",
            "higher"),
     Metric("hh_income_usd", "Median household income", "USD/year", "income", "intensive", "pop", "admin_adm2",
            ["census_acs5_2024", "dcs_hies2019", "worldbank_wdi"],
@@ -248,9 +256,10 @@ METRICS: list[Metric] = [
            "income-based official poverty thresholds, by family size/composition; universe = people for "
            "whom poverty status is determined). | Sri Lanka: DCS Poverty Indicators 2019 Table 04 "
            "headcount index under the UPDATED official poverty line (consumption-based, Rs 6,966 per "
-           "person per month in 2019, cost-of-basic-needs at 2,030 kcal). The two national lines are "
-           "very different absolute standards (the US threshold is roughly 10x higher in dollars), so "
-           "rates are comparable only within each country.",
+           "person per month in 2019 = about US$39 at the 2019 PA.NUS.FCRF rate; cost-of-basic-needs "
+           "line anchored at 2,030 kcal per person per day). The two national lines are very different "
+           "absolute standards (the Sri Lankan line is far below the US thresholds), so rates are "
+           "comparable only within each country.",
            "lower"),
     Metric("poor_persons", "People in poverty", "persons", "income", "extensive", "pop", "admin_adm2",
            ["census_acs5_2024", "dcs_poverty2019"],
@@ -262,10 +271,12 @@ METRICS: list[Metric] = [
     Metric("rwi", "Relative Wealth Index", "index", "income", "intensive", "pop", "hex",
            ["meta_rwi"], "2021",
            "Meta Relative Wealth Index: predicted asset-based wealth relative to the rest of Sri Lanka "
-           "(0 ~ national average; higher = wealthier).",
-           "Mean of the RWI values of the 2.4 km Bing quadkey tiles whose centre falls in each H3 res-6 "
-           "land cell (tiles centred in a sea cell are snapped to the adjacent land cell). Land cells "
-           "with no tile take the mean of the original cell values within 1 ring, then 2 rings. "
+           "(unitless relative scale; higher = wealthier; tile statistics in report.json).",
+           "Unweighted mean of the RWI values of the 2.4 km Bing quadkey tiles whose centre falls in each "
+           "H3 res-6 land cell (tiles centred in a sea cell are snapped to the nearest adjacent land cell). "
+           "Land cells with no tile take the mean of the original cell values within 1 ring, then 2 rings; "
+           "cells still without a value (uninhabited parts of Yala and Wilpattu national parks, where Meta "
+           "publishes no tile) stay empty. "
            "No US equivalent (the RWI covers low- and middle-income countries only).",
            "higher", ["lka"]),
 ]
@@ -374,11 +385,15 @@ def _lka_national() -> dict[str, float]:
     p = fetch(URL["abstract"], "dcs_abstract2025", "lka/economy", "abstract2025_10.2.pdf")
     with pdfplumber.open(p) as pdf:
         text = "\n".join(pg.extract_text() or "" for pg in pdf.pages)
+    # rows end with the six year columns 2019 ... 2024; collect the last (2024) value of each row
+    num = r"(?:\d{1,3}(?:,\d{3})+|\d+)"
+    rx = re.compile(rf"(?:{num}\s+){{5}}({num})\s*$")
+    last_col = {_num(m.group(1)) for m in (rx.search(l.strip()) for l in text.splitlines()) if m}
     for key, items in DCS_GDP_2024.items():
         vals = items if isinstance(items, list) else [("", items)]
         for _, v in vals:
-            if f"{v:,}" not in text:
-                raise ValueError(f"DCS Table 10.2: value {v:,} ({key}) not found in the PDF")
+            if float(v) not in last_col:
+                raise ValueError(f"DCS Table 10.2: value {v:,} ({key}) is not a 2024-column value of the PDF")
     nat = {k: float(sum(v for _, v in DCS_GDP_2024[k])) for k in ("agri", "industry", "services")}
     nat["tls"] = float(DCS_GDP_2024["taxes"][0][1] - DCS_GDP_2024["subsidies"][0][1])
     gva = sum(nat[s] for s in SECTORS)
@@ -391,9 +406,11 @@ def _lka_quoted_shares() -> dict[tuple[str, str], float]:
     p = fetch(URL["pgdp_press"], "cbsl_pgdp2024_press", "lka/economy", "economynext_pgdp2024.html",
               headers={"User-Agent": "Mozilla/5.0"})
     text = _html_text(p)
-    for _, _, _, phrase in PGDP_2024_QUOTED:
+    for _, _, v, phrase in PGDP_2024_QUOTED:
         if phrase not in text:
             raise ValueError(f"PGDP 2024 article: phrase not found: {phrase!r}")
+        if f"{v:.1f} per" not in phrase:
+            raise ValueError(f"PGDP 2024 article: share {v} not stated in phrase {phrase!r}")
     if "29,899 billion" not in text:
         raise ValueError("PGDP 2024 article: national GDP figure not found")
     return {(s, pc): v / 100.0 for s, pc, v, _ in PGDP_2024_QUOTED}
@@ -482,12 +499,18 @@ def _lka_hies() -> pd.DataFrame:
 def _lka_poverty() -> pd.DataFrame:
     p = fetch(URL["poverty"], "dcs_poverty2019", "lka/economy")
     t = _pdf_text(p, "Table 04: Poverty headcount index")
-    t = t[t.index("\nDistrict"):]  # district block only (province names never collide, but be safe)
     rx = re.compile(r"^([A-Za-z][A-Za-z ]+?)\s+([\d.]+)\s+([\d,]+)\s+([\d.]+)\s+([\d.]+)\s+([\d,]+)\s+([\d.]+)\s*$")
+    nat = [[_num(m.group(i)) for i in (2, 3, 5, 6)]
+           for m in (rx.match(l.strip()) for l in t[:t.index("\nSector")].splitlines()) if m
+           and _key(m.group(1)) == "srilanka"]
+    if len(nat) != 1:
+        raise ValueError("Poverty Table 04: national (Sri Lanka) row not found")
+    t = t[t.index("\nDistrict"):]  # district block only (province names never collide, but be safe)
     rows = [(m.group(1), [_num(m.group(i)) for i in (2, 3, 5, 6)])
             for m in (rx.match(l.strip()) for l in t.splitlines()) if m]
     d = _match_rows(rows, "lka", "adm2", "Poverty Table 04")
     d.columns = ["hci_old", "poor_old", "hci_upl", "poor_upl"]
+    d.attrs["national"] = dict(zip(d.columns, nat[0]))
     return d
 
 
@@ -501,8 +524,8 @@ def _lka_rwi() -> pd.DataFrame:
     for la, lo in zip(d.latitude, d.longitude):
         c = h3.latlng_to_cell(float(la), float(lo), res)
         if c not in land:
-            nb = sorted(n for n in h3.grid_ring(c, 1) if n in land)
-            c = nb[0] if nb else None
+            nb = [n for n in h3.grid_ring(c, 1) if n in land]
+            c = min(nb, key=lambda n: h3.great_circle_distance((la, lo), h3.cell_to_latlng(n))) if nb else None
         cells.append(c)
     d["h3"] = cells
     dropped = int(d.h3.isna().sum())
@@ -515,9 +538,14 @@ def _lka_rwi() -> pd.DataFrame:
             vals = [orig[n] for n in h3.grid_disk(c, k) if n in orig.index and np.isfinite(orig[n])]
             if vals:
                 out[c] = float(np.mean(vals))
+    stats = {"tiles": int(len(d)), "tiles_off_grid": dropped, "tile_mean": round(float(d.rwi.mean()), 4),
+             "tile_median": round(float(d.rwi.median()), 4), "tile_min": float(d.rwi.min()),
+             "tile_max": float(d.rwi.max()), "cells_with_tiles": int(len(m)),
+             "cells_filled_from_neighbours": int(out.notna().sum() - len(m)),
+             "cells_empty": sorted(out.index[out.isna()])}
     print(f"  rwi: {len(d)} tiles, {dropped} off-grid, {len(m)} cells with tiles, "
-          f"{int(out.notna().sum() - len(m))} filled from neighbours, {int(out.isna().sum())} empty")
-    return pd.DataFrame({"h3": out.index, "rwi": out.round(4).values})
+          f"{stats['cells_filled_from_neighbours']} filled from neighbours, {int(out.isna().sum())} empty")
+    return pd.DataFrame({"h3": out.index, "rwi": out.round(4).values}), stats
 
 
 def build_lka() -> dict:
@@ -561,8 +589,10 @@ def build_lka() -> dict:
     out["poor_persons"] = pov.poor_upl.reindex(dist.index).values
     util.write_admin(cc, DOMAIN, "adm2", out)
 
-    rwi = _lka_rwi()
+    rwi, rwi_stats = _lka_rwi()
     util.write_hex(cc, DOMAIN, rwi)
+    if abs(out.poor_persons.sum() - pov.attrs["national"]["poor_upl"]) > 1000:
+        raise ValueError("district poor persons do not add up to the published national total")
 
     wb_gdp, wb_year = util.wb_value("NY.GDP.MKTP.CD", "LKA", LKA_YEAR)
     total = float(out.gdp_usd.sum())
@@ -571,7 +601,9 @@ def build_lka() -> dict:
         "gdp_usd_total": total, "worldbank_gdp_usd": wb_gdp, "worldbank_year": wb_year,
         "ratio_to_worldbank": total / wb_gdp if wb_gdp else None,
         "poor_persons_total": float(out.poor_persons.sum()),
-        "dcs_poor_persons_2019_published": 3_042_300,
+        "dcs_national_2019_published": pov.attrs["national"],
+        "worldbank_poverty_headcount_nahc": util.wb_value("SI.POV.NAHC", "LKA", HIES_YEAR),
+        "rwi_tiles": rwi_stats,
         "provinces": check,
         "colombo_share_of_gdp_pct": float(100 * out.set_index("admin_id").gdp_usd["LK11"] / total),
     }
@@ -779,13 +811,23 @@ def build_usa() -> dict:
     V, S, names = _bea_raw()
     combos = _combo_map(V.index, names)
     prox = _acs_proxy(V.index, combos)
+    V0 = V.copy()
     fill = _fill_bea(V, S, prox)
-    # state consistency after filling
+    # state consistency after filling (every leaf and aggregate vs the BEA state row)
+    lines = [1] + LEAVES + list(AGGREGATES)
     st_sum = V.groupby(V.index.str[:2]).sum()
     S2 = S.copy()
     S2.index = S2.index.str[:2]
-    rel = ((st_sum[[1, 3, 12]] - S2[[1, 3, 12]]).abs() / S2[[1, 3, 12]].clip(lower=1)).max()
-    print(f"  BEA {US_YEAR}: {fill}; max state deviation lines 1/3/12: {rel.round(5).to_dict()}")
+    rel = ((st_sum[lines] - S2[lines]).abs() / S2[lines].abs().clip(lower=1)).max()
+    # disclosed county aggregates vs the sum of their (partly estimated) leaves, $ thousands
+    agg_dev = {agg: float((V.loc[V0[agg].notna(), leaves].sum(axis=1) - V0.loc[V0[agg].notna(), agg]).abs().max())
+               for agg, leaves in AGGREGATES.items()}
+    fill["max_state_rel_deviation_pct"] = round(100 * float(rel.max()), 4)
+    fill["max_state_rel_deviation_line"] = int(rel.idxmax())
+    fill["max_county_aggregate_deviation_kusd"] = round(max(agg_dev.values()), 1)
+    if rel.max() > 2e-4:
+        raise RuntimeError(f"BEA fill: state totals off by {100 * rel.max():.3f} % (line {rel.idxmax()})")
+    print(f"  BEA {US_YEAR}: {fill}")
 
     u = pd.DataFrame(index=V.index)
     k = 1000.0

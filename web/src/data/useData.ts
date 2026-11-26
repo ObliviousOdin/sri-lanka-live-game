@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { computeLens, LENS_BY_ID, type LensResult } from '../lenses'
 import { useStore } from '../store'
 import type { CountryData, CountryId, IndexJson, NationalIndicator, Source } from '../types'
-import { loadCountry, loadIndex, loadNational, loadSources } from './load'
+import { loadCountry, loadIndex, loadMatrix, loadNational, loadSources } from './load'
 
 export interface AppData {
   index: IndexJson | null
@@ -20,7 +20,11 @@ export function useAppData(): AppData {
       .catch((e) => alive && setState((s) => ({ ...s, error: String(e) })))
     ;(['lka', 'usa'] as CountryId[]).forEach((id) =>
       loadCountry(id)
-        .then((d) => alive && setState((s) => ({ ...s, countries: { ...s.countries, [id]: d } })))
+        .then((d) => {
+          if (!alive) return
+          setState((s) => ({ ...s, countries: { ...s.countries, [id]: d } }))
+          return loadMatrix(d).then((full) => alive && setState((s) => ({ ...s, countries: { ...s.countries, [id]: full } })))
+        })
         .catch((e) => alive && setState((s) => ({ ...s, error: `${id}: ${e}` }))),
     )
     return () => { alive = false }

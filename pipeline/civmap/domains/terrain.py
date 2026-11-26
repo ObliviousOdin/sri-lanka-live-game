@@ -5,16 +5,23 @@
 Output (data/interim/<country>/terrain/hex.csv), one row per hex of civmap.core.load_hexes()
 (land hexes and the water rings):
 
-* Elevation (Copernicus DEM GLO-90, AWS open-data COGs).  Sri Lanka: full 3 arc-second tiles
-  (~90 m).  United States: the COG's internal 4x overview (12 arc-sec, ~370 m N-S), read
-  remotely through GDAL /vsicurl/ and cached per tile as .npz.  Every DEM pixel is assigned
-  to the hex whose polygon contains its centre (rasterised H3 boundaries), so statistics use
-  all pixels, not a point sample.  Ocean is 0 m in the DEM and tiles exist only over land;
-  elevation statistics are computed over land pixels (DEM != 0).
+* Elevation (Copernicus DEM GLO-90, AWS open-data COGs): full native 3 arc-second (~90 m) tiles
+  for BOTH countries, so every elevation key (in particular slope, which roughly halves when
+  measured on a 4x coarser grid) means the same thing in Sri Lanka and the US.  Every DEM
+  pixel is assigned to the hex whose polygon contains its centre (rasterised H3 boundaries),
+  so statistics use all pixels, not a point sample.  Ocean is 0 m in the DEM and tiles exist
+  only over land; elevation statistics are computed over pixels with DEM != 0 (land and
+  inland-water surfaces).  Mean / min / max / slope are streamed tile by tile; the relief
+  percentiles come from a per-hex 0.1 m histogram (a second pass), so the ~1.4 billion US
+  pixels never have to be held in memory at once.
 * Land cover (ESA WorldCover 10 m 2021 v200).  Sri Lanka: every native 10 m pixel (whole tiles
-  downloaded, processed in windows).  United States: the COG's 8x internal overview (~80 m).
-  The overviews are MODE-resampled (tested against 10 m windows: dominant classes gain ~1
-  percentage point at 8x but 4-11 at 32x), which is why 8x was chosen over 32x/64x.
+  downloaded, processed in windows).  United States: the COG's 4x internal overview (~40 m).
+  The overviews are MODE-resampled (checked: 99.6-99.98% of 8x overview pixels equal the mode
+  of their 8x8 block of 10 m pixels).  On 60 random ~20 x 17 km US land windows the 4x
+  overview's class shares differed from the native 10 m shares by -3.0% relative for built-up
+  (mean |error| 0.12 percentage points, max 2.0), -5.7% for shrubland and within +-1% for the
+  other classes; the 8x overview (used earlier) was twice as biased (built-up -7.6%, max 4.4
+  points; Manhattan / Silicon Valley hexes +4 / +7 points built-up).
   Fractions are over the whole hex; ocean outside the tiles / no-data = water.
 * Allocation weights cropland_km2 / tree_km2 / built_km2 / grass_km2 = class share of the
   hex's *in-country* pixels x core land_km2, so Canadian / Mexican land in border hexes does
@@ -75,13 +82,15 @@ DEM_BASE = "https://copernicus-dem-90m.s3.amazonaws.com"
 WC_BASE = "https://esa-worldcover.s3.eu-central-1.amazonaws.com/v200/2021"
 WCLIM_BASE = "https://geodata.ucdavis.edu/climate/worldclim/2_1/base"
 
-# Per-country raster resolution choices (see module docstring).
+# Per-country raster resolution choices (see module docstring).  The DEM is always read at its
+# native 3 arc-second resolution (both countries) so the elevation keys are comparable.
 CFG = {
-    "lka": {"dem_factor": 1, "wc_factor": 1, "clim": "2.5m", "clim_child": 2},
-    "usa": {"dem_factor": 4, "wc_factor": 8, "clim": "2.5m", "clim_child": 2},
+    "lka": {"wc_factor": 1, "clim": "2.5m", "clim_child": 2},
+    "usa": {"wc_factor": 4, "clim": "2.5m", "clim_child": 2},
 }
 THREADS = 8
-WC_CHUNK = 4000  # window size for full-resolution WorldCover processing
+WC_CHUNK = 4000  # window size for WorldCover processing (10 m windows / overview blocks)
+DEM_BIN = 0.1    # m, histogram bin width for the per-hex relief percentiles
 
 # ESA WorldCover classes -> metric keys.  0 (no data: open ocean inside a tile) counts as water.
 WC_CLASSES = [
@@ -119,17 +128,17 @@ SOURCES = [
            "Copernicus DEM 2021 release", ["lka", "usa"],
            "1x1 degree tiles s3://copernicus-dem-90m/Copernicus_DSM_COG_30_<N|S>yy_00_<E|W>xxx_00_DEM/ "
            "(tile list: tileList.txt). Digital surface model (includes canopy and buildings), heights "
-           "above EGM2008 geoid, ocean = 0 m; tiles exist only where there is land. Sri Lanka: whole "
-           "3 arc-second tiles downloaded. USA: the 4x internal overview (12 arc-sec) read with GDAL "
-           "/vsicurl/ range requests and cached as .npz under data/cache/terrain/copdem90_f4/. The AWS COGs "
-           "were built with average downsampling (readme: https://copernicus-dem-30m.s3.amazonaws.com/readme.html)."),
+           "above EGM2008 geoid, ocean = 0 m; tiles exist only where there is land (readme: "
+           "https://copernicus-dem-30m.s3.amazonaws.com/readme.html). Both countries: whole native "
+           "3 arc-second tiles downloaded to data/cache/terrain/copdem90/ (12 tiles for Sri Lanka, "
+           "1,445 for the US grid incl. border/sea-ring hexes)."),
     Source("esa_worldcover_2021", "ESA WorldCover 10 m 2021 v200 (land cover map)",
            "European Space Agency, ESA WorldCover consortium (Zanaga et al. 2022)",
            "https://esa-worldcover.org/en", "CC BY 4.0", "2021", ["lka", "usa"],
            "3x3 degree COG tiles s3://esa-worldcover/v200/2021/map/ESA_WorldCover_10m_2021_v200_<tile>_Map.tif "
            "(tile grid esa_worldcover_grid.geojson). Sri Lanka: whole 10 m tiles downloaded "
-           "(data/cache/terrain/worldcover_10m/). USA: the 8x internal overview (~80 m, mode-resampled) "
-           "read with GDAL /vsicurl/ and cached as .npz under data/cache/terrain/worldcover_f8/. "
+           "(data/cache/terrain/worldcover_10m/). USA: the 4x internal overview (~40 m, mode-resampled) "
+           "read with GDAL /vsicurl/ and cached as .npz under data/cache/terrain/worldcover_f4/. "
            "11 classes (10 tree ... 100 moss & lichen); 0 = no data (open sea)."),
     Source("worldclim_21", "WorldClim version 2.1 bioclimatic variables (1970-2000 averages)",
            "WorldClim (Fick, S.E. & R.J. Hijmans, 2017, Int. J. Climatology 37:4302-4315)",
@@ -152,30 +161,35 @@ _CLIM_SRC = ["worldclim_21", "uber_h3"]
 
 _DEM_METHOD = (
     "Copernicus GLO-90 DSM pixels assigned to the H3 hex whose boundary contains the pixel centre "
-    "(H3 polygons rasterised on each DEM tile grid). Sri Lanka: native 3 arc-sec (~90 m) tiles; USA: "
-    "the COG's 4x internal overview (12 arc-sec N-S, ~370 m; coarser E-W spacing north of 50N follows "
-    "the GLO tiling; average-downsampled, so peaks are smoothed), read with GDAL /vsicurl/. "
-    "Statistics use land pixels only (DEM != 0; ocean is "
-    "0 m and absent tiles are sea); hexes without land pixels get 0 m and 0 deg. Means are weighted "
-    "by pixel area. DSM heights include canopy/buildings, relative to the EGM2008 geoid. Border "
-    "hexes are described as whole tiles (foreign land inside a US border hex is included)."
+    "(H3 polygons rasterised on each DEM tile grid). Both countries use the native 3 arc-sec tiles "
+    "(~90 m N-S; E-W spacing widens north of 50N following the GLO tiling: 4.5 arc-sec at 50-60N, "
+    "6 at 60-70N, 9 at 70-80N), so values are comparable between Sri Lanka and the US. "
+    "Statistics use pixels with DEM != 0 (land and inland-water surfaces, which the DEM flattens; "
+    "ocean is 0 m and absent tiles are sea); hexes without such pixels get 0 m and 0 deg. Means "
+    "are weighted by pixel area. DSM heights include canopy/buildings, relative to the EGM2008 "
+    "geoid; 90 m pixels smooth sharp summits, so hex maxima sit somewhat below surveyed peak heights. "
+    "Border hexes are described as whole hexes (foreign land inside a US border hex is included)."
 )
 _SLOPE_METHOD = (
-    " Slope = atan(|grad z|) from central differences (numpy.gradient) on the sampled DEM grid with "
-    "metric pixel spacing (dx = deg x 111.32 km x cos(lat), dy = deg x 110.57 km), one-sided at tile "
-    "edges, averaged over the hex's land pixels. Approximate: on the ~370 m US grid slopes are "
-    "systematically lower than on 90 m (LKA) or 30 m DEMs, so compare slopes within a country."
+    " Slope = atan(|grad z|) from central differences (numpy.gradient) on the native 90 m DEM grid "
+    "with metric pixel spacing (dx = deg x 111.32 km x cos(lat), dy = deg x 110.57 km), one-sided at "
+    "tile edges, averaged (pixel-area weighted) over the hex's DEM != 0 pixels. The same grid is used "
+    "in both countries because slope is strongly resolution dependent (on a 4x coarser, "
+    "~370 m grid the Sri Lankan hex slopes are ~0.57x the 90 m values); 30 m or lidar DEMs give "
+    "steeper values still."
 )
 _LC_METHOD = (
     "Share of the hex's pixels in WorldCover class {code} ({name}). WorldCover pixels ({res}) "
     "are assigned to the hex containing their centre (rasterised H3 "
     "polygons); fractions are over the whole hex area, so the 11 classes sum to 1. Open ocean "
     "(no-data 0 inside tiles, or no tile at all) is counted as water (class 80). Border hexes are "
-    "described as whole tiles (foreign land included); the *_km2 weights are in-country only."
+    "described as whole hexes (foreign land included); the *_km2 weights are in-country only."
 )
-_RES_TXT = ("Sri Lanka: all native 10 m pixels; USA: the COG's 8x internal overview, 0.00067 deg ~ 80 m, "
-            "which GDAL built with mode resampling, so locally dominant classes are over-represented by "
-            "~1 percentage point and scattered minority classes such as built-up slightly under-represented")
+_RES_TXT = ("Sri Lanka: all native 10 m pixels; USA: the COG's 4x internal overview, 1/3000 deg ~ 40 m, "
+            "which was built with mode resampling, so scattered minority classes are slightly "
+            "under-represented: against native 10 m pixels on 60 random ~20 x 17 km US land windows, "
+            "built-up was -3.0% relative (mean |error| 0.12 percentage points, max 2.0), shrubland "
+            "-5.7%, all other classes within +-1%")
 _W_METHOD = (
     "{what} area (km2) = share of the hex's in-country WorldCover pixels (centre inside the "
     "COD-AB / Census cartographic boundary union) in {cls} x core land_km2 of the hex (WorldPop "
@@ -194,20 +208,22 @@ _CLIM_METHOD = (
 
 METRICS = [
     Metric("elev_mean_m", "Mean elevation", "m", "elevation", "intensive", "land", "hex", _ELEV_SRC,
-           "2021 release", "Mean height of the land surface in the hex (DSM, metres above EGM2008 geoid).",
-           _DEM_METHOD, "neutral"),
+           "2021 release", "Mean height of the land (and inland-water) surface in the hex (DSM, metres "
+           "above EGM2008 geoid).", _DEM_METHOD, "neutral"),
     Metric("elev_min_m", "Minimum elevation", "m", "elevation", "intensive", "land", "hex", _ELEV_SRC,
            "2021 release", "Lowest land pixel in the hex.", _DEM_METHOD, "neutral"),
     Metric("elev_max_m", "Maximum elevation", "m", "elevation", "intensive", "land", "hex", _ELEV_SRC,
-           "2021 release", "Highest land pixel in the hex (peaks are smoothed by the pixel size: ~90 m "
-           "LKA, ~370 m USA).", _DEM_METHOD, "neutral"),
+           "2021 release", "Highest land pixel in the hex (sharp peaks are smoothed by the ~90 m pixel "
+           "size in both countries).", _DEM_METHOD, "neutral"),
     Metric("relief_m", "Local relief", "m", "elevation", "intensive", "land", "hex", _ELEV_SRC,
            "2021 release", "Robust elevation range inside the hex: 95th minus 5th percentile of land pixels "
            "(drives Hills / Mountains terrain).",
-           _DEM_METHOD + " Percentiles are nearest-rank over the hex's land pixels (unweighted).", "neutral"),
-    Metric("slope_mean_deg", "Mean slope", "deg", "elevation", "intensive", "land", "hex", _ELEV_SRC,
-           "2021 release", "Average terrain slope of land pixels in the hex.", _DEM_METHOD + _SLOPE_METHOD,
+           _DEM_METHOD + " Percentiles are the lower order statistics at rank floor(q x (n-1)) of the "
+           "hex's n pixels (unweighted), read from a per-hex histogram with 0.1 m bins (error < 0.1 m).",
            "neutral"),
+    Metric("slope_mean_deg", "Mean slope", "deg", "elevation", "intensive", "land", "hex", _ELEV_SRC,
+           "2021 release", "Average terrain slope of land pixels in the hex (90 m DEM in both countries).",
+           _DEM_METHOD + _SLOPE_METHOD, "neutral"),
 ]
 for _code, _key, _name in WC_CLASSES:
     METRICS.append(Metric(
@@ -410,7 +426,13 @@ def _slope_deg(z: np.ndarray, tr: Affine) -> np.ndarray:
 
 
 def elevation(country: str, cells: list[str], polys: list[Polygon], tree: STRtree) -> pd.DataFrame:
-    factor = CFG[country]["dem_factor"]
+    """Per-hex DEM statistics from the native 3 arc-second GLO-90 tiles (both countries).
+
+    Pass 1 streams the tiles and accumulates pixel-area-weighted sums (mean elevation, mean
+    slope), pixel counts and exact min / max.  Pass 2 re-reads the cached tiles and fills a
+    per-hex histogram (DEM_BIN wide bins between the hex's min and max) from which the 5th / 95th
+    percentiles are read, so memory stays bounded for the ~1.4e9 US pixels.
+    """
     names = set(fetch(f"{DEM_BASE}/tileList.txt", "copernicus_dem_glo90", "terrain/copdem90",
                       "tileList.txt").read_text().split())
     want = []
@@ -419,81 +441,87 @@ def elevation(country: str, cells: list[str], polys: list[Polygon], tree: STRtre
         nm = dem_tile_name(la, lot)
         if nm in names:
             want.append((la, lof, nm))
-    print(f"  DEM: {len(want)} Copernicus GLO-90 tiles intersect the {country} grid (factor {factor})", flush=True)
+    print(f"  DEM: {len(want)} Copernicus GLO-90 tiles intersect the {country} grid (native 3 arc-sec)",
+          flush=True)
 
-    def load(nm):
-        url = f"{DEM_BASE}/{nm}/{nm}.tif"
-        if factor == 1:
-            p = fetch(url, "copernicus_dem_glo90", "terrain/copdem90")
-            with rasterio.open(p) as s:
-                return s.read(1), s.transform
-        return read_cog_cached(url, "copernicus_dem_glo90", f"terrain/copdem90_f{factor}", nm, factor)
+    def get(nm):
+        return fetch(f"{DEM_BASE}/{nm}/{nm}.tif", "copernicus_dem_glo90", "terrain/copdem90")
 
-    if factor == 1:
-        with ThreadPoolExecutor(THREADS) as ex:
-            list(ex.map(lambda w: fetch(f"{DEM_BASE}/{w[2]}/{w[2]}.tif", "copernicus_dem_glo90",
-                                        "terrain/copdem90"), want))
-    else:
-        _prefetch([(f"{DEM_BASE}/{nm}/{nm}.tif", "copernicus_dem_glo90", f"terrain/copdem90_f{factor}", nm, factor)
-                   for _, _, nm in want], "DEM")
+    t0 = time.time()
+    paths: dict[str, Path] = {}
+    with ThreadPoolExecutor(THREADS) as ex:
+        futs = {ex.submit(get, w[2]): w[2] for w in want}
+        for k, f in enumerate(as_completed(futs)):
+            paths[futs[f]] = f.result()
+            if (k + 1) % 200 == 0:
+                print(f"    DEM: {k + 1}/{len(want)} tiles cached ({time.time() - t0:.0f}s)", flush=True)
+
+    def tiles():
+        """Yield (z, transform, land mask, hex index of every masked pixel) per tile."""
+        for k, (la, lof, nm) in enumerate(want):
+            with rasterio.open(paths[nm]) as s:
+                z, tr = s.read(1), s.transform
+            tr = _shift(tr, lof - int(_true(lof)))
+            lab = _label(tr, z.shape, tree, polys)
+            if (k + 1) % 300 == 0:
+                print(f"    DEM pass: {k + 1}/{len(want)} tiles ({time.time() - t0:.0f}s)", flush=True)
+            if lab is None:
+                continue
+            z = np.where(np.isfinite(z), z, 0).astype(np.float32)
+            m = (lab > 0) & (z != 0)
+            if m.any():
+                yield z, tr, m, (lab[m] - 1).astype(np.int64)
 
     n = len(cells)
     wsum = np.zeros(n)
     zsum = np.zeros(n)
     ssum = np.zeros(n)
-    labs, zs = [], []
-    t0 = time.time()
-    for k, (la, lof, nm) in enumerate(want):
-        z, tr = load(nm)
-        tr = _shift(tr, lof - int(_true(lof)))
-        lab = _label(tr, z.shape, tree, polys)
-        if lab is None:
-            continue
-        z = np.where(np.isfinite(z), z, 0).astype(np.float32)
-        m = (lab > 0) & (z != 0)
-        if not m.any():
-            continue
+    cnt = np.zeros(n, dtype=np.int64)
+    zmin = np.full(n, np.inf)
+    zmax = np.full(n, -np.inf)
+    for z, tr, m, L in tiles():
         slope = _slope_deg(z, tr)
         lat = tr.f + (np.arange(z.shape[0]) + 0.5) * tr.e
         pw = (abs(tr.a) * abs(tr.e) * np.cos(np.radians(lat))).astype(np.float64)
         wpix = np.broadcast_to(pw[:, None], z.shape)[m]
-        L = lab[m] - 1
-        zm = z[m]
+        zm = z[m].astype(np.float64)
         wsum += np.bincount(L, weights=wpix, minlength=n)
         zsum += np.bincount(L, weights=wpix * zm, minlength=n)
         ssum += np.bincount(L, weights=wpix * slope[m], minlength=n)
-        labs.append(L.astype(np.int32))
-        zs.append(zm)
-        if (k + 1) % 200 == 0:
-            print(f"    DEM processed {k + 1}/{len(want)} tiles ({time.time() - t0:.0f}s)", flush=True)
-    L = np.concatenate(labs) if labs else np.zeros(0, np.int32)
-    Z = np.concatenate(zs) if zs else np.zeros(0, np.float32)
-    del labs, zs
-    print(f"  DEM: {len(Z):,} land pixels in hexes; computing per-hex statistics", flush=True)
-    order = np.lexsort((Z, L))
-    L = L[order]
-    Z = Z[order]
-    del order
-    ar = np.arange(n)
-    st = np.searchsorted(L, ar, "left")
-    en = np.searchsorted(L, ar, "right")
-    cnt = en - st
+        cnt += np.bincount(L, minlength=n)
+        np.fmin.at(zmin, L, zm)
+        np.fmax.at(zmax, L, zm)
     has = cnt > 0
-    safe = np.where(has, st, 0)
-    last = np.where(has, en - 1, 0)
-    p5 = np.where(has, st + np.floor(0.05 * (cnt - 1)).astype(np.int64), 0)
-    p95 = np.where(has, st + np.floor(0.95 * (cnt - 1)).astype(np.int64), 0)
-    zget = (lambda i: np.where(has, Z[i], 0.0)) if len(Z) else (lambda i: np.zeros(n))
+    print(f"  DEM: {int(cnt.sum()):,} land pixels in hexes; {int(has.sum())}/{n} hexes have land pixels",
+          flush=True)
+
+    # pass 2: per-hex histograms for the percentiles
+    nb = np.where(has, np.floor((np.where(has, zmax - zmin, 0)) / DEM_BIN).astype(np.int64) + 1, 0)
+    off = np.concatenate([[0], np.cumsum(nb)])
+    hist = np.zeros(int(off[-1]), dtype=np.uint32)
+    print(f"  DEM: relief histogram {len(hist):,} bins of {DEM_BIN} m", flush=True)
+    for z, tr, m, L in tiles():
+        b = np.floor((z[m].astype(np.float64) - zmin[L]) / DEM_BIN).astype(np.int64)
+        b = np.clip(b, 0, nb[L] - 1)
+        u, c = np.unique(off[L] + b, return_counts=True)
+        hist[u] += c.astype(np.uint32)
+    pct = {q: np.zeros(n) for q in (0.05, 0.95)}
+    for i in np.nonzero(has)[0]:
+        cum = np.cumsum(hist[off[i]:off[i + 1]], dtype=np.int64)
+        assert cum[-1] == cnt[i], "histogram count mismatch"
+        for q, arr in pct.items():
+            r = int(np.floor(q * (cnt[i] - 1)))            # 0-based rank of the order statistic
+            j = int(np.searchsorted(cum, r + 1, side="left"))  # first bin holding that rank
+            arr[i] = min(zmin[i] + j * DEM_BIN, zmax[i])
     out = pd.DataFrame({
         "h3": cells,
         "elev_mean_m": np.where(wsum > 0, zsum / np.maximum(wsum, 1e-30), 0.0),
-        "elev_min_m": zget(safe),
-        "elev_max_m": zget(last),
-        "relief_m": zget(p95) - zget(p5),
+        "elev_min_m": np.where(has, zmin, 0.0),
+        "elev_max_m": np.where(has, zmax, 0.0),
+        "relief_m": np.where(has, np.maximum(pct[0.95] - pct[0.05], 0.0), 0.0),
         "slope_mean_deg": np.where(wsum > 0, ssum / np.maximum(wsum, 1e-30), 0.0),
         "dem_land_px": cnt,
     })
-    print(f"  DEM: {int(has.sum())}/{n} hexes have land pixels", flush=True)
     return out
 
 
@@ -568,9 +596,18 @@ def landcover(country: str, cells: list[str], polys: list[Polygon], tree: STRtre
                         if len(tree.query(b)) == 0:
                             continue
                         accumulate(s.read(1, window=win), tr, 1.0)
-        else:
+        else:  # cached overview, processed in blocks to bound memory
             a, tr = read_cog_cached(url(nm), "esa_worldcover_2021", sub, nm, factor)
-            accumulate(a, _shift(tr, dx), 1.0)
+            tr = _shift(tr, dx)
+            for r0 in range(0, a.shape[0], WC_CHUNK):
+                for c0 in range(0, a.shape[1], WC_CHUNK):
+                    blk = a[r0:r0 + WC_CHUNK, c0:c0 + WC_CHUNK]
+                    tb = tr * Affine.translation(c0, r0)
+                    b = box(tb.c, tb.f + blk.shape[0] * tb.e, tb.c + blk.shape[1] * tb.a, tb.f)
+                    if len(tree.query(b)) == 0:
+                        continue
+                    accumulate(blk, tb, 1.0)
+            del a
         if (k + 1) % 25 == 0 or factor == 1:
             print(f"    WorldCover processed {k + 1}/{len(want)} tiles ({time.time() - t0:.0f}s)", flush=True)
     cnt_all = cnt_all.reshape(n, NC)

@@ -19,6 +19,7 @@ export interface Metric {
   method: string
   better: 'higher' | 'lower' | 'neutral'
   domain: string
+  countries?: string[]
   col: number
   stats: { n: number; min?: number; max?: number; p05?: number; p50?: number; p95?: number; total?: number }
 }
@@ -53,6 +54,8 @@ export interface HexesJson {
   adm1: number[]
   adm2: number[]
   adm3?: number[]
+  /** sparse per-tile yield-bonus inputs: tile indices `i` with values `v` */
+  bonus?: Partial<Record<'works_5y' | 'capacity_mw' | 'whs' | 'museums' | 'holy_sites' | 'park_visitors' | 'military_sites' | 'port_cargo_t' | 'airport_pax', { i: number[]; v: number[] }>>
 }
 
 export interface AdminUnit {
@@ -130,6 +133,7 @@ export interface City {
   size: number
   citizens: Record<string, number>
   citizen_icons: Record<string, number>
+  employed?: number | null
   yields: Record<YieldKey, number>
   industries: { key: string; jobs: number; lq: number }[]
   wonders: string[]
@@ -165,6 +169,8 @@ export interface IndexJson {
     bases: Record<string, { metric: string; base: number; unit: string }>
     power_bonus: [number, number][]
     research_bonus: [number, number][]
+    culture_bonus?: { per_whs: number; max_whs: number; museums_min: number; museums_bonus: number; park_visitors_min: number; park_bonus: number }
+    faith_bonus?: { per_holy_site: number; max_holy_sites: number }
   }
   terrain: Record<string, string>
   features: Record<string, string>
@@ -182,6 +188,14 @@ export interface NationalSeries {
 export interface NationalIndicator {
   code: string
   label: string
+  name?: string
+  description?: string
+  method?: string
+  source_org?: string
+  derived?: boolean
+  yield?: string
+  better?: 'higher' | 'lower' | 'neutral' | string
+  common?: { year: number | null; LKA: number | null; USA: number | null }
   unit: string
   advisor: 'economic' | 'military' | 'cultural' | 'scientific' | 'environmental' | string
   LKA?: NationalSeries
@@ -196,6 +210,8 @@ export interface CountryData {
   hexes: HexesJson
   /** column-major Float32 matrix: value(hex i, metric col c) = matrix[c * n + i] */
   matrix: Float32Array
+  /** false until metrics.bin has loaded (values are NaN before that) */
+  matrixReady: boolean
   n: number
   hexIndex: Map<string, number>
   hexArea: Float32Array

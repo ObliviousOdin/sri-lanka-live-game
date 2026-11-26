@@ -24,10 +24,9 @@ export function loadCountry(id: CountryId): Promise<CountryData> {
   let p = countryCache.get(id)
   if (!p) {
     p = (async () => {
-      const [meta, hexes, buf, points, wonders, cities] = await Promise.all([
+      const [meta, hexes, points, wonders, cities] = await Promise.all([
         json<Meta>(`${id}/meta.json`),
         json<HexesJson>(`${id}/hexes.json`),
-        binary(`${id}/metrics.bin`),
         json<PointLayers>(`${id}/points.json`).catch(() => ({}) as PointLayers),
         json<Wonder[]>(`${id}/wonders.json`).catch(() => []),
         json<City[]>(`${id}/cities.json`).catch(() => []),
@@ -45,12 +44,26 @@ export function loadCountry(id: CountryId): Promise<CountryData> {
       for (let i = 0; i < n; i++) hexArea[i] = cellArea(hexes.h3[i], 'km2')
       const metricByKey = new Map<string, Metric>()
       meta.metrics.forEach((m) => metricByKey.set(m.key, m))
+      // the metric matrix (up to ~20 MB) arrives later via loadMatrix(); until then every value is NaN
+      const matrix = new Float32Array(n * meta.metrics.length).fill(NaN)
       return {
-        id, meta, hexes, matrix: new Float32Array(buf), n, hexIndex, hexArea, metricByKey,
+        id, meta, hexes, matrix, matrixReady: false, n, hexIndex, hexArea, metricByKey,
         points, wonders, cities, admin,
       }
     })()
     countryCache.set(id, p)
+  }
+  return p
+}
+
+const matrixCache = new Map<CountryId, Promise<CountryData>>()
+
+/** Resolve a new CountryData object carrying the real metric matrix (new identity → caches refresh). */
+export function loadMatrix(d: CountryData): Promise<CountryData> {
+  let p = matrixCache.get(d.id)
+  if (!p) {
+    p = binary(`${d.id}/metrics.bin`).then((buf) => ({ ...d, matrix: new Float32Array(buf), matrixReady: true }))
+    matrixCache.set(d.id, p)
   }
   return p
 }

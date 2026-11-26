@@ -166,6 +166,7 @@ function NationalCouncil({ app, rows, home, setHome }: { app: AppData; rows: Nat
       )}
       {groups.map((g) => (
         <AdvisorCard key={g.a.id} advisor={g.a} comments={g.comments} home={home}
+          waiting={!rows.length && (!lka || !usa) ? `Waiting for ${!lka ? 'Sri Lanka' : 'United States'} data to load…` : undefined}
           extra={<>
             {g.spark.length > 0 && <div className="advisors-sparks">{g.spark.map((r) => <Sparkline key={r.code} row={r} />)}</div>}
             {g.ledger.length > 0 && <Ledger rows={g.ledger} home={home} />}
@@ -202,7 +203,7 @@ function FamousTwins({ app }: { app: AppData }) {
   return (
     <section className="card advisors-twins" aria-labelledby="adv-twins-h">
       <h3 id="adv-twins-h"><span aria-hidden>🌊</span> Twins across the ocean</h3>
-      {res.reason ? <p className="advisors-empty">{res.reason}.</p> : (
+      {res.reason ? <p className="advisors-empty">{endDot(res.reason)}</p> : (
         <>
           <ul className="advisors-twinlist">
             {res.rows.map((r) => {
@@ -279,6 +280,8 @@ function PlaceCouncil({ app, place, back, onJump, onBack }: { app: AppData; plac
   )
 }
 
+const endDot = (s: string) => (/[.…!?]$/.test(s) ? s : `${s}.`)
+
 function describe(app: AppData, sel: Selection) {
   const d = app.countries[sel.country]
   const p = d && app.index ? resolvePlace(sel, d, app.index) : null
@@ -291,7 +294,7 @@ function TwinCard({ app, place, twin, onJump }: { app: AppData; place: Place; tw
     return (
       <section className="card advisors-twin" aria-labelledby="adv-twin-h">
         <h3 id="adv-twin-h"><span aria-hidden>🌊</span> Twin across the ocean</h3>
-        <p className="advisors-empty">{twin.reason}.</p>
+        <p className="advisors-empty">{endDot(twin.reason)}</p>
       </section>
     )
   }
@@ -340,11 +343,12 @@ function TwinCard({ app, place, twin, onJump }: { app: AppData; place: Place; tw
       {twin.matches.length > 1 && (
         <div className="row advisors-runners">
           <span className="advisors-small">Runners-up:</span>
-          {twin.matches.slice(1).map((m) => {
+          {twin.matches.slice(1).map((m, j) => {
             const n = twinName(od, twin.level, m.index, app.index)
+            const label = twin.level === 'hex' ? `${n.title.replace(/^Tile in /, '')} · ${n.subtitle.split(' · ')[0].replace(/ tile$/, '')} (#${j + 2})` : n.title
             return (
-              <button key={m.index} className={`chip advisors-chipbtn ${twin.country}`} onClick={() => onJump({ country: twin.country, level: twin.level, index: m.index })} title={`Show ${n.title} (Δ ${m.dist.toFixed(2)} SD)`}>
-                {n.title}
+              <button key={m.index} className={`chip advisors-chipbtn ${twin.country}`} onClick={() => onJump({ country: twin.country, level: twin.level, index: m.index })} title={`Show ${n.title} — ${n.subtitle} (Δ ${m.dist.toFixed(2)} SD)`}>
+                {label}
               </button>
             )
           })}
@@ -408,8 +412,8 @@ function Segs({ segs }: { segs: Seg[] }) {
   return <>{segs.map((s, i) => (typeof s === 'string' ? <span key={i}>{s}</span> : <b key={i} className={`advisors-fig ${s.c ?? ''}`}>{s.t}</b>))}</>
 }
 
-function AdvisorCard({ advisor, comments, home, extra, local }: {
-  advisor: (typeof ADVISORS)[number]; comments: Comment[]; home: CountryId; extra?: React.ReactNode; local?: boolean
+function AdvisorCard({ advisor, comments, home, extra, local, waiting }: {
+  advisor: (typeof ADVISORS)[number]; comments: Comment[]; home: CountryId; extra?: React.ReactNode; local?: boolean; waiting?: string
 }) {
   const [more, setMore] = useState(false)
   const shown = more ? comments : comments.slice(0, MAX_SHOWN)
@@ -431,7 +435,7 @@ function AdvisorCard({ advisor, comments, home, extra, local }: {
         )}
       </header>
       {comments.length === 0 ? (
-        <p className="advisors-empty">{EMPTY[advisor.id](local)}</p>
+        <p className="advisors-empty">{waiting ?? EMPTY[advisor.id](local)}</p>
       ) : (
         <ul className="advisors-comments">
           {shown.map((c) => <CommentItem key={c.id} c={c} home={home} />)}
