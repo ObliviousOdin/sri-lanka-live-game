@@ -1,7 +1,761 @@
+import { cellArea } from 'h3-js'
+import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from 'react'
+import { CITIZEN_META, COUNTRY_META, DISTRICT_META, FEATURE_META, TERRAIN_META, YIELD_META, terrainLabel, type RGB } from '../civ'
+import { mix, rgbCss, shade } from '../color'
+import { SourceChips } from '../components/SourceChip'
+import { YieldIcon, YieldRow } from '../components/YieldIcon'
+import { column } from '../data/load'
 import type { AppData } from '../data/useData'
+import { fmtArea, fmtNumber, fmtPct, fmtUsd } from '../format'
+import { WONDER_ICON } from '../map/MapPane'
+import { useStore } from '../store'
+import { COUNTRIES, YIELDS, type City, type CityTile, type CountryData, type CountryId, type IndexJson, type Selection, type Wonder, type YieldKey } from '../types'
+import { HEX_R, hexPoints, layoutRing } from './cityViewLayout'
+import { openCity } from './cityViewNav'
+import './CityView.css'
 
-// TODO: implemented by a panel agent (see docs/PLAN.md §6)
+// ---------------------------------------------------------------------------------------------
+// Labels
+// ---------------------------------------------------------------------------------------------
+
+const INDUSTRY: Record<string, { label: string; icon: string }> = {
+  emp_agri: { label: 'Agriculture, forestry & fishing', icon: '🌾' },
+  emp_mining: { label: 'Mining & quarrying', icon: '⛏️' },
+  emp_manufacturing: { label: 'Manufacturing', icon: '🏭' },
+  emp_construction: { label: 'Construction', icon: '🏗️' },
+  emp_utilities: { label: 'Utilities (power, water)', icon: '⚡' },
+  emp_trade: { label: 'Wholesale & retail trade', icon: '🛒' },
+  emp_transport: { label: 'Transport & storage', icon: '🚚' },
+  emp_ict: { label: 'Information & communication', icon: '💻' },
+  emp_finance: { label: 'Finance & insurance', icon: '💰' },
+  emp_professional: { label: 'Professional & business services', icon: '📐' },
+  emp_education: { label: 'Education', icon: '🎓' },
+  emp_health: { label: 'Health & social care', icon: '🩺' },
+  emp_arts_accommodation: { label: 'Arts, recreation & hospitality', icon: '🎭' },
+  emp_public_admin: { label: 'Public administration & defence', icon: '🏛️' },
+  emp_other: { label: 'Other services', icon: '🧰' },
+}
+
+const CIT_KEYS = Object.keys(CITIZEN_META)
+const YIELD_SLOTS: { y: YieldKey; dx: number; dy: number }[] = [
+  { y: 'gold', dx: -14, dy: 4 }, { y: 'production', dx: 0, dy: 4 }, { y: 'food', dx: 14, dy: 4 },
+  { y: 'science', dx: -14, dy: 16 }, { y: 'culture', dx: 0, dy: 16 }, { y: 'faith', dx: 14, dy: 16 },
+]
+
+// ---------------------------------------------------------------------------------------------
+// Data helpers (memoised per CountryData)
+// ---------------------------------------------------------------------------------------------
+
+const sortedCache = new WeakMap<CountryData, City[]>()
+function citiesByPop(d: CountryData): City[] {
+  let s = sortedCache.get(d)
+  if (!s) {
+    s = [...d.cities].sort((a, b) => (b.pop || 0) - (a.pop || 0))
+    sortedCache.set(d, s)
+  }
+  return s
+}
+
+/** h3 → city whose ring contains it (closest centre wins where rings overlap). */
+const ringCache = new WeakMap<CountryData, Map<string, { city: City; dist: number }>>()
+function ringIndex(d: CountryData) {
+  let m = ringCache.get(d)
+  if (!m) {
+    m = new Map()
+    for (const c of d.cities) {
+      for (const t of c.tiles) {
+        const prev = m.get(t.h3)
+        if (!prev || t.d < prev.dist) m.set(t.h3, { city: c, dist: t.d })
+      }
+    }
+    ringCache.set(d, m)
+  }
+  return m
+}
+
+/**
+ * National citizen-class mix: Σ tiles cit_k / Σ tiles Σ_k cit_k (the same basis as a city's
+ * `citizens`, so the two are directly comparable). null while the labour data is still building.
+ */
+const natCache = new WeakMap<CountryData, { shares: Record<string, number>; workers: number; employed: number | null } | null>()
+function nationalCitizenMix(d: CountryData) {
+  if (natCache.has(d)) return natCache.get(d)!
+  const keys = CIT_KEYS.filter((k) => d.metricByKey.has(k))
+  let res: { shares: Record<string, number>; workers: number; employed: number | null } | null = null
+  if (keys.length) {
+    const sums: Record<string, number> = {}
+    let tot = 0
+    for (const k of keys) {
+      const col = column(d, k)!
+      let s = 0
+      for (let i = 0; i < col.length; i++) { const v = col[i]; if (v > 0) s += v }
+      sums[k] = s
+      tot += s
+    }
+    let employed: number | null = null
+    const emp = column(d, 'employed')
+    if (emp) { employed = 0; for (let i = 0; i < emp.length; i++) if (emp[i] > 0) employed += emp[i] }
+    if (tot > 0) res = { shares: Object.fromEntries(keys.map((k) => [k, sums[k] / tot])), workers: tot, employed }
+  }
+  natCache.set(d, res)
+  return res
+}
+
+function largestRemainder(shares: Record<string, number>, total: number): Record<string, number> {
+  const s = Object.values(shares).reduce((a, v) => a + Math.max(0, v), 0)
+  const out: Record<string, number> = {}
+  if (s <= 0 || total <= 0) return out
+  const raw = Object.entries(shares).map(([k, v]) => [k, (Math.max(0, v) / s) * total] as const)
+  raw.forEach(([k, v]) => { out[k] = Math.floor(v) })
+  let rest = total - Object.values(out).reduce((a, v) => a + v, 0)
+  for (const [k] of [...raw].sort((a, b) => (b[1] - Math.floor(b[1])) - (a[1] - Math.floor(a[1])))) {
+    if (rest-- <= 0) break
+    out[k] += 1
+  }
+  return out
+}
+
+function sumValues(r: Record<string, number> | null | undefined) {
+  return r ? Object.values(r).reduce((a, v) => a + (Number.isFinite(v) && v > 0 ? v : 0), 0) : 0
+}
+
+function topCitizen(city: City) {
+  const tot = sumValues(city.citizens)
+  if (!tot) return null
+  const [k, v] = Object.entries(city.citizens).sort((a, b) => b[1] - a[1])[0]
+  return { key: k, share: v / tot }
+}
+
+function tileRGB(t: CityTile): RGB {
+  let c: RGB = TERRAIN_META[t.terrain]?.rgb ?? [120, 120, 120]
+  const fm = FEATURE_META[t.feature ?? '']
+  if (fm?.rgb) c = mix(c, fm.rgb, t.feature === 'urban' ? 0.55 : 0.6)
+  if (t.hills) c = shade(c, 0.86)
+  return c
+}
+
+function metricSources(d: CountryData, keys: string[]): string[] {
+  const out: string[] = []
+  for (const k of keys) for (const s of d.metricByKey.get(k)?.sources ?? []) if (!out.includes(s)) out.push(s)
+  return out
+}
+
+interface Resolved { d: CountryData; city: City; hex: string | null }
+
+function resolveCity(app: AppData, sel: Selection | null): Resolved | null {
+  if (!sel) return null
+  const d = app.countries[sel.country]
+  if (!d) return null
+  if (sel.kind === 'city') {
+    const city = d.cities.find((c) => c.id === sel.id)
+    return city ? { d, city, hex: null } : null
+  }
+  if (sel.kind === 'hex') {
+    const hit = ringIndex(d).get(sel.id)
+    return hit ? { d, city: hit.city, hex: sel.id } : null
+  }
+  return null
+}
+
+// ---------------------------------------------------------------------------------------------
+// Small atoms
+// ---------------------------------------------------------------------------------------------
+
+function SizeBadge({ size, country, big }: { size: number; country: CountryId; big?: boolean }) {
+  return (
+    <span className={`cityview-size ${country} ${big ? 'big' : ''}`} title={`City size ${size}`} aria-label={`City size ${size}`}>
+      {size}
+    </span>
+  )
+}
+
+function CountryChip({ c }: { c: CountryId }) {
+  return <span className={`chip ${c}`}>{COUNTRY_META[c].short}</span>
+}
+
+// ---------------------------------------------------------------------------------------------
+// Panel
+// ---------------------------------------------------------------------------------------------
+
 export function CityView({ app }: { app: AppData }) {
-  void app
-  return <div className="panel-empty">City View — coming soon</div>
+  const selection = useStore((s) => s.selection)
+  const [listFor, setListFor] = useState<Selection | null | undefined>(undefined)
+  const { lka, usa } = app.countries
+  const current = useMemo(() => resolveCity(app, selection), [lka, usa, selection]) // eslint-disable-line react-hooks/exhaustive-deps
+  const rootRef = useRef<HTMLDivElement>(null)
+  const showList = !current || listFor === selection
+  const key = showList ? 'list' : `${current!.d.id}:${current!.city.id}`
+
+  useEffect(() => {
+    rootRef.current?.closest('.panel-body')?.scrollTo({ top: 0 })
+  }, [key])
+
+  return (
+    <div className="cityview" ref={rootRef}>
+      {showList || !current
+        ? <CityList app={app} />
+        : <CityScreen app={app} d={current.d} city={current.city} hex={current.hex} onBack={() => setListFor(selection)} />}
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------------------------------
+// City list
+// ---------------------------------------------------------------------------------------------
+
+function CityList({ app }: { app: AppData }) {
+  const [filter, setFilter] = useState<'all' | CountryId>('all')
+  const { lka, usa } = app.countries
+  const rows = useMemo(() => {
+    const out: { d: CountryData; c: City; rank: number; n: number }[] = []
+    for (const cc of COUNTRIES) {
+      const d = app.countries[cc]
+      if (!d) continue
+      const s = citiesByPop(d)
+      s.forEach((c, i) => out.push({ d, c, rank: i + 1, n: s.length }))
+    }
+    return out.sort((a, b) => (b.c.pop || 0) - (a.c.pop || 0))
+  }, [lka, usa]) // eslint-disable-line react-hooks/exhaustive-deps
+  const shown = rows.filter((r) => filter === 'all' || r.d.id === filter)
+  const radius = rows[0]?.c.radius ?? 3
+  const nTiles = 3 * radius * (radius + 1) + 1
+
+  return (
+    <>
+      <h2 className="section-title cityview-title">Cities</h2>
+      <p className="cityview-lede">
+        Each metro is a Civ city: its most populous tile plus a ring of radius {radius} ({nTiles} tiles).
+        City size grows with population<sup>0.4</sup> ÷ 20, so a city 10× larger is about 2.5× the size.
+      </p>
+      <div className="cityview-seg" role="group" aria-label="Filter cities by country">
+        {(['all', 'lka', 'usa'] as const).map((f) => (
+          <button key={f} className={filter === f ? 'active' : ''} aria-pressed={filter === f} onClick={() => setFilter(f)}>
+            {f === 'all' ? 'Both' : COUNTRY_META[f].name}
+          </button>
+        ))}
+      </div>
+      {!usa && filter !== 'lka' && <p className="muted cityview-note">Loading United States…</p>}
+      {shown.length === 0 && (usa || filter === 'lka') && (
+        <p className="muted cityview-note">No cities yet — the City View payload is still being built.</p>
+      )}
+      <ul className="cityview-list">
+        {shown.map(({ d, c, rank, n }) => (
+          <li key={`${d.id}:${c.id}`}>
+            <button className="cityview-li" onClick={() => openCity(d.id, c)} aria-label={`${c.name}, ${COUNTRY_META[d.id].name}: size ${c.size}, ${fmtNumber(c.pop)} people`}>
+              <SizeBadge size={c.size} country={d.id} />
+              <span className="cityview-li-main">
+                <span className="cityview-li-name">
+                  {c.name} <CountryChip c={d.id} />
+                  <small className="muted">#{rank} of {n}</small>
+                </span>
+                <YieldRow values={c.yields} size={11} />
+              </span>
+              <span className="cityview-li-pop">
+                <b>{fmtNumber(c.pop)}</b>
+                <small>{c.official_pop ? `official ${fmtNumber(c.official_pop)}` : 'tile-ring pop.'}</small>
+              </span>
+            </button>
+          </li>
+        ))}
+      </ul>
+    </>
+  )
+}
+
+// ---------------------------------------------------------------------------------------------
+// City screen
+// ---------------------------------------------------------------------------------------------
+
+function CityScreen({ app, d, city, hex, onBack }: { app: AppData; d: CountryData; city: City; hex: string | null; onBack: () => void }) {
+  const idx = app.index!
+  const { lka, usa } = app.countries
+  const all = useMemo(() => {
+    const out: { d: CountryData; c: City }[] = []
+    for (const cc of COUNTRIES) { const x = app.countries[cc]; if (x) citiesByPop(x).forEach((c) => out.push({ d: x, c })) }
+    return out
+  }, [lka, usa]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  return (
+    <>
+      <div className="cityview-nav">
+        <button className="btn" onClick={onBack}>← All cities</button>
+        <select
+          className="input cityview-jump"
+          aria-label="Jump to city"
+          value={`${d.id}:${city.id}`}
+          onChange={(e) => {
+            const hit = all.find((x) => `${x.d.id}:${x.c.id}` === e.target.value)
+            if (hit) openCity(hit.d.id, hit.c)
+          }}
+        >
+          {COUNTRIES.filter((cc) => app.countries[cc]).map((cc) => (
+            <optgroup key={cc} label={COUNTRY_META[cc].name}>
+              {all.filter((x) => x.d.id === cc).map((x) => (
+                <option key={x.c.id} value={`${cc}:${x.c.id}`}>{x.c.name} (size {x.c.size})</option>
+              ))}
+            </optgroup>
+          ))}
+        </select>
+      </div>
+      <CityBanner d={d} city={city} />
+      <CityRing d={d} city={city} idx={idx} selectedHex={hex} />
+      <CityCitizens d={d} city={city} />
+      <CityIndustries d={d} city={city} />
+      <CityDistricts d={d} city={city} idx={idx} />
+      <SisterCity app={app} d={d} city={city} />
+    </>
+  )
+}
+
+function CityBanner({ d, city }: { d: CountryData; city: City }) {
+  const ranked = citiesByPop(d)
+  const rank = ranked.findIndex((c) => c.id === city.id) + 1
+  const area = useMemo(() => city.tiles.reduce((a, t) => {
+    const i = d.hexIndex.get(t.h3)
+    let km2 = i != null ? d.hexArea[i] : NaN
+    if (!Number.isFinite(km2)) { try { km2 = cellArea(t.h3, 'km2') } catch { km2 = 0 } }
+    return a + km2
+  }, 0), [d, city])
+  const srcKeys = ['pop', 'gdp_usd']
+  const src = metricSources(d, srcKeys)
+  const vint = (k: string) => d.metricByKey.get(k)?.vintage
+  return (
+    <section className="card cityview-banner" aria-label={`${city.name} overview`}>
+      <div className="cityview-banner-head">
+        <SizeBadge size={city.size} country={d.id} big />
+        <div className="cityview-banner-name">
+          <h2>{city.name}</h2>
+          <div className="row">
+            <CountryChip c={d.id} />
+            <span className="muted">{COUNTRY_META[d.id].name} · #{rank} of {ranked.length} City View metros</span>
+          </div>
+        </div>
+      </div>
+      <div className="cityview-banner-yields" aria-label="City yields (sum of tile yields)">
+        <YieldRow values={city.yields} size={16} />
+      </div>
+      <div className="kv cityview-kv">
+        <span className="k">Population · tile ring{vint('pop') ? ` (${vint('pop')})` : ''}</span>
+        <span>{fmtNumber(city.pop)}</span>
+        <span className="k">Ring</span>
+        <span>{city.tiles.length} tiles · {fmtArea(area)}</span>
+        {city.official_pop ? (
+          <>
+            <span className="k">Official metro population{city.official_pop_year ? ` (${city.official_pop_year})` : ''}</span>
+            <span>{fmtNumber(city.official_pop)}</span>
+          </>
+        ) : null}
+        <span className="k">GDP · tile ring{vint('gdp_usd') ? ` (${vint('gdp_usd')})` : ''}</span>
+        <span>{city.gdp_usd != null ? fmtUsd(city.gdp_usd) : <span className="muted">building…</span>}</span>
+        <span className="k">GDP per capita</span>
+        <span>{city.gdp_per_capita != null ? fmtUsd(city.gdp_per_capita) : <span className="muted">–</span>}</span>
+        {city.official_gdp_usd ? (
+          <>
+            <span className="k">Official metro GDP{city.official_gdp_year ? ` (${city.official_gdp_year})` : ''}</span>
+            <span>{fmtUsd(city.official_gdp_usd)}</span>
+          </>
+        ) : null}
+      </div>
+      {src.length > 0 && <div className="cityview-src"><SourceChips ids={src} /></div>}
+    </section>
+  )
+}
+
+// ---------------------------------------------------------------------------------------------
+// Hex ring
+// ---------------------------------------------------------------------------------------------
+
+function CityRing({ d, city, idx, selectedHex }: { d: CountryData; city: City; idx: IndexJson; selectedHex: string | null }) {
+  const layout = useMemo(() => layoutRing(city.centre, city.tiles.map((t) => t.h3), city.radius), [city])
+  const tileBy = useMemo(() => new Map(city.tiles.map((t) => [t.h3, t])), [city])
+  const wondersBy = useMemo(() => {
+    const m = new Map<string, Wonder[]>()
+    for (const w of d.wonders) if (w.h3) m.set(w.h3, [...(m.get(w.h3) ?? []), w])
+    return m
+  }, [d])
+  const [active, setActive] = useState<string | null>(null)
+  const pointer = useRef<string>('mouse')
+  useEffect(() => setActive(null), [city])
+
+  const choose = (h: string) => useStore.getState().select({ country: d.id, kind: 'hex', id: h }, 'tile')
+  const onClick = (h: string) => {
+    if (pointer.current === 'touch' && active !== h) { setActive(h); return }
+    choose(h)
+  }
+  const onKey = (e: KeyboardEvent, h: string) => {
+    if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); choose(h) }
+    if (e.key === 'Escape') setActive(null)
+  }
+
+  const [vx, vy, vw, vh] = layout.viewBox
+  const tiles = layout.cells.filter((c) => !c.ghost)
+  const ghosts = layout.cells.filter((c) => c.ghost)
+  // draw order: plain tiles, then centre, then selected (so borders sit on top)
+  const order = [...tiles].sort((a, b) => rankOf(a.h3) - rankOf(b.h3))
+  function rankOf(h: string) { return h === selectedHex ? 3 : h === active ? 2 : h === city.centre ? 1 : 0 }
+
+  const at = active ? tileBy.get(active) : null
+  const ap = active ? layout.pos.get(active) : null
+  const above = ap ? (ap.y - vy) / vh > 0.42 : true
+  const tipStyle = ap ? {
+    left: `clamp(108px, ${(((ap.x - vx) / vw) * 100).toFixed(2)}%, calc(100% - 108px))`,
+    top: `${((((above ? ap.y - HEX_R * 0.9 : ap.y + HEX_R * 0.9) - vy) / vh) * 100).toFixed(2)}%`,
+  } : undefined
+
+  return (
+    <section className="card cityview-ringcard" aria-label="City tiles">
+      <h3>City tiles</h3>
+      <div className="cityview-ring" onPointerLeave={() => { if (pointer.current !== 'touch') setActive(null) }}>
+        <svg viewBox={`${vx} ${vy} ${vw} ${vh}`} role="group" aria-label={`${city.name}: ${tiles.length} tiles, radius ${city.radius}`}>
+          {ghosts.map((g) => (
+            <polygon key={g.h3} points={hexPoints(g.x, g.y, HEX_R - 1.5)} className="cityview-ghost" aria-hidden />
+          ))}
+          {order.map((c) => {
+            const t = tileBy.get(c.h3)!
+            const isCentre = c.h3 === city.centre
+            const isSel = c.h3 === selectedHex
+            const dm = DISTRICT_META[t.district ?? '']
+            const fm = FEATURE_META[t.feature ?? '']
+            const ws = wondersBy.get(c.h3)
+            const anyYield = t.yields.some((v) => v > 0)
+            const label = `${terrainLabel(t.terrain, t.feature, t.hills)}${dm?.label && t.district ? `, ${dm.label}` : ''}; yields ${YIELDS.map((y, j) => `${YIELD_META[y].label} ${t.yields[j] ?? 0}`).join(', ')}; population ${fmtNumber(t.pop)}`
+            return (
+              <g
+                key={c.h3}
+                className={`cityview-tile ${isCentre ? 'centre' : ''} ${isSel ? 'sel' : ''} ${active === c.h3 ? 'hot' : ''}`}
+                role="button"
+                tabIndex={0}
+                aria-label={label}
+                aria-pressed={isSel}
+                onPointerDown={(e) => { pointer.current = e.pointerType }}
+                onPointerEnter={(e) => { pointer.current = e.pointerType; if (e.pointerType !== 'touch') setActive(c.h3) }}
+                onFocus={() => setActive(c.h3)}
+                onBlur={() => setActive((a) => (a === c.h3 ? null : a))}
+                onClick={() => onClick(c.h3)}
+                onKeyDown={(e) => onKey(e, c.h3)}
+              >
+                <polygon points={hexPoints(c.x, c.y)} fill={rgbCss(tileRGB(t))} className="cityview-hex" />
+                {(isCentre || isSel || active === c.h3) && (
+                  <polygon points={hexPoints(c.x, c.y, HEX_R - (isCentre ? 3 : 2.5))} className="cityview-hexring" />
+                )}
+                {t.district && dm?.icon ? (
+                  <text x={c.x} y={c.y - 13} className="cityview-emoji">{dm.icon}</text>
+                ) : fm?.icon ? (
+                  <text x={c.x} y={c.y - 13} className="cityview-emoji faint">{fm.icon}</text>
+                ) : null}
+                {ws && <text x={c.x + 17} y={c.y - 19} className="cityview-emoji small">{WONDER_ICON[ws[0].category] ?? '★'}</text>}
+                {anyYield && (
+                  <>
+                    <rect x={c.x - 22} y={c.y - 2.5} width={44} height={25} rx={6} className="cityview-plate" />
+                    {YIELD_SLOTS.map((s) => {
+                      const v = t.yields[YIELDS.indexOf(s.y)] ?? 0
+                      return v > 0 ? (
+                        <text key={s.y} x={c.x + s.dx} y={c.y + s.dy} className="cityview-yv" fill={YIELD_META[s.y].color}>{v}</text>
+                      ) : null
+                    })}
+                  </>
+                )}
+              </g>
+            )
+          })}
+        </svg>
+        {at && tipStyle && (
+          <div className={`cityview-tip ${above ? 'above' : 'below'}`} style={tipStyle} role="status">
+            <div className="cityview-tip-title">
+              {t_district(at) ? <>{DISTRICT_META[at.district].icon} {DISTRICT_META[at.district].label}</> : terrainLabel(at.terrain, at.feature, at.hills)}
+            </div>
+            {t_district(at) && <div className="muted">{terrainLabel(at.terrain, at.feature, at.hills)}</div>}
+            <YieldRow values={at.yields} size={12} />
+            <div className="cityview-tip-meta">
+              <span>{fmtNumber(at.pop)} people</span>
+              <span className="muted">{at.d === 0 ? 'centre tile' : `ring ${at.d}`}</span>
+            </div>
+            {(wondersBy.get(at.h3) ?? []).map((w) => (
+              <div key={w.name} className="cityview-tip-wonder">{WONDER_ICON[w.category] ?? '★'} {w.name}</div>
+            ))}
+            <div className="cityview-tip-hint">{pointer.current === 'touch' ? 'Tap again to inspect' : 'Click to inspect tile'}</div>
+          </div>
+        )}
+      </div>
+      <div className="cityview-ringlegend">
+        <span className="cityview-slots" aria-label="Yield number positions: gold, production, food on the top row; science, culture, faith below">
+          {YIELD_SLOTS.map((s) => <YieldIcon key={s.y} y={s.y} size={11} />)}
+        </span>
+        <span>yield slots in each tile</span>
+        <span className="cityview-key centre" aria-hidden /> <span>city centre</span>
+        {layout.cells.some((c) => c.ghost) && <><span className="cityview-key ghost" aria-hidden /> <span>outside map grid</span></>}
+      </div>
+      {layout.method !== 'h3-ij' && (
+        <p className="cityview-foot">Layout: {layout.method === 'mixed' ? 'H3 local IJ with lat/lon fallback for some tiles' : 'lat/lon projection'}.</p>
+      )}
+    </section>
+  )
+}
+
+function t_district(t: CityTile) {
+  return !!t.district && !!DISTRICT_META[t.district]?.icon
+}
+
+// ---------------------------------------------------------------------------------------------
+// Citizens
+// ---------------------------------------------------------------------------------------------
+
+function CityCitizens({ d, city }: { d: CountryData; city: City }) {
+  const nat = nationalCitizenMix(d)
+  const total = sumValues(city.citizens)
+  const src = metricSources(d, CIT_KEYS)
+  if (!total) {
+    return (
+      <section className="card" aria-label="Citizens">
+        <h3>Citizens</h3>
+        <p className="muted cityview-note">Workforce composition is still being built — citizens appear once the labour-force data domain finishes.</p>
+      </section>
+    )
+  }
+  const icons = sumValues(city.citizen_icons) > 0 ? city.citizen_icons : largestRemainder(city.citizens, city.size)
+  const perCitizen = total / Math.max(1, city.size)
+  const groups = CIT_KEYS.filter((k) => (icons[k] ?? 0) > 0)
+  const bars = CIT_KEYS
+    .map((k) => ({ k, city: (city.citizens[k] ?? 0) / total, nat: nat?.shares[k] }))
+    .filter((r) => r.city > 0 || (r.nat ?? 0) > 0)
+    .sort((a, b) => b.city - a.city)
+  const max = Math.max(...bars.map((b) => Math.max(b.city, b.nat ?? 0)), 0.01)
+
+  return (
+    <section className="card" aria-label="Citizens">
+      <h3>Citizens</h3>
+      <p className="cityview-note">
+        <b>{city.size}</b> citizens · 1 citizen ≈ <b>{fmtNumber(perCitizen)}</b> workers ({fmtNumber(total)} classified workers in the ring)
+      </p>
+      <div className="cityview-cits">
+        {groups.map((k) => (
+          <div key={k} className="cityview-citgroup" title={`${CITIZEN_META[k].label}: ${CITIZEN_META[k].desc} — ${icons[k]} citizen${icons[k] === 1 ? '' : 's'} ≈ ${fmtNumber((city.citizens[k] ?? 0))} workers`}>
+            <span className="cityview-citicons" aria-hidden>{Array.from({ length: icons[k] }, () => CITIZEN_META[k].icon).join('')}</span>
+            <span className="cityview-citlabel"><b>{icons[k]}</b> {CITIZEN_META[k].label}</span>
+          </div>
+        ))}
+      </div>
+      <div className="cityview-barhead">
+        <span>Share of workers</span>
+        <span className="cityview-legend-sw"><i className={`sw ${d.id}`} /> {city.name}</span>
+        {nat && <span className="cityview-legend-sw"><i className="sw nat" /> {COUNTRY_META[d.id].name}</span>}
+      </div>
+      <div className="cityview-bars" role="table" aria-label="Citizen class shares, city vs national">
+        {bars.map((b) => {
+          const lq = b.nat ? b.city / b.nat : NaN
+          return (
+            <div key={b.k} className="cityview-bar" role="row" title={CITIZEN_META[b.k].desc}>
+              <span className="cityview-bar-label" role="rowheader"><span aria-hidden>{CITIZEN_META[b.k].icon}</span> {CITIZEN_META[b.k].label}</span>
+              <span className="cityview-bar-track" role="cell" aria-label={`${fmtPct(b.city * 100)} in ${city.name}${b.nat != null ? `, ${fmtPct(b.nat * 100)} nationally` : ''}`}>
+                <i className={`cityview-bar-city ${d.id}`} style={{ width: `${(b.city / max) * 100}%` }} />
+                {b.nat != null && <i className="cityview-bar-nat" style={{ width: `${(b.nat / max) * 100}%` }} />}
+              </span>
+              <span className="cityview-bar-val" role="cell">
+                {fmtPct(b.city * 100)}
+                {Number.isFinite(lq) && <small className={lq >= 1.15 ? 'up' : lq <= 0.87 ? 'down' : ''}>{lq.toFixed(1)}×</small>}
+              </span>
+            </div>
+          )
+        })}
+      </div>
+      <p className="cityview-foot">
+        {nat ? `× = city share ÷ national share (location quotient). National mix = all tiles' citizen classes${nat.employed ? `; classes cover ${fmtPct(Math.min(100, (nat.workers / nat.employed) * 100), 0)} of the employed` : ''}.` : 'National mix not available yet.'}
+      </p>
+      {src.length > 0 && <SourceChips ids={src} />}
+    </section>
+  )
+}
+
+// ---------------------------------------------------------------------------------------------
+// Industries
+// ---------------------------------------------------------------------------------------------
+
+function CityIndustries({ d, city }: { d: CountryData; city: City }) {
+  const inds = (city.industries ?? []).filter((r) => Number.isFinite(r.lq))
+  const src = metricSources(d, inds.map((r) => r.key))
+  if (!inds.length) {
+    return (
+      <section className="card" aria-label="Top industries">
+        <h3>Top industries</h3>
+        <p className="muted cityview-note">Industry employment by tile is still being built.</p>
+      </section>
+    )
+  }
+  const max = Math.max(2, ...inds.map((r) => r.lq)) * 1.05
+  return (
+    <section className="card" aria-label="Top industries">
+      <h3>Top industries</h3>
+      <p className="cityview-note muted">Most over-represented industries: share of jobs in the ring ÷ national share (location quotient).</p>
+      <ul className="cityview-inds">
+        {inds.map((r) => {
+          const meta = INDUSTRY[r.key] ?? { label: d.metricByKey.get(r.key)?.label ?? r.key.replace(/^emp_/, ''), icon: '•' }
+          return (
+            <li key={r.key} className="cityview-ind">
+              <div className="cityview-ind-top">
+                <span><span aria-hidden>{meta.icon}</span> {meta.label}</span>
+                <span className="cityview-ind-val"><b>{r.lq.toFixed(2)}×</b> <small className="muted">{fmtNumber(r.jobs)} jobs</small></span>
+              </div>
+              <div className="cityview-ind-track" aria-hidden>
+                <i style={{ width: `${(r.lq / max) * 100}%` }} className={r.lq >= 1 ? 'over' : 'under'} />
+                <b className="cityview-ind-one" style={{ left: `${(1 / max) * 100}%` }} />
+              </div>
+            </li>
+          )
+        })}
+      </ul>
+      <p className="cityview-foot">Dashed line = national average (1.0×).</p>
+      {src.length > 0 && <SourceChips ids={src} />}
+    </section>
+  )
+}
+
+// ---------------------------------------------------------------------------------------------
+// Districts & wonders
+// ---------------------------------------------------------------------------------------------
+
+function CityDistricts({ d, city, idx }: { d: CountryData; city: City; idx: IndexJson }) {
+  const counts = useMemo(() => {
+    const m = new Map<string, number>()
+    for (const t of city.tiles) if (t.district) m.set(t.district, (m.get(t.district) ?? 0) + 1)
+    for (const k of city.districts ?? []) if (k && !m.has(k)) m.set(k, 0)
+    return m
+  }, [city])
+  const codes = idx.districts.map((x) => x.code).filter((c) => counts.has(c))
+  for (const k of counts.keys()) if (!codes.includes(k)) codes.push(k)
+  const rules = new Map(idx.districts.map((x) => [x.code, x]))
+  const wonders = (city.wonders ?? []).map((name) => ({ name, w: d.wonders.find((w) => w.name === name) }))
+  const ring = new Set(city.tiles.map((t) => t.h3))
+
+  return (
+    <section className="card" aria-label="Districts and wonders">
+      <h3>Districts</h3>
+      {codes.length === 0 ? <p className="muted cityview-note">No districts in this ring yet.</p> : (
+        <ul className="cityview-dists">
+          {codes.map((c) => (
+            <li key={c}>
+              <details>
+                <summary title={rules.get(c)?.rule}>
+                  <span aria-hidden>{DISTRICT_META[c]?.icon ?? '•'}</span> {DISTRICT_META[c]?.label ?? rules.get(c)?.label ?? c}
+                  {(counts.get(c) ?? 0) > 1 && <small className="muted"> ×{counts.get(c)}</small>}
+                </summary>
+                <p>{rules.get(c)?.rule || 'Rule not documented.'}</p>
+              </details>
+            </li>
+          ))}
+        </ul>
+      )}
+      <h3 className="cityview-h3b">Wonders in the city</h3>
+      {wonders.length === 0 ? <p className="muted cityview-note">No wonders within the ring{d.wonders.length ? '' : ' (wonder data still building)'}.</p> : (
+        <ul className="cityview-wonders">
+          {wonders.map(({ name, w }) => (
+            <li key={name}>
+              <button
+                className="cityview-wonder"
+                disabled={!w?.h3 || !ring.has(w.h3)}
+                onClick={() => w && useStore.getState().select({ country: d.id, kind: 'hex', id: w.h3 })}
+                title={w ? `${w.category} #${w.rank}: ${w.rule}` : name}
+              >
+                <span aria-hidden>{w ? WONDER_ICON[w.category] ?? '★' : '★'}</span>
+                <span>{name}</span>
+                {w && <small className="muted">{w.category} #{w.rank}</small>}
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+    </section>
+  )
+}
+
+// ---------------------------------------------------------------------------------------------
+// Sister city
+// ---------------------------------------------------------------------------------------------
+
+function SisterCity({ app, d, city }: { app: AppData; d: CountryData; city: City }) {
+  const [by, setBy] = useState<'rank' | 'pop'>('rank')
+  const other: CountryId = d.id === 'lka' ? 'usa' : 'lka'
+  const od = app.countries[other]
+  const mine = citiesByPop(d)
+  const rank = mine.findIndex((c) => c.id === city.id)
+  const theirs = od ? citiesByPop(od) : []
+  let sister: City | null = null
+  if (theirs.length) {
+    if (by === 'rank') sister = theirs[Math.min(Math.max(rank, 0), theirs.length - 1)]
+    else {
+      const lp = Math.log(Math.max(1, city.pop))
+      sister = theirs.reduce((b, c) => (Math.abs(Math.log(Math.max(1, c.pop)) - lp) < Math.abs(Math.log(Math.max(1, b.pop)) - lp) ? c : b), theirs[0])
+    }
+  }
+
+  return (
+    <section className="card" aria-label="Sister city">
+      <div className="cityview-sister-head">
+        <h3>Sister city</h3>
+        <div className="cityview-seg small" role="group" aria-label="Match sister city by">
+          <button className={by === 'rank' ? 'active' : ''} aria-pressed={by === 'rank'} onClick={() => setBy('rank')}>Same rank</button>
+          <button className={by === 'pop' ? 'active' : ''} aria-pressed={by === 'pop'} onClick={() => setBy('pop')}>Closest population</button>
+        </div>
+      </div>
+      {!od ? <p className="muted cityview-note">Loading {COUNTRY_META[other].name}…</p> : !sister ? (
+        <p className="muted cityview-note">No cities for {COUNTRY_META[other].name} yet.</p>
+      ) : (
+        <SisterTable a={{ d, c: city }} b={{ d: od, c: sister }} />
+      )}
+      {sister && od && (
+        <button className="btn primary cityview-open" onClick={() => openCity(other, sister!)}>
+          Open {sister.name} →
+        </button>
+      )}
+    </section>
+  )
+}
+
+function SisterTable({ a, b }: { a: { d: CountryData; c: City }; b: { d: CountryData; c: City } }) {
+  const rankOf = (x: { d: CountryData; c: City }) => {
+    const s = citiesByPop(x.d)
+    return `#${s.findIndex((c) => c.id === x.c.id) + 1} of ${s.length}`
+  }
+  const cit = (x: City) => {
+    const t = topCitizen(x)
+    return t ? <><span aria-hidden>{CITIZEN_META[t.key]?.icon}</span> {CITIZEN_META[t.key]?.label ?? t.key} <small className="muted">{fmtPct(t.share * 100, 0)}</small></> : <span className="muted">–</span>
+  }
+  const ind = (x: City) => {
+    const t = (x.industries ?? [])[0]
+    return t ? <>{INDUSTRY[t.key]?.label ?? t.key} <small className="muted">{t.lq.toFixed(1)}×</small></> : <span className="muted">–</span>
+  }
+  const win = (va: number | null | undefined, vb: number | null | undefined, side: 'a' | 'b') => {
+    if (va == null || vb == null || !Number.isFinite(va) || !Number.isFinite(vb) || va === vb) return ''
+    return (side === 'a' ? va > vb : vb > va) ? 'lead' : ''
+  }
+  const rows: { k: string; label: ReactNode; a: ReactNode; b: ReactNode; va?: number | null; vb?: number | null }[] = [
+    { k: 'rank', label: 'Rank in country', a: rankOf(a), b: rankOf(b) },
+    { k: 'size', label: 'City size', a: <SizeBadge size={a.c.size} country={a.d.id} />, b: <SizeBadge size={b.c.size} country={b.d.id} />, va: a.c.size, vb: b.c.size },
+    { k: 'pop', label: 'Population (ring)', a: fmtNumber(a.c.pop), b: fmtNumber(b.c.pop), va: a.c.pop, vb: b.c.pop },
+    { k: 'gdppc', label: 'GDP per capita', a: fmtUsd(a.c.gdp_per_capita), b: fmtUsd(b.c.gdp_per_capita), va: a.c.gdp_per_capita, vb: b.c.gdp_per_capita },
+    ...YIELDS.map((y) => ({
+      k: y, label: <><YieldIcon y={y} size={13} /> {YIELD_META[y].label}</>, a: a.c.yields?.[y] ?? 0, b: b.c.yields?.[y] ?? 0, va: a.c.yields?.[y], vb: b.c.yields?.[y],
+    })),
+    { k: 'cit', label: 'Top citizen class', a: cit(a.c), b: cit(b.c) },
+    { k: 'ind', label: 'Top industry (LQ)', a: ind(a.c), b: ind(b.c) },
+  ]
+  return (
+    <table className="data cityview-sister">
+      <thead>
+        <tr>
+          <th scope="col"><span className="sr-only">Measure</span></th>
+          <th scope="col" className="num">{a.c.name} <CountryChip c={a.d.id} /></th>
+          <th scope="col" className="num">{b.c.name} <CountryChip c={b.d.id} /></th>
+        </tr>
+      </thead>
+      <tbody>
+        {rows.map((r) => (
+          <tr key={r.k}>
+            <th scope="row">{r.label}</th>
+            <td className={`num ${win(r.va, r.vb, 'a')}`}>{r.a}</td>
+            <td className={`num ${win(r.va, r.vb, 'b')}`}>{r.b}</td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  )
 }

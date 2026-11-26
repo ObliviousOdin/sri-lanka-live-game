@@ -17,6 +17,7 @@ Run:  python -m civmap.domains.infra      (builds lka + usa, then validates)
 from __future__ import annotations
 
 import json
+import re
 import time
 from pathlib import Path
 
@@ -220,7 +221,8 @@ METRICS = [
            "military installations / bases / airbases / naval bases, or that are operated by the Sri Lanka "
            "Army, Navy, Air Force or Armed Forces, with coordinates; historic forts, fortresses, citadels, "
            "universities, units, accidents and the civil Bandaranaike International Airport are excluded. "
-           "Coverage differs strongly (an official register vs. crowd-sourced data), so compare "
+           "Also items whose English label starts with SLAF/SLNS/SLN or ends with Garrison, Army Camp, Army Base, "
+           "Cantonment, Naval Base or Navy Camp. Coverage differs strongly (an official register vs. crowd-sourced data), so compare "
            "with care.", "neutral"),
     Metric("spaceports", "Spaceports and launch sites", "count", "infrastructure", "extensive", "none",
            "points_spaceports", ["wikidata"], "2026",
@@ -325,58 +327,99 @@ EIA_TECH_FUEL = {
 }
 
 
-def _wikidata_lka_plant_coords() -> dict[str, tuple[float, float]]:
-    # label-based lookup (the query resolves the QIDs)
-    q = """SELECT ?item ?itemLabel ?coord WHERE {
-      VALUES ?lab { "Thambapavani Wind Farm"@en "Uma Oya Hydropower Complex"@en }
-      ?item rdfs:label ?lab ; wdt:P625 ?coord .
+def _haversine_km(lat1, lon1, lat2, lon2):
+    a1, o1, a2, o2 = map(np.radians, [lat1, lon1, lat2, lon2])
+    h = np.sin((a2 - a1) / 2) ** 2 + np.cos(a1) * np.cos(a2) * np.sin((o2 - o1) / 2) ** 2
+    return 6371.0 * 2 * np.arcsin(np.sqrt(h))
+
+
+def _wikidata_lka_plants() -> pd.DataFrame:
+    """Power stations and dams in Sri Lanka with coordinates (Wikidata), one row per coordinate."""
+    q = """SELECT DISTINCT ?item ?itemLabel ?coord WHERE {
+      { ?item wdt:P31/wdt:P279* wd:Q159719 } UNION { ?item wdt:P31/wdt:P279* wd:Q12323 }
+      UNION { VALUES ?item { wd:Q28457473 } }
+      ?item wdt:P17 wd:Q854 ; wdt:P625 ?coord .
       SERVICE wikibase:label { bd:serviceParam wikibase:language "en". } }"""
-    d = util.sparql(q, "infra_lka_plant_coords")
-    return {r.itemLabel: _wkt(r.coord) + (_qid(r.item),) for r in d.itertuples()}
+    w = util.sparql(q, "infra_lka_plants_dams")
+    ll = [_wkt(c) for c in w.coord]
+    w["lat"] = [a for a, _ in ll]
+    w["lon"] = [b for _, b in ll]
+    w["qid"] = w["item"].map(_qid)
+    w["label"] = w.itemLabel.str.lower()
+    return w.sort_values(["qid", "lat"]).reset_index(drop=True)
+
+
+def _check_location(name: str, lat: float, lon: float, wd: pd.DataFrame, max_km: float = 20.0):
+    """GPPD coordinates are wrong for a few Sri Lankan hydro stations (e.g. Old Laxapana at 9.9N,
+    Polpitiya / Samanala swapped).  If every Wikidata power station / dam whose label matches the
+    plant name lies > max_km away, use the nearest matching Wikidata coordinate instead."""
+    low = name.lower()
+    cand = wd[wd.label.str.contains(low, regex=False)]
+    if cand.empty:
+        tok = low.split()[0]
+        if len(tok) >= 4:
+            cand = wd[wd.label.str.contains(tok, regex=False)]
+    if cand.empty:
+        return lat, lon, "wri_gppd", ""
+    d = _haversine_km(lat, lon, cand.lat.to_numpy(), cand.lon.to_numpy())
+    i = int(np.argmin(d))
+    if d[i] <= max_km:
+        return lat, lon, "wri_gppd", ""
+    c = cand.iloc[i]
+    return (float(c.lat), float(c.lon), "wikidata",
+            f"GPPD coordinate ({lat:.4f}, {lon:.4f}) is {d[i]:.0f} km from Wikidata '{c.itemLabel}' ({c.qid}); Wikidata used")
 
 
 def power_plants_lka() -> pd.DataFrame:
     p = fetch(GPPD_URL, "wri_gppd", "infra/gppd")
     g = pd.read_csv(p, low_memory=False)
     g = g[g.country == "LKA"].copy()
+    wd = _wikidata_lka_plants()
+    fixed = [_check_location(r.name, r.latitude, r.longitude, wd) for r in g.itertuples()]
+    g["lat"] = [f[0] for f in fixed]
+    g["lon"] = [f[1] for f in fixed]
+    g["loc_src"] = [f[2] for f in fixed]
+    g["loc_note"] = [f[3] for f in fixed]
     used: set[str] = set()
     rows = []
-    wd = _wikidata_lka_plant_coords()
     for name, gnames, cap, gen, fuel, note in CEB_2023:
         hit = g[g.name.isin(gnames)]
         if len(hit):
-            lat, lon = float(hit.latitude.mean()), float(hit.longitude.mean())
-            gid = "|".join(hit.gppd_idnr)
+            lat, lon = float(hit.lat.mean()), float(hit.lon.mean())
+            ref = "|".join(hit.gppd_idnr)
             cy = hit.commissioning_year.dropna()
             cyear = float(cy.min()) if len(cy) else np.nan
-            loc_src = "wri_gppd"
-        else:
-            key = "Thambapavani Wind Farm" if "Thambapavani" in name else name
-            lat, lon, qid = wd[key]
-            gid, cyear, loc_src = qid, np.nan, "wikidata"
+            loc_src = "|".join(sorted(set(hit.loc_src)))
+            note = "; ".join([x for x in [note] + list(hit.loc_note) if x])
+        else:  # not in GPPD (Thambapavani / Mannar wind, commissioned 2020-21): Wikidata location
+            c = wd[wd.label == "thambapavani wind farm"].iloc[0]
+            lat, lon, ref, cyear, loc_src = float(c.lat), float(c.lon), c.qid, np.nan, "wikidata"
         used |= set(gnames)
         rows.append(dict(id=f"lk_ceb_{len(rows):02d}", name=name, lat=lat, lon=lon, primary_fuel=fuel,
                          power_capacity_mw=cap, generation_gwh=gen, generation_year=2023,
                          generation_basis="reported net generation (CEB Annual Report 2023)",
                          commissioning_year=cyear, owner="Ceylon Electricity Board",
                          capacity_source="ceb_annual_report_2023", location_source=loc_src,
-                         source_ref=gid, note=note))
+                         source_ref=ref, note=note))
     for name, cap, fuel, year, note in CEB_LATER:
-        lat, lon, qid = wd["Uma Oya Hydropower Complex"]
-        rows.append(dict(id=f"lk_ceb_{len(rows):02d}", name=name, lat=lat, lon=lon, primary_fuel=fuel,
-                         power_capacity_mw=cap, generation_gwh=np.nan, generation_year=np.nan,
+        # Wikidata 'Uma Oya Hydropower Complex' (Q28457473) carries two coordinates (headworks at
+        # Puhulpola 6.91N 80.93E and the tunnel outlet / power-house end 6.80N 81.07E): the southern
+        # one is used for the power station.
+        c = wd[wd.qid == "Q28457473"].sort_values("lat").iloc[0]
+        rows.append(dict(id=f"lk_ceb_{len(rows):02d}", name=name, lat=float(c.lat), lon=float(c.lon),
+                         primary_fuel=fuel, power_capacity_mw=cap, generation_gwh=np.nan, generation_year=np.nan,
                          generation_basis="not published", commissioning_year=year,
                          owner="Ceylon Electricity Board", capacity_source="ceb_annual_report_2023",
-                         location_source="wikidata", source_ref=qid, note=note))
+                         location_source="wikidata", source_ref=c.qid, note=note))
     rest = g[~g.name.isin(used) & ~g.name.isin(GPPD_RETIRED_LKA)]
     for r in rest.itertuples():
-        rows.append(dict(id=r.gppd_idnr, name=r.name, lat=r.latitude, lon=r.longitude, primary_fuel=r.primary_fuel,
+        rows.append(dict(id=r.gppd_idnr, name=r.name, lat=r.lat, lon=r.lon, primary_fuel=r.primary_fuel,
                          power_capacity_mw=r.capacity_mw, generation_gwh=r.estimated_generation_gwh_2017,
                          generation_year=2017,
                          generation_basis=f"estimated (GPPD v1.3.0 {r.estimated_generation_note_2017})",
                          commissioning_year=r.commissioning_year, owner=r.owner if isinstance(r.owner, str) else "",
-                         capacity_source="wri_gppd", location_source="wri_gppd", source_ref=r.gppd_idnr,
-                         note=f"GPPD source: {r.source}"))
+                         capacity_source="wri_gppd", location_source=r.loc_src, source_ref=r.gppd_idnr,
+                         note="; ".join(x for x in [f"GPPD source: {r.source}", r.loc_note] if x)))
     df = pd.DataFrame(rows)
     df["renewable_capacity_mw"] = np.where(df.primary_fuel.isin(RENEWABLE_FUELS), df.power_capacity_mw, 0.0)
     return df
@@ -646,8 +689,17 @@ def military_lka() -> pd.DataFrame:
       OPTIONAL { ?item wdt:P31 ?t . ?t rdfs:label ?tl . FILTER(lang(?tl)='en') }
       SERVICE wikibase:label { bd:serviceParam wikibase:language "en". }
     } GROUP BY ?item ?itemLabel ?coord""" % forces
-    d = pd.concat([util.sparql(q1, "infra_lka_military_cls"), util.sparql(q2, "infra_lka_military_ops")],
-                  ignore_index=True)
+    q3 = """SELECT ?item ?itemLabel ?coord (GROUP_CONCAT(DISTINCT ?tl; separator="; ") AS ?types) WHERE {
+      ?item wdt:P17 wd:Q854 ; wdt:P625 ?coord ; rdfs:label ?l .
+      FILTER(lang(?l)='en' && REGEX(?l, "^(SLNS |SLN |SLAF )|(Garrison|Army Camp|Army Base|Cantonment|Naval Base|Navy Camp)$"))
+      FILTER NOT EXISTS { ?item wdt:P576 [] }
+      OPTIONAL { ?item wdt:P31 ?t . ?t rdfs:label ?tl . FILTER(lang(?tl)='en') }
+      SERVICE wikibase:label { bd:serviceParam wikibase:language "en". }
+    } GROUP BY ?item ?itemLabel ?coord"""
+    d = pd.concat([util.sparql(q1, "infra_lka_military_cls"), util.sparql(q2, "infra_lka_military_ops"),
+                   util.sparql(q3, "infra_lka_military_labels")], ignore_index=True)
+    if "ops" not in d.columns:
+        d["ops"] = ""
     d["qid"] = d["item"].map(_qid)
     d["types"] = d["types"].fillna("")
     d["ops"] = d["ops"].fillna("")
@@ -658,7 +710,10 @@ def military_lka() -> pd.DataFrame:
     for r in d.itertuples():
         types = {t.strip() for t in r.types.split(";") if t.strip()}
         lab = r.itemLabel.lower()
-        if types & MIL_EXCLUDE_TYPES or "shootdown" in lab or "crash" in lab:
+        # historic colonial forts (labels '... fort' / 'Fort ...') and former sites ('Old ...') are not
+        # military installations today even when Wikidata types them as 'military base'
+        if (types & MIL_EXCLUDE_TYPES or "shootdown" in lab or "crash" in lab
+                or re.search(r"\bfort\b", lab) or lab.startswith("old ")):
             continue
         ops = [LKA_FORCES.get(_qid(o)) for o in r.ops.split()]
         ops = [o for o in ops if o]
@@ -786,7 +841,7 @@ def build_industrial_zones(country: str) -> pd.DataFrame:
                 r.get("category") == "place" and "export processing zone" in low)
             if not okcat or not any(p in low for p in IZ_PATTERNS) or low in IZ_PATTERNS:
                 continue
-            key = low.replace("(boi)", "").replace("boi -", "").strip()
+            key = low.replace("(boi)", "").replace("boi -", "").replace("promotion", "processing").strip()
             hits.append(dict(key=key, name=nm.replace(" (BOI)", ""), lat=float(r["lat"]), lon=float(r["lon"]),
                              osm=f"{r['osm_type']}/{r['osm_id']}", cls=cat))
     h = pd.DataFrame(hits).drop_duplicates("osm")
