@@ -163,9 +163,9 @@ _US_GDP_METHOD = (
     "iterative proportional fitting within each state, seeded with ACS {acs} 5-year C24030 employment "
     "of the matching industry (+1). Margins: every disclosed county aggregate (lines 2, 91, 92, 87, 12, "
     "50, 59, 68, 75, 88, 89, 90, minus its disclosed leaves) and every state leaf total (state value "
-    "minus disclosed counties). Disclosed county aggregates are reproduced to within BEA's own rounding "
-    "(a few $ thousand) and state industry totals to within 0.02 % (see report.json); national sector "
-    "totals equal the sum of BEA state rows. BEA combination areas "
+    "minus disclosed counties). Disclosed county aggregates are reproduced to within BEA's own $1-4 "
+    "thousand rounding except a handful of counties (worst 0.06 %, Los Alamos NM line 59) and state industry totals to within 0.02 % (exact figures in "
+    "report.json); national sector totals equal the sum of BEA state rows. BEA combination areas "
     "(23 Virginia county + independent-city combinations, Maui + Kalawao) are split to Census 2023 "
     "counties pro rata to 2023 population (Census PEP vintage 2023). Totals are the sum of the 50 states "
     "+ DC; BEA's US row also includes overseas federal government activity (the whole ~0.55 % gap is in "
@@ -820,11 +820,17 @@ def build_usa() -> dict:
     S2.index = S2.index.str[:2]
     rel = ((st_sum[lines] - S2[lines]).abs() / S2[lines].abs().clip(lower=1)).max()
     # disclosed county aggregates vs the sum of their (partly estimated) leaves, $ thousands
-    agg_dev = {agg: float((V.loc[V0[agg].notna(), leaves].sum(axis=1) - V0.loc[V0[agg].notna(), agg]).abs().max())
-               for agg, leaves in AGGREGATES.items()}
+    agg_dev, agg_rel = {}, {}
+    for agg, leaves in AGGREGATES.items():
+        known = V0[agg].notna()
+        dv = (V.loc[known, leaves].sum(axis=1) - V0.loc[known, agg]).abs()
+        agg_dev[agg] = float(dv.max())
+        # beyond BEA's own rounding (published leaves rarely add to the aggregate by up to $4k)
+        agg_rel[agg] = float((dv.where(dv > 4, 0.0) / V0.loc[known, agg].abs().clip(lower=1)).max())
     fill["max_state_rel_deviation_pct"] = round(100 * float(rel.max()), 4)
     fill["max_state_rel_deviation_line"] = int(rel.idxmax())
     fill["max_county_aggregate_deviation_kusd"] = round(max(agg_dev.values()), 1)
+    fill["max_county_aggregate_rel_deviation_pct"] = round(100 * max(agg_rel.values()), 4)
     if rel.max() > 2e-4:
         raise RuntimeError(f"BEA fill: state totals off by {100 * rel.max():.3f} % (line {rel.idxmax()})")
     print(f"  BEA {US_YEAR}: {fill}")

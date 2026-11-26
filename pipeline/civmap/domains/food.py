@@ -776,7 +776,7 @@ def _lka_province_targets() -> tuple[dict[str, float], dict]:
             "quoted_agri_share_pct": {prov[pk]: 100 * v for (s, pk), v in q.items() if s == "agri"}}
     # The article ranks NW, Central, Southern as the top three agriculture provinces, so Western must be
     # below Southern's 11.8 %; the residual carries ~1 pp rounding error (shares are quoted to 0.1 pp).
-    cap = q[("agri", "southern")] - 0.001
+    cap = q[("agri", "southern")] - 0.001     # i.e. at most 11.7 %
     targets[prov["western"]] = min(w, cap)
     info["western_agri_share_used_pct"] = round(100 * targets[prov["western"]], 2)
     return targets, info
@@ -828,7 +828,7 @@ def build_lka() -> dict:
     rate = util.lkr_per_usd(LKA_YEAR)
     out = pd.DataFrame(index=idx_d.index)
     out["ag_gva_usd"] = (gva_d * 1e6 / rate).round(0)
-    out["paddy_t"] = t["paddy"].paddy_t
+    out["paddy_t"] = t["paddy"].paddy_t.round(0)
     out["tea_ha"] = t["tree"].tea_ha.round(1)
     out["rubber_ha"] = t["tree"].rubber_ha.round(1)
     out["coconut_ha"] = t["tree"].coconut_ha.round(1)
@@ -853,5 +853,322 @@ def build_lka() -> dict:
         "fao_aquaculture_t_wb": util.wb_value("ER.FSH.AQUA.MT", "LKA", LKA_YEAR),
         **{k: v for k, v in checks.items() if k != "gva_components_rs_mn"},
         "gva_components_rs_mn": checks["gva_components_rs_mn"],
+    }
+    return rep
+
+
+# ---------------------------------------------------------------------------------------------
+# United States - Census of Agriculture 2022 county tables (text volumes)
+# ---------------------------------------------------------------------------------------------
+
+def _us_key(name: str) -> str:
+    s = unicodedata.normalize("NFKD", str(name)).encode("ascii", "ignore").decode().lower().strip()
+    s = re.sub(r"\bsaint\b", "st", s)
+    for suf in (" city and borough", " census area", " planning region", " municipality", " county",
+                " parish", " borough"):
+        if s.endswith(suf):
+            s = s[: -len(suf)]
+            break
+    return re.sub(r"[^a-z]", "", s)
+
+
+def _coa_value(tok: str) -> float:
+    """Census of Agriculture cell -> number; (D) -> NaN (withheld), '-' / (Z) -> 0, (NA)/(X) -> NaN."""
+    if tok in ("-", "(Z)"):
+        return 0.0
+    if tok.startswith("("):
+        return np.nan
+    return float(tok.replace(",", ""))
+
+
+def _coa_text(state_fips: str, state_name: str, abbr: str) -> str:
+    folder = state_name.replace(" ", "_")
+    url = f"{NASS}{folder}/{abbr.lower()}v1.txt"
+    p = fetch(url, "usda_coa2022", "usa/agcensus2022", f"{abbr.lower()}v1.txt", timeout=600)
+    return p.read_text(encoding="latin-1")
+
+
+def _coa_pages(text: str, title: str) -> list[str]:
+    parts = re.split(r"\n(?=Table \d+\.\s)", text)
+    return [p for p in parts if p.startswith(title)]
+
+
+T1_ITEMS = {("Farms", "number"): "farms", ("Total cropland", "farms"): "crop_farms",
+            ("Total cropland", "acres"): "cropland_ac",
+            ("Market value of agricultural products sold", "$1,000"): "sales_k"}
+
+
+def _coa_table1(text: str) -> tuple[pd.DataFrame, list[str]]:
+    """County Summary Highlights -> DataFrame indexed by column name (first column = state)."""
+    pages = _coa_pages(text, "Table 1.  County Summary Highlights")
+    if not pages:
+        raise ValueError("Census of Agriculture: Table 1 County Summary Highlights not found")
+    cols: list[str] = []
+    data: dict[str, list[float]] = {v: [] for v in T1_ITEMS.values()}
+    for pg in pages:
+        lines = pg.splitlines()
+        hi = next(i for i, l in enumerate(lines) if re.match(r"\s+Item\s+:", l))
+        names = [x.strip() for x in lines[hi].split(":")[1:]]
+        names = [n for n in names if n]
+        got: dict[str, list[float]] = {}
+        item = ""
+        for l in lines[hi + 1:]:
+            if ":" not in l:
+                continue
+            lab, rest = l.split(":", 1)
+            toks = rest.split()
+            if not lab.strip():
+                continue
+            m = re.match(r"^\s*(.*?)\s*\.{2,}\s*([^.]*)$", lab)
+            if m:
+                item, unit = m.group(1).strip() or item, m.group(2).strip()
+            else:
+                if re.search(r"\.\.", lab) is None and lab.strip() and not re.match(r"^\s{20,}\S+$", lab):
+                    item = lab.strip()       # section headers ('Livestock and poultry')
+                    continue
+                unit = lab.strip()
+            key = T1_ITEMS.get((item, unit))
+            if key and key not in got and len(toks) == len(names):
+                got[key] = [_coa_value(t) for t in toks]
+        missing = set(T1_ITEMS.values()) - set(got)
+        if missing:
+            raise ValueError(f"Census of Agriculture Table 1 page {names[:2]}: items not parsed {missing}")
+        cols += names
+        for k in data:
+            data[k] += got[k]
+    df = pd.DataFrame(data)
+    df["name"] = cols
+    return df, cols
+
+
+def _coa_table30(text: str) -> tuple[dict, dict]:
+    """Land in Orchards -> ({county name: (farms, acres)}, state (farms, acres)) for 2022."""
+    pages = _coa_pages(text, "Table 30.  Land in Orchards")
+    counties, state = {}, None
+    for pg in pages:
+        section = None
+        for l in pg.splitlines():
+            if l.startswith("State Total"):
+                section = "state"
+            elif l.startswith("Counties"):
+                section = "county"
+            m = re.match(r"^(\S.*?)\s*\.{2,}\s*:\s*(.*)$", l)
+            if not m or section is None:
+                continue
+            toks = m.group(2).split()
+            if len(toks) < 2:
+                continue
+            v = (_coa_value(toks[0]), _coa_value(toks[1]))
+            if section == "state" and state is None:
+                state = v
+            elif section == "county":
+                counties[m.group(1).strip()] = v
+    if state is None:
+        raise ValueError("Census of Agriculture Table 30: state row not found")
+    return counties, state
+
+
+def _fill_withheld(values: pd.Series, proxy: pd.Series, state_total: float) -> tuple[pd.Series, int]:
+    """Replace NaN (withheld) county values by the state residual shared in proportion to `proxy`."""
+    v = values.copy()
+    w = v.isna()
+    if not w.any():
+        return v, 0
+    resid = max(0.0, state_total - float(v[~w].sum()))
+    px = proxy[w].fillna(0.0).clip(lower=0)
+    if px.sum() <= 0:
+        px = pd.Series(1.0, index=px.index)
+    v[w] = resid * px / px.sum()
+    return v, int(w.sum())
+
+
+def _us_cropland_by_county() -> pd.Series:
+    """ESA WorldCover cropland km2 per county (terrain domain hex table x core pieces)."""
+    from civmap.config import INTERIM
+    pieces = load_pieces("usa")
+    f = INTERIM / "usa" / "terrain" / "hex.csv"
+    if f.exists():
+        hx = pd.read_csv(f, usecols=["h3", "cropland_km2"]).set_index("h3").cropland_km2
+        hl = pieces.groupby("h3").land_km2.sum()
+        crop = pieces.h3.map(hx).fillna(0.0) * pieces.land_km2 / pieces.h3.map(hl).clip(lower=1e-9)
+    else:
+        print("  warn: terrain hex.csv missing - Alaska/Connecticut splits fall back to land area")
+        crop = pieces.land_km2
+    pieces = pieces.assign(crop=crop)
+    return pieces.groupby("adm2").crop.sum(), pieces
+
+
+def _ct_weights(pieces: pd.DataFrame) -> pd.DataFrame:
+    """Cropland in each (former CT county x planning region) cell -> DataFrame old_name x region GEOID."""
+    z = fetch(URL["cb2021"], "census_cb_2021", "usa/boundaries")
+    old = gpd.read_file(unzip(z, ".shp"))
+    old = old[old.STATEFP == "09"][["NAME", "geometry"]].to_crs(4326)
+    regions = load_admin("usa", "adm2")
+    regions = regions[regions.admin_id.str.startswith("09")].set_index("admin_id")
+    pc = pieces[pieces.adm2.str.startswith("09")].copy()
+    polys = []
+    for c, r in zip(pc.h3, pc.adm2):
+        hexpoly = Polygon([(lo, la) for la, lo in h3.cell_to_boundary(c)])
+        polys.append(hexpoly.intersection(regions.geometry[r]))
+    g = gpd.GeoDataFrame(pc[["h3", "adm2", "crop", "land_km2"]].reset_index(drop=True), geometry=polys, crs=4326)
+    g = g.to_crs(5070)
+    g["a0"] = g.area
+    g["pid"] = np.arange(len(g))
+    ov = gpd.overlay(g, old.to_crs(5070), how="intersection", keep_geom_type=True)
+    ov["frac"] = ov.area / ov.a0.where(ov.a0 > 0, np.nan)
+    ov["w_crop"] = ov.crop * ov.frac
+    ov["w_land"] = ov.land_km2 * ov.frac
+    w = ov.groupby(["NAME", "adm2"])[["w_crop", "w_land"]].sum().reset_index()
+    return w
+
+
+def _us_coa() -> tuple[pd.DataFrame, dict]:
+    """County farms, sales, cropland, orchards (2022) for all 50 states, on Census 2023 counties."""
+    states = load_admin("usa", "adm1").set_index("admin_id")
+    counties = load_admin("usa", "adm2")
+    crop_cty, pieces = _us_cropland_by_county()
+    rows = []
+    info = {"withheld_filled": {}, "unmatched_census_counties_zero": [], "state_sales_k": {}}
+    for fips in US_STATE_FIPS:
+        if fips == "11":
+            continue            # DC has no Census of Agriculture county volume
+        st = states.loc[fips]
+        text = _coa_text(fips, st["name"], st["abbr"])
+        t1, cols = _coa_table1(text)
+        orch, orch_state = _coa_table30(text)
+        state_row = t1.iloc[0]
+        cty = t1.iloc[1:].copy()
+        cty["orch_farms"] = [orch.get(n, (np.nan, np.nan))[0] for n in cty.name]
+        cty["orchard_ac"] = [orch.get(n, (np.nan, np.nan))[1] for n in cty.name]
+        lost = [n for n in cty.name if n not in orch]
+        if lost:
+            raise ValueError(f"{st['abbr']}: Table 30 has no row for {lost[:5]}")
+        tot = {"sales_k": state_row.sales_k, "cropland_ac": state_row.cropland_ac, "orchard_ac": orch_state[1]}
+        nfill = {}
+        cty = cty.set_index("name")
+        for col, proxy in (("sales_k", "farms"), ("cropland_ac", "crop_farms"), ("orchard_ac", "orch_farms")):
+            cty[col], nfill[col] = _fill_withheld(cty[col], cty[proxy], tot[col])
+        info["withheld_filled"][st["abbr"]] = nfill
+        info["state_sales_k"][st["abbr"]] = float(tot["sales_k"])
+        mine = counties[counties.parent_id == fips]
+        if fips == "02":
+            # 5 agricultural census districts with unpublished borough composition: state total -> boroughs
+            w = crop_cty.reindex(mine.admin_id).fillna(0.0)
+            w = w / w.sum()
+            for gid, wi in w.items():
+                rows.append({"admin_id": gid, **{c: tot[c] * wi for c in ("sales_k", "cropland_ac", "orchard_ac")}})
+            continue
+        if fips == "09":
+            cw = _ct_weights(pieces)
+            for oname, r in cty.iterrows():
+                sub = cw[cw.NAME.str.lower() == oname.lower()]
+                if sub.empty:
+                    raise ValueError(f"CT: former county {oname} not found in cb_2021")
+                ww = sub.w_crop if sub.w_crop.sum() > 0 else sub.w_land
+                for gid, wi in zip(sub.adm2, ww / ww.sum()):
+                    rows.append({"admin_id": gid, **{c: r[c] * wi for c in ("sales_k", "cropland_ac", "orchard_ac")}})
+            continue
+        idx: dict[str, str] = {}
+        for gid, nm in zip(mine.admin_id, mine.name):
+            idx.setdefault(_us_key(nm), gid)
+        used = set()
+        for nm, r in cty.iterrows():
+            k = _us_key(nm)
+            gid = idx.get(k) or idx.get(k + "city")
+            if gid is None or gid in used:
+                raise ValueError(f"{st['abbr']}: Census of Agriculture county {nm!r} not matched")
+            used.add(gid)
+            rows.append({"admin_id": gid, **{c: r[c] for c in ("sales_k", "cropland_ac", "orchard_ac")}})
+        for gid, nm in zip(mine.admin_id, mine.name):
+            if gid not in used:
+                info["unmatched_census_counties_zero"].append(f"{gid} {nm}")
+                rows.append({"admin_id": gid, "sales_k": 0.0, "cropland_ac": 0.0, "orchard_ac": 0.0})
+    d = pd.DataFrame(rows).groupby("admin_id").sum()
+    return d, info
+
+
+def _us_state_gdp() -> pd.DataFrame:
+    z = fetch(URL["sagdp"], "bea_sagdp2", "usa/bea")
+    f = unzip(z, f"SAGDP2__ALL_AREAS_1997_{US_GDP_YEAR}.csv")
+    d = pd.read_csv(f, dtype=str, encoding="latin-1")
+    d["fips"] = d.GeoFIPS.str.strip().str.strip('"').str[:2]
+    d = d[d.GeoFIPS.str.strip().str.strip('"').str[2:] == "000"]
+    d = d[d.fips.isin(US_STATE_FIPS)]
+    out = {}
+    for line, key in ((3, "naics11"), (4, "farms"), (5, "forfish")):
+        r = d[d.LineCode.str.strip() == str(line)].set_index("fips")[str(US_GDP_YEAR)]
+        out[key] = pd.to_numeric(r, errors="coerce") * 1e6
+    out = pd.DataFrame(out)
+    if out.isna().any().any():
+        raise ValueError(f"SAGDP2 {US_GDP_YEAR}: missing values {out[out.isna().any(axis=1)].index.tolist()}")
+    gap = (out.farms + out.forfish - out.naics11).abs().max()
+    if gap > 2e5:
+        raise ValueError(f"SAGDP2: line 4 + line 5 != line 3 (max gap {gap:,.0f})")
+    us = d[d.fips == "00"]
+    return out
+
+
+def _us_fish() -> tuple[pd.DataFrame, dict]:
+    q = json.dumps({"year": US_FISH_YEAR, "collection": "Commercial"}, separators=(",", ":"))
+    p = fetch(URL["foss"], "noaa_foss_landings", "usa/noaa_foss", f"foss_commercial_{US_FISH_YEAR}.json",
+              params={"q": q, "limit": 10000})
+    js = json.loads(p.read_text())
+    if js.get("hasMore"):
+        raise ValueError("FOSS: more than 10,000 rows - add paging")
+    it = pd.DataFrame(js["items"])
+    it["state"] = it.state_name.str.replace(r"-(EAST|WEST)$", "", regex=True).str.title()
+    states = load_admin("usa", "adm1")
+    by_name = {n.upper(): i for i, n in zip(states.admin_id, states.name)}
+    it["fips"] = it.state.str.upper().map(by_name)
+    unk = sorted(set(it.loc[it.fips.isna(), "state_name"]))
+    agg = it.dropna(subset=["fips"]).groupby("fips").agg(lb=("pounds", "sum"), usd=("dollars", "sum"))
+    out = pd.DataFrame(index=states.admin_id)
+    out["fish_catch_t"] = (agg.lb.reindex(out.index).fillna(0.0) * LB_T).round(1)
+    out["fish_value_usd"] = agg.usd.reindex(out.index).fillna(0.0).round(0)
+    out.index.name = "admin_id"
+    pas = it[it.state_name == "PROCESS AT SEA"]
+    chk = {"landings_states_t": float(out.fish_catch_t.sum()), "value_states_usd": float(out.fish_value_usd.sum()),
+           "process_at_sea_t": float(pas.pounds.sum() * LB_T), "process_at_sea_usd": float(pas.dollars.sum()),
+           "not_attributed_state_names": unk}
+    return out, chk
+
+
+def build_usa() -> dict:
+    cc = "usa"
+    coa, cinfo = _us_coa()
+    gdp = _us_state_gdp()
+    counties = load_admin(cc, "adm2").set_index("admin_id")
+    coa = coa.reindex(counties.index)
+    acs = util.acs_table("C24030", ACS_YEAR)
+    emp = (acs["C24030_E004"] + acs["C24030_E031"]).reindex(counties.index).fillna(0.0)
+    st = pd.Series(counties.index.str[:2], index=counties.index)
+    sales = coa.sales_k.fillna(0.0) * 1000.0
+    # DC: no farms tabulated - its (tiny) BEA farm GDP goes to its single county
+    sales_share = sales / sales.groupby(st).transform("sum")
+    sales_share[st == "11"] = 1.0
+    emp_share = emp / emp.groupby(st).transform("sum")
+    emp_share = emp_share.fillna(sales_share)
+    gva = st.map(gdp.farms) * sales_share.fillna(0.0) + st.map(gdp.forfish) * emp_share.fillna(0.0)
+    out = pd.DataFrame(index=counties.index)
+    out["ag_gva_usd"] = gva.round(0)
+    out["ag_sales_usd"] = sales.where(st != "11").round(0)
+    out["tree_crop_share"] = (100 * coa.orchard_ac / coa.cropland_ac.where(coa.cropland_ac > 0)).clip(upper=100).round(2)
+    out.index.name = "admin_id"
+    util.write_admin(cc, DOMAIN, "adm2", out.reset_index())
+    fish, fchk = _us_fish()
+    util.write_admin(cc, DOMAIN, "adm1", fish.reset_index())
+    wb_ag = util.wb_value("NV.AGR.TOTL.CD", "USA")
+    rep = {
+        "gdp_year": US_GDP_YEAR,
+        "ag_gva_usd_total": float(out.ag_gva_usd.sum()),
+        "bea_states_naics11_usd": float(gdp.naics11.sum()),
+        "bea_farms_usd": float(gdp.farms.sum()), "bea_forestry_fishing_usd": float(gdp.forfish.sum()),
+        "worldbank_ag_va_usd_latest": wb_ag,
+        "ag_sales_usd_total": float(out.ag_sales_usd.sum()),
+        "coa_state_sales_sum_usd": 1000.0 * sum(cinfo["state_sales_k"].values()),
+        "orchard_acres_total": float(coa.orchard_ac.sum()), "cropland_acres_total": float(coa.cropland_ac.sum()),
+        "coa": {k: v for k, v in cinfo.items() if k != "state_sales_k"},
+        "fish": fchk,
+        "fao_capture_t_wb": util.wb_value("ER.FSH.CAPT.MT", "USA", US_FISH_YEAR),
     }
     return rep
