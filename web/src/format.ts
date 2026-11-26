@@ -1,0 +1,50 @@
+// Number formatting helpers
+
+const compact = new Intl.NumberFormat('en-US', { notation: 'compact', maximumSignificantDigits: 3 })
+const plain = new Intl.NumberFormat('en-US', { maximumFractionDigits: 1 })
+const int = new Intl.NumberFormat('en-US', { maximumFractionDigits: 0 })
+
+export function fmtNumber(v: number | null | undefined, digits = 3): string {
+  if (v == null || !Number.isFinite(v)) return '–'
+  const a = Math.abs(v)
+  if (a >= 10000) return compact.format(v)
+  if (a >= 100) return int.format(v)
+  if (a >= 1) return plain.format(v)
+  if (a === 0) return '0'
+  return v.toPrecision(Math.max(1, digits - 1))
+}
+
+export function fmtUsd(v: number | null | undefined): string {
+  if (v == null || !Number.isFinite(v)) return '–'
+  const a = Math.abs(v)
+  if (a >= 1e12) return `$${(v / 1e12).toPrecision(3)}T`
+  if (a >= 1e9) return `$${(v / 1e9).toPrecision(3)}B`
+  if (a >= 1e6) return `$${(v / 1e6).toPrecision(3)}M`
+  if (a >= 1e3) return `$${(v / 1e3).toPrecision(3)}k`
+  return `$${v.toFixed(0)}`
+}
+
+export function fmtPct(v: number | null | undefined, digits = 1): string {
+  if (v == null || !Number.isFinite(v)) return '–'
+  return `${v.toFixed(digits)}%`
+}
+
+/** Format a metric value according to its unit string. */
+export function fmtUnit(v: number | null | undefined, unit: string): string {
+  if (v == null || !Number.isFinite(v)) return '–'
+  const u = unit.toLowerCase()
+  if (u === 'usd' || u.startsWith('usd') || u.startsWith('us$')) return fmtUsd(v) + (u.includes('/') ? ` ${unit.slice(unit.indexOf('/'))}` : '')
+  if (u === '%' || u === 'percent' || u === 'pct') return fmtPct(v)
+  if (u === 'fraction' || u === '0-1' || u === 'share') return fmtPct(v * 100)
+  if (u === 'persons' || u === 'count' || u === 'people') return fmtNumber(v)
+  return `${fmtNumber(v)} ${unit}`
+}
+
+export function fmtInt(v: number | null | undefined) {
+  if (v == null || !Number.isFinite(v)) return '–'
+  return int.format(v)
+}
+
+export function fmtArea(km2: number) {
+  return `${fmtNumber(km2)} km²`
+}

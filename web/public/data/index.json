@@ -1,0 +1,237 @@
+{
+ "built_at": "2026-11-26T22:15:12+00:00",
+ "countries": [
+  {
+   "id": "lka",
+   "name": "Sri Lanka",
+   "h3_res": 6,
+   "admin_levels": {
+    "adm1": "Province",
+    "adm2": "District",
+    "adm3": "DS Division"
+   }
+  },
+  {
+   "id": "usa",
+   "name": "United States",
+   "h3_res": 5,
+   "admin_levels": {
+    "adm1": "State",
+    "adm2": "County"
+   }
+  }
+ ],
+ "yields": [
+  "gold",
+  "production",
+  "food",
+  "science",
+  "culture",
+  "faith"
+ ],
+ "yield_scale": {
+  "cap": 12,
+  "bases": {
+   "gold": {
+    "metric": "gdp_usd",
+    "base": 100000.0,
+    "unit": "US$ GDP per km\u00b2"
+   },
+   "production": {
+    "metric": "gdp_industry_usd",
+    "base": 30000.0,
+    "unit": "US$ industrial GVA per km\u00b2"
+   },
+   "food": {
+    "metric": "ag_gva_usd",
+    "base": 3000.0,
+    "unit": "US$ agricultural GVA per km\u00b2"
+   },
+   "food_sea": {
+    "metric": "fish_catch_t",
+    "base": 0.1,
+    "unit": "tonnes of fish landed per km\u00b2 of sea"
+   },
+   "science": {
+    "metric": "cit_engineers",
+    "base": 0.1,
+    "unit": "STEM workers per km\u00b2"
+   },
+   "culture": {
+    "metric": "emp_arts_accommodation",
+    "base": 0.3,
+    "unit": "arts, recreation & hospitality workers per km\u00b2"
+   },
+   "faith": {
+    "metric": "worship_sites",
+    "base": 0.003,
+    "unit": "places of worship per km\u00b2"
+   }
+  },
+  "power_bonus": [
+   [
+    100,
+    1
+   ],
+   [
+    1000,
+    2
+   ],
+   [
+    3000,
+    3
+   ]
+  ],
+  "research_bonus": [
+   [
+    1000,
+    1
+   ],
+   [
+    10000,
+    2
+   ],
+   [
+    50000,
+    3
+   ]
+  ]
+ },
+ "terrain": {
+  "ocean": "Ocean",
+  "coast": "Coast",
+  "lake": "Lake",
+  "grassland": "Grassland",
+  "plains": "Plains",
+  "desert": "Desert",
+  "tundra": "Tundra",
+  "snow": "Snow",
+  "mountains": "Mountains"
+ },
+ "features": {
+  "forest": "Forest",
+  "rainforest": "Rainforest",
+  "marsh": "Marsh",
+  "mangrove": "Mangrove",
+  "urban": "Urban",
+  "floodplain": "Floodplain",
+  "": ""
+ },
+ "districts": [
+  {
+   "code": "",
+   "label": "",
+   "rule": ""
+  },
+  {
+   "code": "city_center",
+   "label": "City Center",
+   "rule": "Centre tile of a City View metro (largest-population tile near the city's coordinates)."
+  },
+  {
+   "code": "spaceport",
+   "label": "Spaceport",
+   "rule": "Orbital launch site."
+  },
+  {
+   "code": "harbor",
+   "label": "Harbor",
+   "rule": "Seaport with \u2265 1 million tonnes of annual cargo, or one of the country's 3 busiest ports."
+  },
+  {
+   "code": "aerodrome",
+   "label": "Aerodrome",
+   "rule": "Airport with \u2265 1 million annual passengers, or the country's busiest airport."
+  },
+  {
+   "code": "campus",
+   "label": "Campus",
+   "rule": "\u2265 2,000 research works in 5 years from institutions in the tile (OpenAlex), or STEM workforce location quotient \u2265 1.8 with \u2265 300 people/km\u00b2."
+  },
+  {
+   "code": "commercial_hub",
+   "label": "Commercial Hub",
+   "rule": "Gold yield \u2265 8 and finance + professional-services employment LQ \u2265 1.15."
+  },
+  {
+   "code": "industrial_zone",
+   "label": "Industrial Zone",
+   "rule": "Production yield \u2265 5 and manufacturing employment LQ \u2265 1.5, or an export-processing zone / industrial park in the tile."
+  },
+  {
+   "code": "dam",
+   "label": "Dam",
+   "rule": "Hydroelectric capacity \u2265 100 MW in the tile."
+  },
+  {
+   "code": "power_plant",
+   "label": "Power Plant",
+   "rule": "Thermal, nuclear, wind or solar capacity \u2265 500 MW in the tile."
+  },
+  {
+   "code": "holy_site",
+   "label": "Holy Site",
+   "rule": "One of the country's most notable religious sites (by Wikipedia language editions), or worship-site density in the top 1% of the country's tiles."
+  },
+  {
+   "code": "theater_square",
+   "label": "Theater Square",
+   "rule": "UNESCO World Heritage (cultural) site, \u2265 5 museums, or arts/recreation/hospitality LQ \u2265 2 with \u2265 300 people/km\u00b2."
+  },
+  {
+   "code": "encampment",
+   "label": "Encampment",
+   "rule": "Military installation in the tile."
+  },
+  {
+   "code": "entertainment",
+   "label": "Entertainment Complex",
+   "rule": "Arts, recreation & hospitality employment LQ \u2265 2.5 (tourism economy)."
+  },
+  {
+   "code": "plantation",
+   "label": "Plantation",
+   "rule": "Perennial/tree-crop share of agriculture \u2265 30%, Food yield \u2265 3 and \u2265 40% tree + crop cover."
+  },
+  {
+   "code": "farmland",
+   "label": "Farmland",
+   "rule": "Food yield \u2265 5 and \u2265 40% cropland."
+  },
+  {
+   "code": "fishery",
+   "label": "Fishery",
+   "rule": "Sea tile with Food yield \u2265 4 from fish landings."
+  },
+  {
+   "code": "neighborhood",
+   "label": "Neighborhood",
+   "rule": "\u2265 1,500 people/km\u00b2 without another district."
+  },
+  {
+   "code": "preserve",
+   "label": "Preserve",
+   "rule": "\u2265 50% protected area, or a national park with visitor statistics."
+  }
+ ],
+ "terrain_codes": [
+  "ocean",
+  "coast",
+  "lake",
+  "grassland",
+  "plains",
+  "desert",
+  "tundra",
+  "snow",
+  "mountains"
+ ],
+ "feature_codes": [
+  "forest",
+  "rainforest",
+  "marsh",
+  "mangrove",
+  "urban",
+  "floodplain",
+  ""
+ ]
+}
