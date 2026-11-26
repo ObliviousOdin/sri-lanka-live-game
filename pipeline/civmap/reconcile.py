@@ -158,6 +158,9 @@ class Reconciler:
                 warnings.warn(f"{self.country}: {key} not a column of {dom}/{t}")
                 continue
             col = pd.to_numeric(df[key], errors="coerce")
+            # Census/ACS annotate missing estimates with large negative sentinels
+            # (-666666666, -999999999, -888888888 ...): treat them as missing.
+            col = col.mask(col <= -1e8)
             kind, weight = m["kind"], m.get("weight") or "pop"
             if t.startswith("admin_"):
                 level = t.split("_", 1)[1]

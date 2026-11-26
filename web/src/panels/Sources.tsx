@@ -7,6 +7,7 @@ import { useNational, useSources } from '../data/useData'
 import { fmtInt, fmtNumber } from '../format'
 import { useStore } from '../store'
 import { COUNTRIES, type CountryData, type CountryId, type Source } from '../types'
+import { fmtBytes, plural } from './tilePanelStats'
 import './Sources.css'
 
 type Group = 'lka' | 'usa' | 'both' | 'national'
@@ -17,12 +18,6 @@ const GROUPS: { id: Group; label: string; blurb: string }[] = [
   { id: 'national', label: 'National', blurb: 'Country-level indicators (Advisors) and other references' },
 ]
 
-function fmtBytes(b: number) {
-  if (!Number.isFinite(b) || b <= 0) return '0 B'
-  const u = ['B', 'KB', 'MB', 'GB', 'TB']
-  const e = Math.min(u.length - 1, Math.floor(Math.log10(b) / 3))
-  return `${(b / Math.pow(1000, e)).toPrecision(e ? 3 : 1)} ${u[e]}`
-}
 const fmtDate = (s: string | null | undefined) => (s ? s.slice(0, 10) : '–')
 const host = (u: string) => { try { return new URL(u).hostname.replace(/^www\./, '') } catch { return u } }
 
@@ -281,7 +276,7 @@ function PipelineCard({ app, nSources, files, bytes }: { app: AppData; nSources:
           <tr><th scope="row">Tiles (all)</th>{cell((d) => fmtInt(d.meta.hex_count))}</tr>
           <tr><th scope="row">Land tiles</th>{cell((d) => fmtInt(d.meta.land_hex_count))}</tr>
           <tr><th scope="row">Sea tiles</th>{cell((d) => fmtInt(d.meta.hex_count - d.meta.land_hex_count))}</tr>
-          <tr><th scope="row">Admin levels</th>{cell((d) => Object.values(d.meta.admin_levels).map((a) => `${fmtInt(a.count)} ${a.label}`).join(' · '))}</tr>
+          <tr><th scope="row">Admin levels</th>{cell((d) => Object.values(d.meta.admin_levels).map((a) => <div key={a.label}>{fmtInt(a.count)} {plural(a.label, a.count)}</div>))}</tr>
           <tr><th scope="row">Metrics</th>{cell((d) => fmtInt(d.meta.metrics.length))}</tr>
         </tbody>
       </table>

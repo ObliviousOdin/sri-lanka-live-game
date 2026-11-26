@@ -64,6 +64,12 @@ export function fmtDensity(v: number, unit: string) {
 
 export const hasDensity = (m: Pick<Metric, 'kind' | 'unit'>) => m.kind === 'extensive' && !isAreaUnit(m.unit)
 
+/** English plural of an admin-level label (County → Counties, DS Division → DS Divisions). */
+export function plural(label: string, n = 2) {
+  if (n === 1) return label
+  return /[^aeiou]y$/i.test(label) ? label.slice(0, -1) + 'ies' : label + 's'
+}
+
 export function fmtBytes(b: number) {
   if (!Number.isFinite(b) || b <= 0) return '0 B'
   const u = ['B', 'KB', 'MB', 'GB', 'TB']

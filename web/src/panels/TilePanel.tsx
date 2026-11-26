@@ -13,7 +13,7 @@ import { fmtInt, fmtNumber, fmtUsd } from '../format'
 import { MetricGroups, type MetricRowData } from './TilePanelMetrics'
 import {
   adminParents, adminRank, explainYields, fmtDensity, fmtVal, hasDensity, hexPercentile,
-  POINT_LAYER_META, pointsInHex, pointValue, type YieldExplain,
+  plural, POINT_LAYER_META, pointsInHex, pointValue, type YieldExplain,
 } from './tilePanelStats'
 import './TilePanel.css'
 
@@ -354,7 +354,7 @@ function AdminInspector({ d, idx, level, ui }: { d: CountryData; idx: IndexJson;
 
       {children && children.list.length > 0 && (
         <div className="card">
-          <h3>{children.list.length} {children.label}{children.list.length === 1 ? '' : 's'}</h3>
+          <h3>{children.list.length} {plural(children.label, children.list.length)}</h3>
           <div className="tilepanel-children">
             {children.list.slice(0, 16).map(({ u, k, pop: p }) => (
               <button key={u.id} className="chip tilepanel-childchip" onClick={() => useStore.getState().select({ country, kind: 'admin', id: `${children.level}:${k}` }, 'tile')}

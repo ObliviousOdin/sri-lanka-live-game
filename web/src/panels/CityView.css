@@ -63,10 +63,10 @@
 .cityview-tile { cursor: pointer; outline: none; }
 .cityview-hex { stroke: #0b1422; stroke-width: 2; transition: filter .12s; }
 .cityview-tile.hot .cityview-hex { filter: brightness(1.18); }
-.cityview-hexring { fill: none; stroke: rgba(255, 255, 255, .75); stroke-width: 2.5; pointer-events: none; }
-.cityview-tile.centre .cityview-hexring { stroke: var(--brass2); stroke-width: 4; }
-.cityview-tile.sel .cityview-hexring { stroke: #fff; stroke-width: 3.5; stroke-dasharray: 6 3; }
-.cityview-tile:focus-visible .cityview-hexring { stroke: #fff; }
+.cityview-overlay { pointer-events: none; }
+.cityview-hexring { fill: none; stroke: rgba(255, 255, 255, .8); stroke-width: 2.5; }
+.cityview-hexring.centre { stroke: var(--brass2); stroke-width: 4; }
+.cityview-hexring.sel { stroke: #fff; stroke-width: 3.5; stroke-dasharray: 6 3; }
 .cityview-ghost { fill: none; stroke: var(--line2); stroke-width: 1.2; stroke-dasharray: 4 4; opacity: .6; }
 .cityview-emoji { font-size: 17px; text-anchor: middle; dominant-baseline: central; pointer-events: none; }
 .cityview-emoji.faint { opacity: .55; font-size: 14px; }
@@ -80,7 +80,7 @@
 }
 .cityview-tip.below { transform: translate(-50%, 0); }
 .cityview-tip-title { font-weight: 700; color: var(--brass2); }
-.cityview-tip .yield-row { gap: 6px; margin: 3px 0; }
+.cityview-tip .yield-row { gap: 4px 9px; margin: 3px 0; }
 .cityview-tip-meta { display: flex; justify-content: space-between; gap: 6px; }
 .cityview-tip-wonder { color: var(--brass2); margin-top: 2px; }
 .cityview-tip-hint { color: var(--muted); font-size: 10.5px; margin-top: 3px; }

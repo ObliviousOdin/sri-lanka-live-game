@@ -392,9 +392,16 @@ function CityRing({ d, city, idx, selectedHex }: { d: CountryData; city: City; i
   const [vx, vy, vw, vh] = layout.viewBox
   const tiles = layout.cells.filter((c) => !c.ghost)
   const ghosts = layout.cells.filter((c) => c.ghost)
-  // draw order: plain tiles, then centre, then selected (so borders sit on top)
-  const order = [...tiles].sort((a, b) => rankOf(a.h3) - rankOf(b.h3))
-  function rankOf(h: string) { return h === selectedHex ? 3 : h === active ? 2 : h === city.centre ? 1 : 0 }
+  // stable DOM / keyboard order: centre, then ring by ring, clockwise from north
+  const order = useMemo(() => [...layout.cells.filter((c) => !c.ghost)].sort((a, b) =>
+    (tileBy.get(a.h3)?.d ?? 0) - (tileBy.get(b.h3)?.d ?? 0) ||
+    ((Math.atan2(a.x, -a.y) + 2 * Math.PI) % (2 * Math.PI)) - ((Math.atan2(b.x, -b.y) + 2 * Math.PI) % (2 * Math.PI))), [layout, tileBy])
+  // highlight outlines are drawn in an overlay after all tiles so they are never covered
+  const rings = [
+    { h: city.centre, cls: 'centre', r: HEX_R - 3 },
+    ...(active && active !== selectedHex ? [{ h: active, cls: 'hot', r: HEX_R - 2.5 }] : []),
+    ...(selectedHex ? [{ h: selectedHex, cls: 'sel', r: HEX_R - 2.5 }] : []),
+  ].filter((x) => layout.pos.has(x.h) && tileBy.has(x.h))
 
   const at = active ? tileBy.get(active) : null
   const ap = active ? layout.pos.get(active) : null
@@ -420,7 +427,7 @@ function CityRing({ d, city, idx, selectedHex }: { d: CountryData; city: City; i
             const fm = FEATURE_META[t.feature ?? '']
             const ws = wondersBy.get(c.h3)
             const anyYield = t.yields.some((v) => v > 0)
-            const label = `${terrainLabel(t.terrain, t.feature, t.hills)}${dm?.label && t.district ? `, ${dm.label}` : ''}; yields ${YIELDS.map((y, j) => `${YIELD_META[y].label} ${t.yields[j] ?? 0}`).join(', ')}; population ${fmtNumber(t.pop)}`
+            const label = `${isCentre ? 'City centre: ' : `Ring ${t.d}: `}${terrainLabel(t.terrain, t.feature, t.hills)}${dm?.label && t.district ? `, ${dm.label}` : ''}; yields ${YIELDS.map((y, j) => `${YIELD_META[y].label} ${t.yields[j] ?? 0}`).join(', ')}; population ${fmtNumber(t.pop)}`
             return (
               <g
                 key={c.h3}
@@ -437,9 +444,6 @@ function CityRing({ d, city, idx, selectedHex }: { d: CountryData; city: City; i
                 onKeyDown={(e) => onKey(e, c.h3)}
               >
                 <polygon points={hexPoints(c.x, c.y)} fill={rgbCss(tileRGB(t))} className="cityview-hex" />
-                {(isCentre || isSel || active === c.h3) && (
-                  <polygon points={hexPoints(c.x, c.y, HEX_R - (isCentre ? 3 : 2.5))} className="cityview-hexring" />
-                )}
                 {t.district && dm?.icon ? (
                   <text x={c.x} y={c.y - 13} className="cityview-emoji">{dm.icon}</text>
                 ) : fm?.icon ? (
@@ -460,6 +464,12 @@ function CityRing({ d, city, idx, selectedHex }: { d: CountryData; city: City; i
               </g>
             )
           })}
+          <g aria-hidden className="cityview-overlay">
+            {rings.map((x) => {
+              const p = layout.pos.get(x.h)!
+              return <polygon key={`${x.cls}:${x.h}`} points={hexPoints(p.x, p.y, x.r)} className={`cityview-hexring ${x.cls}`} />
+            })}
+          </g>
         </svg>
         {at && tipStyle && (
           <div className={`cityview-tip ${above ? 'above' : 'below'}`} style={tipStyle} role="status">
