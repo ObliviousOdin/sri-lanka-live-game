@@ -69,6 +69,11 @@ SOURCES = [
            "institution's ROR/GeoNames geo record. Research works per institution from "
            "works?filter=authorships.institutions.id:<id>,publication_year:2021-2025,type:"
            + "|".join(RESEARCH_TYPES) + " (meta.count)."),
+    Source("wikidata", "Wikidata: coordinate location (P625) of items with a ROR ID (P6782)", "Wikimedia Foundation",
+           "https://query.wikidata.org", "CC0", "queried 2026-11", ["lka", "usa"],
+           "Campus coordinates for OpenAlex institutions (whose own geo point is the GeoNames city). "
+           "Used only when within 50 km of the OpenAlex point (COORD_MAX_KM); "
+           "column coord_source says which point a row uses."),
     Source("nsf_herd_fy2024", "Higher Education Research and Development (HERD) Survey FY 2024, Table 5: "
            "R&D expenditures by state, institutional control, system and institution", "NSF NCSES",
            "https://ncses.nsf.gov/surveys/higher-education-research-development/2024", "public domain",
@@ -126,7 +131,9 @@ _RW_METHOD = (
     "A co-authored work counts once for every participating institution, so sums over hexes or the nation "
     "exceed the number of distinct works; preprints and their published versions can both count. Parent "
     "organisations do not roll up their children in OpenAlex (works are counted on the institution id, "
-    "not its lineage), so there is no hierarchy double counting. Reconcile sums the points per hex.")
+    "not its lineage), so there is no hierarchy double counting. Points sit at the Wikidata campus "
+    "coordinate (item with the institution's ROR ID, nearest P625 within 50 km of the OpenAlex point) or, "
+    "failing that, at the OpenAlex/GeoNames city point (column coord_source). Reconcile sums the points per hex.")
 
 METRICS = [
     # --- science (both) -----------------------------------------------------------------------
@@ -140,13 +147,18 @@ METRICS = [
     Metric("university_rd_usd", "University R&D expenditure (HERD FY2024)", "USD", "science", "extensive", "none",
            "points_universities", ["nsf_herd_fy2024", "openalex"], "FY2024",
            "Total R&D expenditures of the higher-education institution (all sources of funds).",
-           "NSF HERD FY2024 Table 5 'All R&D expenditures' (dollars in thousands x 1000) for leaf "
-           "institutions (system and public/private subtotal rows removed by indentation level), matched "
-           "to OpenAlex education/healthcare institutions by normalised name within the same state "
-           "(abbreviations U./C./Inst./Sch./Med./St. expanded; exact token match first, then "
-           "subset-of-name matches without institutional-type words, then fuzzy >= 0.86; one-to-one, "
-           "greedy by score then R&D; a few manual overrides listed in science.HERD_OVERRIDES). "
-           "Unmatched HERD institutions are not mapped; coverage is printed by build().", "higher",
+           "NSF HERD FY2024 Table 5 'All R&D expenditures' (dollars in thousands x 1000), 50 states + DC. "
+           "System subtotal rows are dropped (a row is a subtotal when it equals the sum of its indented "
+           "children; superscript footnote markers removed). Institutions are matched to OpenAlex "
+           "education/healthcare/nonprofit/facility/government institutions by normalised name within the "
+           "same state (U./C./Inst./Sch./Med./St. expanded, SUNY/CUNY prefixes dropped): exact token match, "
+           "then names that differ only by a place qualifier (after a comma, dash or 'at', or a state name), "
+           "then fuzzy >= 0.86; one-to-one, greedy by score then R&D. 21 manual assignments "
+           "(science.HERD_ASSIGN); where HERD reports campuses jointly (U. Maryland = College Park + "
+           "Baltimore per Table 5 footnote b; Texas A&M + Health Science Center; Penn State + Hershey; "
+           "Vanderbilt + VUMC; Nebraska-Lincoln + UNMC; Dartmouth + Dartmouth-Hitchcock) the R&D is split "
+           "in proportion to each campus's 2021-2025 research works (an estimate). 99.8% of HERD R&D and "
+           "all top-100 institutions are matched; matches are listed in herd_matches.csv.", "higher",
            ["usa"]),
     # --- education: attainment ------------------------------------------------------------------
     Metric("pct_bachelors", "Adults 25+ with a bachelor's degree or higher", "%", "education", "intensive", "pop",
@@ -278,6 +290,42 @@ def _research_counts(ids: list[str], cc: str) -> pd.Series:
     return pd.Series(res)
 
 
+COORD_MAX_KM = 50.0
+
+
+def _wikidata_coords(df: pd.DataFrame) -> pd.DataFrame:
+    """Campus coordinates from Wikidata (item with ROR ID P6782 -> P625).  OpenAlex geo is the GeoNames
+    point of the institution's *city*, which stacks e.g. four Colombo-area universities on one hex.
+    Among an item's coordinates the one nearest the OpenAlex point is used, and only if it lies within
+    COORD_MAX_KM of it (guards against wrong ROR links and foreign headquarters)."""
+    ror = df.ror.dropna().str.rsplit("/", n=1).str[-1]
+    vals = sorted(set(ror))
+    found = []
+    for k in range(0, len(vals), 250):
+        chunk = vals[k:k + 250]
+        q = ("SELECT ?ror ?coord WHERE { VALUES ?ror { " + " ".join(f'"{r}"' for r in chunk) +
+             " } ?item wdt:P6782 ?ror ; wdt:P625 ?coord . }")
+        res = util.sparql(q, f"science_ror_coords_{k // 250:03d}")
+        if len(res):
+            found.append(res)
+    out = df[["id", "lat", "lon"]].copy()
+    out["ror_id"] = df.ror.str.rsplit("/", n=1).str[-1]
+    out["wd_lat"] = np.nan
+    out["wd_lon"] = np.nan
+    if found:
+        wd = pd.concat(found, ignore_index=True)
+        ll = wd.coord.map(lambda s: util.parse_wkt_point(s) if isinstance(s, str) and s.startswith("Point") else (np.nan, np.nan))
+        wd["wlat"], wd["wlon"] = [x[0] for x in ll], [x[1] for x in ll]
+        m = out.reset_index().merge(wd[["ror", "wlat", "wlon"]], left_on="ror_id", right_on="ror")
+        la0, lo0, la1, lo1 = (np.radians(m[c].astype(float)) for c in ("lat", "lon", "wlat", "wlon"))
+        a = np.sin((la1 - la0) / 2) ** 2 + np.cos(la0) * np.cos(la1) * np.sin((lo1 - lo0) / 2) ** 2
+        m["km"] = 2 * 6371.0 * np.arcsin(np.sqrt(a))
+        m = m[m.km <= COORD_MAX_KM].sort_values("km").drop_duplicates("index").set_index("index")
+        out.loc[m.index, "wd_lat"] = m.wlat
+        out.loc[m.index, "wd_lon"] = m.wlon
+    return out
+
+
 def institutions(country: str) -> pd.DataFrame:
     raw = _openalex_institutions(country)
     rows = []
@@ -299,7 +347,14 @@ def institutions(country: str) -> pd.DataFrame:
     inside = df.lon.between(lon0, lon1) & df.lat.between(lat0, lat1)
     if country == "usa":
         inside |= (df.lon > 170) & (df.lat > 50)   # Aleutians west of the antimeridian
-    df = df[inside].copy()
+    df = df[inside].reset_index(drop=True)
+    wd = _wikidata_coords(df)
+    ok = wd.wd_lat.notna()
+    df["coord_source"] = np.where(ok, "wikidata", "openalex_city")
+    df.loc[ok, "lat"] = wd.wd_lat[ok]
+    df.loc[ok, "lon"] = wd.wd_lon[ok]
+    print(f"  coordinates: {int(ok.sum()):,} of {len(df):,} institutions moved to Wikidata campus points "
+          f"(rest keep the OpenAlex city point)", flush=True)
     print(f"  OpenAlex: counting research works for {len(df):,} institutions ...", flush=True)
     df["research_works_5y"] = df.id.map(_research_counts(df.id.tolist(), config.COUNTRIES[country]["iso2"]))
     print(f"  OpenAlex institutions: {n0} fetched, {len(df)} with coordinates in the country; "
@@ -335,6 +390,11 @@ HERD_ASSIGN: dict[tuple[str, str], list[str]] = {
     ("North Carolina A&T State U.", "North Carolina"): ["North Carolina Agricultural and Technical State University"],
     ("Van Andel Research Institute", "Michigan"): ["Van Andel Institute"],
     ("Touro U., New York", "New York"): ["Touro College"],
+    ("Columbia U. in the City of New York", "New York"): ["Columbia University"],
+    ("California State Polytechnic U., Pomona", "California"): ["California State Polytechnic University"],
+    ("California State Polytechnic U., Humboldt", "California"): ["Cal Poly Humboldt"],
+    ("Florida A&M U.", "Florida"): ["Florida Agricultural and Mechanical University"],
+    ("Alabama A&M U.", "Alabama"): ["Alabama Agricultural and Mechanical University"],
     ("U. Colorado Anschutz Medical Campus", "Colorado"): ["University of Colorado Anschutz"],
     ("U. Texas M. D. Anderson Cancer Center", "Texas"): ["The University of Texas MD Anderson Cancer Center"],
 }
@@ -347,8 +407,7 @@ _ABBR = [
     (r"\bSt\.", "Saint"), (r"\bMt\.", "Mount"), (r"\bTech\.", "Technology"), (r"\bNatl\.", "National"),
 ]
 _STOP = {"the", "of", "at", "in", "and", "for", "a", "an", "main", "campus", "inc"}
-_SYN = {"st": "saint", "mt": "mount", "ft": "fort", "univ": "university", "centre": "center",
-        "&": "and", "suny": "state university new york", "cuny": "city university new york"}
+_SYN = {"st": "saint", "mt": "mount", "ft": "fort", "univ": "university", "centre": "center", "&": "and"}
 # words that make two institutions different when only one of the names has them
 _TYPE_WORDS = {
     "state", "medical", "medicine", "health", "technology", "technological", "polytechnic", "science",
@@ -378,16 +437,33 @@ def _tokens(s: str, herd: bool = False) -> list[str]:
     return out
 
 
-def _name_score(h: list[str], o: list[str]) -> float:
+# an automatic OpenAlex candidate must look like an institution (not e.g. "State of New Jersey")
+_INST_WORDS = {"university", "college", "institute", "institution", "school", "academy", "center", "laboratory",
+               "laboratories", "seminary", "clinic", "hospital", "observatory", "conservatory", "polytechnic",
+               "medicine", "research"}
+_QUAL_FREE = {"cuny", "suny", "u", "s", "us"}
+
+
+def _qualifier(s: str, herd: bool = False) -> set[str]:
+    """Tokens of the place qualifier of a name: after the first comma, a dash or ' at '."""
+    if herd:
+        s = re.sub(r"^(SUNY|CUNY),\s*", "", s)
+    parts = re.split(r",| - | – |–| at ", s, maxsplit=1)
+    return set(_tokens(parts[1], herd=herd)) if len(parts) > 1 else set()
+
+
+def _name_score(h: list[str], o: list[str], allow_h: set[str] = frozenset(), allow_o: set[str] = frozenset()) -> float:
+    """Similarity of HERD tokens h and OpenAlex tokens o.  A name contained in the other counts as a
+    match only when the extra words are a place qualifier (allow_*: qualifier tokens, state names)."""
     A, B = set(h), set(o)
     if not A or not B:
         return 0.0
     if A == B:
         return 1.0
-    if B < A and len(B) >= 2 and not ((A - B) & _TYPE_WORDS):
+    if B < A and len(B) >= 2 and not ((A - B) & _TYPE_WORDS) and (A - B) <= allow_h:
         return 0.92       # HERD adds a place qualifier (e.g. "U. Michigan, Ann Arbor")
-    if A < B and len(A) >= 2 and not ((B - A) & _TYPE_WORDS):
-        return 0.90       # OpenAlex adds words (e.g. "Rutgers, The State University of New Jersey")
+    if A < B and len(A) >= 2 and not ((B - A) & _TYPE_WORDS) and (B - A) <= allow_o:
+        return 0.90       # OpenAlex adds one (e.g. "The University of Texas Medical Branch at Galveston")
     seq = difflib.SequenceMatcher(None, " ".join(h), " ".join(o)).ratio()
     jac = len(A & B) / len(A | B)
     if (A ^ B) & _TYPE_WORDS:
@@ -452,6 +528,9 @@ def match_herd(inst: pd.DataFrame, herd: pd.DataFrame) -> pd.DataFrame:
     cand = inst[inst.kind.isin(HERD_CAND_KINDS)
                 & ~inst.name.str.contains(r"\bSystems?\b|^State University of New York$", regex=True)].copy()
     cand["tok"] = [_tokens(n) for n in cand.name]
+    cand["inst"] = [bool(set(t) & _INST_WORDS) for t in cand.tok]   # else exact matches only
+    state_tok = {t for n in load_admin("usa", "adm1").name for t in _tokens(n)}
+    cand["allow"] = [_qualifier(n) | state_tok | _QUAL_FREE for n in cand.name]
     weight = inst.set_index("id")["research_works_5y"].fillna(0) + 1.0
     by_state = {s: g for s, g in cand.groupby(cand.region.fillna(""))}
     out, used_o, done = [], set(), set()
@@ -477,6 +556,7 @@ def match_herd(inst: pd.DataFrame, herd: pd.DataFrame) -> pd.DataFrame:
         done.add(h.index[0])
     herd = herd.copy()
     herd["tok"] = [_tokens(n, herd=True) for n in herd.herd_name]
+    herd["allow"] = [_qualifier(n, herd=True) | state_tok | _QUAL_FREE for n in herd.herd_name]
     pairs = []
     for i, h in herd.iterrows():
         if i in done:
@@ -485,8 +565,8 @@ def match_herd(inst: pd.DataFrame, herd: pd.DataFrame) -> pd.DataFrame:
         for o in pool.itertuples():
             if o.id in used_o:
                 continue
-            s = _name_score(h.tok, o.tok)
-            if s >= 0.86:
+            s = _name_score(h.tok, o.tok, h.allow, o.allow)
+            if s >= 0.86 and (o.inst or s >= 1.0):
                 pairs.append((s, h.rd_usd, i, o.id))
     pairs.sort(key=lambda t: (-t[0], -t[1]))
     for s, _, i, oid in pairs:
@@ -892,7 +972,7 @@ def build(country: str) -> None:
     inst = institutions(country)
     uni = universities(country, inst)
     cols = ["id", "name", "lat", "lon", "kind", "works_count", "works_5y", "research_works_5y",
-            "cited_by_count", "ror", "city", "region"]
+            "cited_by_count", "ror", "city", "region", "coord_source"]
     util.write_points(country, DOMAIN, "institutions", inst[cols])
     util.write_points(country, DOMAIN, "universities",
                       uni[cols + ["rank", "rd_usd", "university_rd_usd", "herd_name", "herd_match_score"]])

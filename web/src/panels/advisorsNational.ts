@@ -1,0 +1,524 @@
+// Advisors panel — national view: World Bank indicators (national.json) compared country to
+// country, plus summaries computed from the map's own metrics. Every comment is built only from
+// loaded values; a comment whose inputs are missing is skipped.
+import type { CountryData, CountryId, IndexJson, NationalIndicator, YieldKey } from '../types'
+import {
+  type AdvisorId, type Comment, count, fig, fmtMetric, ISO, money, natAgg, nm, ok, pct, poss, type Seg,
+  SHORT, times, tonnes,
+} from './advisorsCore'
+
+type Fmt = 'usd' | 'pct' | 'num' | 'years'
+
+export interface NatSpec {
+  key: string
+  codes: string[]
+  re?: RegExp
+  advisor: AdvisorId | 'population'
+  short: string
+  fmt: Fmt
+  unit?: string
+  /** predicate with {v}: "spends {v} of GDP on R&D" */
+  say?: string
+  per?: { n: number; label: string; fmt: Fmt }
+  better: 'higher' | 'lower' | 'neutral'
+  /** per-capita / share indicator: eligible for the verdict */
+  intensive: boolean
+  icon: string
+  /** sparkline priority within its advisor (lower first) */
+  spark?: number
+}
+
+export const NAT_SPECS: NatSpec[] = [
+  // ---- economic
+  { key: 'gdp_pc', codes: ['NY.GDP.PCAP.CD'], re: /^GDP per capita \(current/i, advisor: 'economic', short: 'GDP per capita', fmt: 'usd', say: 'earns {v} per citizen (GDP per capita)', better: 'higher', intensive: true, icon: 'y:gold', spark: 1 },
+  { key: 'gdp_pc_ppp', codes: ['NY.GDP.PCAP.PP.CD'], re: /^GDP per capita, PPP/i, advisor: 'economic', short: 'GDP per capita, PPP', fmt: 'usd', say: 'earns {v} per citizen at purchasing-power parity', better: 'higher', intensive: true, icon: 'y:gold' },
+  { key: 'gdp', codes: ['NY.GDP.MKTP.CD'], re: /^GDP \(current US/i, advisor: 'economic', short: 'GDP', fmt: 'usd', say: 'commands an economy of {v} (GDP)', better: 'higher', intensive: false, icon: '🏦', spark: 2 },
+  { key: 'gni_pc', codes: ['NY.GNP.PCAP.CD'], re: /^GNI per capita, Atlas/i, advisor: 'economic', short: 'GNI per capita (Atlas)', fmt: 'usd', say: 'has a gross national income of {v} per citizen (Atlas method)', better: 'higher', intensive: true, icon: '💵' },
+  { key: 'gni_pc_ppp', codes: ['NY.GNP.PCAP.PP.CD'], re: /^GNI per capita, PPP/i, advisor: 'economic', short: 'GNI per capita, PPP', fmt: 'usd', say: 'has a gross national income of {v} per citizen at PPP', better: 'higher', intensive: true, icon: '💵' },
+  { key: 'agri', codes: ['NV.AGR.TOTL.ZS'], re: /^Agriculture.*% of GDP/i, advisor: 'economic', short: 'Agriculture, % of GDP', fmt: 'pct', say: 'draws {v} of GDP from farms, forests and fisheries', better: 'neutral', intensive: true, icon: 'y:food' },
+  { key: 'industry', codes: ['NV.IND.TOTL.ZS'], re: /^Industry.*% of GDP/i, advisor: 'economic', short: 'Industry, % of GDP', fmt: 'pct', say: 'draws {v} of GDP from industry and construction', better: 'neutral', intensive: true, icon: 'y:production' },
+  { key: 'manuf', codes: ['NV.IND.MANF.ZS'], re: /^Manufacturing.*% of GDP/i, advisor: 'economic', short: 'Manufacturing, % of GDP', fmt: 'pct', say: 'draws {v} of GDP from manufacturing', better: 'neutral', intensive: true, icon: 'y:production' },
+  { key: 'services', codes: ['NV.SRV.TOTL.ZS'], re: /^Services.*% of GDP/i, advisor: 'economic', short: 'Services, % of GDP', fmt: 'pct', say: 'draws {v} of GDP from services', better: 'neutral', intensive: true, icon: '🧑‍💼' },
+  { key: 'exports', codes: ['NE.EXP.GNFS.ZS'], re: /^Exports of goods and services \(% of GDP/i, advisor: 'economic', short: 'Exports, % of GDP', fmt: 'pct', say: 'sells {v} of its GDP abroad as exports', better: 'neutral', intensive: true, icon: '🚢' },
+  { key: 'unemp', codes: ['SL.UEM.TOTL.ZS', 'SL.UEM.TOTL.NE.ZS'], re: /^Unemployment, total/i, advisor: 'economic', short: 'Unemployment', fmt: 'pct', say: 'has {v} of its labour force out of work', better: 'lower', intensive: true, icon: '🪑' },
+  { key: 'gini', codes: ['SI.POV.GINI'], re: /^Gini/i, advisor: 'economic', short: 'Gini index', fmt: 'num', say: 'scores {v} on the Gini inequality index', better: 'lower', intensive: true, icon: '⚖️' },
+  { key: 'pop', codes: ['SP.POP.TOTL'], re: /^Population, total/i, advisor: 'population', short: 'Population', fmt: 'num', say: 'counts {v} citizens', better: 'neutral', intensive: false, icon: '👥' },
+  // ---- military
+  { key: 'mil_gdp', codes: ['MS.MIL.XPND.GD.ZS'], re: /^Military expenditure \(% of GDP/i, advisor: 'military', short: 'Military spending, % of GDP', fmt: 'pct', say: 'spends {v} of GDP on its armed forces', better: 'neutral', intensive: true, icon: '🛡️', spark: 1 },
+  { key: 'mil_usd', codes: ['MS.MIL.XPND.CD'], re: /^Military expenditure \(current/i, advisor: 'military', short: 'Military spending', fmt: 'usd', say: 'spends {v} a year on its armed forces', per: { n: 1, label: 'citizen', fmt: 'usd' }, better: 'neutral', intensive: false, icon: '⚔️', spark: 2 },
+  { key: 'mil_gov', codes: ['MS.MIL.XPND.ZS'], re: /^Military expenditure \(% of general government/i, advisor: 'military', short: 'Military, % of government spending', fmt: 'pct', say: 'devotes {v} of government spending to the military', better: 'neutral', intensive: true, icon: '🛡️' },
+  { key: 'mil_pers', codes: ['MS.MIL.TOTL.P1'], re: /^Armed forces personnel, total/i, advisor: 'military', short: 'Armed forces personnel', fmt: 'num', say: 'fields {v} armed forces personnel', per: { n: 1000, label: '1,000 people', fmt: 'num' }, better: 'neutral', intensive: false, icon: '💂' },
+  { key: 'mil_lab', codes: ['MS.MIL.TOTL.TF.ZS'], re: /^Armed forces personnel \(% of total labor/i, advisor: 'military', short: 'Armed forces, % of labour force', fmt: 'pct', say: 'keeps {v} of its labour force under arms', better: 'neutral', intensive: true, icon: '💂' },
+  // ---- cultural
+  { key: 'tour_arr', codes: ['ST.INT.ARVL'], re: /^International tourism, number of arrivals/i, advisor: 'cultural', short: 'International tourist arrivals', fmt: 'num', say: 'welcomes {v} international tourists a year', per: { n: 100, label: '100 residents', fmt: 'num' }, better: 'higher', intensive: false, icon: '🧳', spark: 1 },
+  { key: 'tour_rcpt', codes: ['ST.INT.RCPT.CD'], re: /^International tourism, receipts \(current/i, advisor: 'cultural', short: 'International tourism receipts', fmt: 'usd', say: 'earns {v} a year from international tourism', per: { n: 1, label: 'citizen', fmt: 'usd' }, better: 'higher', intensive: false, icon: '🎟️' },
+  { key: 'urban', codes: ['SP.URB.TOTL.IN.ZS'], re: /^Urban population \(%/i, advisor: 'cultural', short: 'Urban population', fmt: 'pct', say: 'houses {v} of its people in cities', better: 'neutral', intensive: true, icon: '🏙️' },
+  { key: 'internet', codes: ['IT.NET.USER.ZS'], re: /using the Internet/i, advisor: 'cultural', short: 'Internet users', fmt: 'pct', say: 'has {v} of its people online', better: 'higher', intensive: true, icon: '📡', spark: 2 },
+  { key: 'life', codes: ['SP.DYN.LE00.IN'], re: /^Life expectancy at birth, total/i, advisor: 'cultural', short: 'Life expectancy', fmt: 'years', say: 'has a life expectancy at birth of {v}', better: 'higher', intensive: true, icon: '🧑‍⚕️' },
+  // ---- scientific
+  { key: 'rd', codes: ['GB.XPD.RSDV.GD.ZS'], re: /^Research and development expenditure/i, advisor: 'scientific', short: 'R&D spending, % of GDP', fmt: 'pct', say: 'spends {v} of GDP on R&D', better: 'higher', intensive: true, icon: 'y:science', spark: 1 },
+  { key: 'researchers', codes: ['SP.POP.SCIE.RD.P6'], re: /^Researchers in R&D/i, advisor: 'scientific', short: 'Researchers per million people', fmt: 'num', say: 'employs {v} researchers per million people', better: 'higher', intensive: true, icon: '🧑‍🔬' },
+  { key: 'articles', codes: ['IP.JRN.ARTC.SC'], re: /journal articles/i, advisor: 'scientific', short: 'Scientific & technical journal articles', fmt: 'num', say: 'publishes {v} scientific and technical articles a year', per: { n: 1e6, label: 'million people', fmt: 'num' }, better: 'higher', intensive: false, icon: '📄', spark: 2 },
+  { key: 'patents', codes: ['IP.PAT.RESD'], re: /^Patent applications, residents/i, advisor: 'scientific', short: 'Resident patent applications', fmt: 'num', say: 'files {v} resident patent applications a year', per: { n: 1e6, label: 'million people', fmt: 'num' }, better: 'higher', intensive: false, icon: '💡' },
+  { key: 'hitech', codes: ['TX.VAL.TECH.MF.ZS'], re: /^High-technology exports \(%/i, advisor: 'scientific', short: 'High-tech exports, % of manufactured exports', fmt: 'pct', say: 'ships {v} of its manufactured exports as high-tech goods', better: 'higher', intensive: true, icon: '🖥️' },
+  { key: 'tertiary', codes: ['SE.TER.ENRR'], re: /^School enrollment, tertiary/i, advisor: 'scientific', short: 'Tertiary enrolment (gross)', fmt: 'pct', say: 'enrols {v} of the university-age population in tertiary education (gross ratio)', better: 'higher', intensive: true, icon: '🎓' },
+  // ---- environmental
+  { key: 'forest', codes: ['AG.LND.FRST.ZS'], re: /^Forest area \(%/i, advisor: 'environmental', short: 'Forest area', fmt: 'pct', say: 'keeps {v} of its land under forest', better: 'higher', intensive: true, icon: '🌲', spark: 1 },
+  { key: 'protected', codes: ['ER.PTD.TOTL.ZS', 'ER.LND.PTLD.ZS'], re: /protected areas/i, advisor: 'environmental', short: 'Protected areas', fmt: 'pct', say: 'protects {v} of its territory', better: 'higher', intensive: true, icon: '🦌' },
+  { key: 'co2', codes: ['EN.GHG.CO2.PC.CE.AR5', 'EN.ATM.CO2E.PC'], re: /CO2\) emissions.*per capita/i, advisor: 'environmental', short: 'CO₂ emissions per capita', fmt: 'num', unit: 't', say: 'emits {v} of CO₂ per citizen', better: 'lower', intensive: true, icon: '🏭', spark: 2 },
+  { key: 'renew_elec', codes: ['EG.ELC.RNEW.ZS'], re: /^Renewable electricity output/i, advisor: 'environmental', short: 'Renewable electricity', fmt: 'pct', say: 'generates {v} of its electricity from renewables', better: 'higher', intensive: true, icon: '⚡', spark: 3 },
+  { key: 'renew_energy', codes: ['EG.FEC.RNEW.ZS'], re: /^Renewable energy consumption/i, advisor: 'environmental', short: 'Renewable energy', fmt: 'pct', say: 'meets {v} of final energy use with renewables', better: 'higher', intensive: true, icon: '⚡' },
+  { key: 'water', codes: ['ER.H2O.FWTL.ZS'], re: /^Annual freshwater withdrawals, total \(%/i, advisor: 'environmental', short: 'Freshwater withdrawals', fmt: 'pct', say: 'withdraws {v} of its internal freshwater resources each year', better: 'lower', intensive: true, icon: '💧' },
+]
+
+export function specFor(row: NationalIndicator): NatSpec | undefined {
+  return NAT_SPECS.find((s) => s.codes.includes(row.code)) ?? NAT_SPECS.find((s) => s.re?.test(row.label))
+}
+
+/** Rows keyed by spec key (first matching row wins). */
+export function indexRows(rows: NationalIndicator[]): Map<string, NationalIndicator> {
+  const m = new Map<string, NationalIndicator>()
+  for (const r of rows) {
+    const s = specFor(r)
+    if (s && !m.has(s.key)) m.set(s.key, r)
+  }
+  return m
+}
+
+function inferFmt(row: NationalIndicator): Fmt {
+  const t = `${row.label} ${row.unit}`
+  if (/US\$|USD|international \$/i.test(t)) return 'usd'
+  if (/%|percent/i.test(t)) return 'pct'
+  if (/\byears\b/i.test(t)) return 'years'
+  return 'num'
+}
+
+export function fmtV(f: Fmt, v: number, unit?: string) {
+  if (!ok(v)) return '–'
+  if (f === 'usd') return money(v)
+  if (f === 'pct') return pct(v)
+  if (f === 'years') return `${v.toFixed(1)} years`
+  return `${count(v)}${unit ? ' ' + unit : ''}`
+}
+
+export function fmtRow(row: NationalIndicator, v: number) {
+  const s = specFor(row)
+  return fmtV(s?.fmt ?? inferFmt(row), v, s?.unit)
+}
+
+export function rowVal(row: NationalIndicator | undefined, c: CountryId): { v: number; y: number | null } | null {
+  const s = row?.[ISO[c]]
+  if (!s || !ok(s.value)) return null
+  return { v: s.value, y: s.year ?? null }
+}
+
+export function yearsText(home: CountryId, ya: number | null, rival: CountryId, yb: number | null) {
+  if (ya == null && yb == null) return ''
+  if (ya === yb) return `${ya}`
+  return `${SHORT[home]} ${ya ?? 'n/a'}, ${SHORT[rival]} ${yb ?? 'n/a'}`
+}
+
+function statusOf(better: 'higher' | 'lower' | 'neutral', va: number, vb: number): Comment['status'] {
+  if (better === 'neutral') return undefined
+  const m = Math.max(Math.abs(va), Math.abs(vb))
+  if (!m || Math.abs(va - vb) / m < 0.03) return 'even'
+  return (va > vb) === (better === 'higher') ? 'ahead' : 'behind'
+}
+
+const sayParts = (tpl: string, v: Seg): Seg[] => {
+  const [a, b] = tpl.split('{v}')
+  return [a, v, b ?? '']
+}
+
+/** One-sentence comparison, larger value first: "The United States spends 3.4% of GDP on R&D — about 33× Sri Lanka's 0.11%". */
+export function compareSentence(o: { say?: string; short: string; fmt: Fmt; unit?: string }, home: CountryId, rival: CountryId, va: number, vb: number): Seg[] {
+  const F = (v: number) => fmtV(o.fmt, v, o.unit)
+  if (!o.say) {
+    const segs: Seg[] = [`${o.short}: ${nm(home, true)} `, fig(F(va), home), `, ${nm(rival)} `, fig(F(vb), rival)]
+    if (va > 0 && vb > 0) {
+      const k = Math.max(va, vb) / Math.min(va, vb)
+      if (k >= 2) segs.push(` — a ${times(k)} gap`)
+    }
+    return segs
+  }
+  const bigIsHome = va >= vb
+  const big = bigIsHome ? home : rival, small = bigIsHome ? rival : home
+  const vBig = bigIsHome ? va : vb, vSmall = bigIsHome ? vb : va
+  const head: Seg[] = [nm(big, true) + ' ', ...sayParts(o.say, fig(F(vBig), big))]
+  const possV: Seg[] = [poss(small) + ' ', fig(F(vSmall), small)]
+  if (!(vBig > 0 && vSmall > 0)) return [...head, ', against ', ...possV]
+  const k = vBig / vSmall
+  if ((vBig - vSmall) / vBig < 0.03) return [...head, ', level with ', ...possV]
+  if (o.fmt === 'pct' && k < 2.5) return [...head, `, ${(vBig - vSmall).toFixed(1)} points above `, ...possV]
+  if (o.fmt === 'years') return [...head, `, ${(vBig - vSmall).toFixed(1)} years more than `, ...possV]
+  if (k < 2) return [...head, `, ${Math.round((k - 1) * 100)}% higher than `, ...possV]
+  return [...head, ` — about ${times(k)} `, ...possV]
+}
+
+// ---------------------------------------------------------------------------------------------
+// Context
+// ---------------------------------------------------------------------------------------------
+export interface NatCtx {
+  rows: NationalIndicator[]
+  byKey: Map<string, NationalIndicator>
+  home: CountryId
+  rival: CountryId
+  data: Partial<Record<CountryId, CountryData>>
+  idx: IndexJson | null
+}
+
+function popAt(ctx: NatCtx, c: CountryId, year: number | null): { pop: number; src: string[] } | null {
+  const row = ctx.byKey.get('pop')
+  const s = row?.[ISO[c]]
+  if (s?.series?.length) {
+    let best: [number, number] | null = null
+    for (const p of s.series) {
+      if (!ok(p[1])) continue
+      if (!best || (year != null && Math.abs(p[0] - year) < Math.abs(best[0] - year)) || (year == null && p[0] > best[0])) best = p
+    }
+    if (best) return { pop: best[1], src: [row!.source] }
+  }
+  if (s && ok(s.value)) return { pop: s.value, src: [row!.source] }
+  const d = ctx.data[c]
+  if (d && ok(d.meta.totals?.pop)) return { pop: d.meta.totals.pop, src: d.metricByKey.get('pop')?.sources ?? [] }
+  return null
+}
+
+/** Comment for one national row (spec-driven or generic). */
+export function rowComment(row: NationalIndicator, ctx: NatCtx): Comment | null {
+  const spec = specFor(row)
+  const { home, rival } = ctx
+  const a = rowVal(row, home), b = rowVal(row, rival)
+  if (!a || !b) return null
+  const o = spec ?? { short: row.label, fmt: inferFmt(row), better: 'neutral' as const, intensive: false, icon: '📊' }
+  const segs = compareSentence(o, home, rival, a.v, b.v)
+  const sources = [row.source].filter(Boolean)
+  if (spec?.per) {
+    const pa = popAt(ctx, home, a.y), pb = popAt(ctx, rival, b.y)
+    if (pa && pb && pa.pop > 0 && pb.pop > 0) {
+      const ca = (a.v / pa.pop) * spec.per.n, cb = (b.v / pb.pop) * spec.per.n
+      const bigIsHome = a.v >= b.v
+      const [c1, v1, c2, v2] = bigIsHome ? [home, ca, rival, cb] : [rival, cb, home, ca]
+      segs.push(`; per ${spec.per.label}, ${SHORT[c1]} `, fig(fmtV(spec.per.fmt, v1), c1), ` vs ${SHORT[c2]} `, fig(fmtV(spec.per.fmt, v2), c2))
+      sources.push(...pa.src, ...pb.src)
+    }
+  }
+  const yt = yearsText(home, a.y, rival, b.y)
+  segs.push(yt ? ` (${yt}).` : '.')
+  const k = a.v > 0 && b.v > 0 ? Math.abs(Math.log(a.v / b.v)) : 0
+  const sameEra = a.y == null || b.y == null || Math.abs(a.y - b.y) <= 3
+  return {
+    id: spec?.key ?? row.code, icon: o.icon, segs, sources,
+    meta: `${row.label}${row.code ? ` · ${row.code}` : ''}`,
+    status: statusOf(o.better, a.v, b.v),
+    weight: spec?.intensive && sameEra ? k : 0,
+  }
+}
+
+// ---------------------------------------------------------------------------------------------
+// Combined / metric-derived comments
+// ---------------------------------------------------------------------------------------------
+type Gen = (ctx: NatCtx) => Comment | null
+
+const both = (ctx: NatCtx) => (ctx.data.lka && ctx.data.usa ? ctx.data : null)
+const msrc = (ctx: NatCtx, ...keys: string[]) => {
+  const out: string[] = []
+  for (const c of ['lka', 'usa'] as CountryId[]) for (const k of keys) out.push(...(ctx.data[c]?.metricByKey.get(k)?.sources ?? []))
+  return out
+}
+const mvint = (ctx: NatCtx, key: string) => {
+  const v = new Set((['lka', 'usa'] as CountryId[]).map((c) => ctx.data[c]?.metricByKey.get(key)?.vintage).filter(Boolean))
+  return [...v].join(' / ')
+}
+
+/** "label: home X vs rival Y (k× gap)." for two national aggregates. */
+function pairComment(ctx: NatCtx, id: string, icon: string, lead: string, va: number, vb: number, F: (v: number) => string,
+  sources: string[], meta: string, better: 'higher' | 'lower' | 'neutral' = 'neutral', tail = ''): Comment | null {
+  if (!ok(va) || !ok(vb)) return null
+  const { home, rival } = ctx
+  const segs: Seg[] = [lead, `${SHORT[home]} `, fig(F(va), home), ` vs ${SHORT[rival]} `, fig(F(vb), rival)]
+  if (va > 0 && vb > 0) {
+    const k = Math.max(va, vb) / Math.min(va, vb)
+    if (k >= 2) segs.push(` (${times(k)})`)
+  }
+  segs.push(tail + '.')
+  return { id, icon, segs, sources, meta, status: statusOf(better, va, vb) }
+}
+
+const yieldPerTile = (d: CountryData, y: YieldKey) => {
+  const t = d.meta.yield_totals?.[y]
+  const n = d.meta.land_hex_count
+  return t > 0 && n > 0 ? t / n : NaN
+}
+
+function yieldSources(ctx: NatCtx, ...ys: string[]) {
+  const ks = ys.map((y) => ctx.idx?.yield_scale.bases[y]?.metric).filter(Boolean) as string[]
+  return msrc(ctx, ...ks)
+}
+
+const GENERATORS: Record<string, Gen> = {
+  ppp_gap: (ctx) => {
+    const n = ctx.byKey.get('gdp_pc'), p = ctx.byKey.get('gdp_pc_ppp')
+    const na = rowVal(n, ctx.home), nb = rowVal(n, ctx.rival), pa = rowVal(p, ctx.home), pb = rowVal(p, ctx.rival)
+    if (!na || !nb || !pa || !pb || !(na.v > 0 && nb.v > 0 && pa.v > 0 && pb.v > 0)) return null
+    if ((na.v > nb.v) !== (pa.v > pb.v)) return null
+    const k1 = Math.max(na.v, nb.v) / Math.min(na.v, nb.v), k2 = Math.max(pa.v, pb.v) / Math.min(pa.v, pb.v)
+    if (Math.abs(k1 - k2) / k1 < 0.05) return null
+    const { home, rival } = ctx
+    const yt = yearsText(home, pa.y, rival, pb.y)
+    return {
+      id: 'ppp_gap', icon: '🪙', sources: [p!.source, n!.source],
+      segs: ['Adjusted for prices (PPP), the income gap ', k2 < k1 ? 'narrows' : 'widens', ' from ', fig(times(k1)), ' to ', fig(times(k2)), `: ${SHORT[home]} `,
+        fig(money(pa.v), home), ` vs ${SHORT[rival]} `, fig(money(pb.v), rival), ` per citizen${yt ? ` (${yt})` : ''}.`],
+      meta: `${p!.label} · ${p!.code}`,
+      status: statusOf('higher', pa.v, pb.v),
+    }
+  },
+  sector_mix: (ctx) => {
+    const keys = ['agri', 'industry', 'services']
+    const rows = keys.map((k) => ctx.byKey.get(k))
+    const vals = (c: CountryId) => rows.map((r) => rowVal(r, c))
+    const a = vals(ctx.home), b = vals(ctx.rival)
+    const have = keys.filter((_, i) => a[i] && b[i])
+    if (have.length < 2) return null
+    const names = { agri: 'agriculture', industry: 'industry', services: 'services' } as Record<string, string>
+    const pick = (v: typeof a) => keys.map((_, i) => v[i]).filter((_, i) => a[i] && b[i])
+    const txt = (v: typeof a) => pick(v).map((x) => x!.v.toFixed(1)).join(' / ')
+    const yr = (v: typeof a) => [...new Set(pick(v).map((x) => x!.y))].join('–')
+    const { home, rival } = ctx
+    return {
+      id: 'sector_mix', icon: 'y:production', sources: rows.filter(Boolean).map((r) => r!.source),
+      segs: [`Economy mix (${have.map((k) => names[k]).join(' / ')}, % of GDP): ${SHORT[home]} `, fig(txt(a), home), ` (${yr(a)}) vs ${SHORT[rival]} `, fig(txt(b), rival), ` (${yr(b)}).`],
+      meta: rows.filter(Boolean).map((r) => r!.code).join(', '),
+    }
+  },
+  gold_tile: (ctx) => {
+    const d = both(ctx); if (!d) return null
+    const c = pairComment(ctx, 'gold_tile', 'y:gold', 'Gold yield per land tile on the shared map scale: ', yieldPerTile(d[ctx.home]!, 'gold'), yieldPerTile(d[ctx.rival]!, 'gold'),
+      (v) => v.toFixed(2), yieldSources(ctx, 'gold'), 'Tile yields from GDP per km² on one log scale for both countries (see Methodology)', 'higher')
+    return c
+  },
+  gdp_pipeline: (ctx) => {
+    if (ctx.byKey.get('gdp_pc')) return null
+    const d = both(ctx); if (!d) return null
+    const g = (c: CountryId) => (ok(d[c]!.meta.totals?.gdp_usd) && d[c]!.meta.totals.pop > 0 ? d[c]!.meta.totals.gdp_usd! / d[c]!.meta.totals.pop : NaN)
+    return pairComment(ctx, 'gdp_pipeline', 'y:gold', 'GDP per citizen from the map’s own accounts: ', g(ctx.home), g(ctx.rival), money, msrc(ctx, 'gdp_usd', 'pop'), mvint(ctx, 'gdp_usd'), 'higher')
+  },
+  power: (ctx) => {
+    const d = both(ctx); if (!d) return null
+    const a = natAgg(d[ctx.home]!, 'power_capacity_mw'), b = natAgg(d[ctx.rival]!, 'power_capacity_mw')
+    if (!(a > 0 && b > 0)) return null
+    const pa = d[ctx.home]!.meta.totals.pop, pb = d[ctx.rival]!.meta.totals.pop
+    return pairComment(ctx, 'power', 'y:production', 'Production capacity — installed power plants: ', a, b, (v) => `${count(v)} MW`, msrc(ctx, 'power_capacity_mw'), mvint(ctx, 'power_capacity_mw'), 'higher',
+      pa > 0 && pb > 0 ? `; ${count((a / pa) * 1e3)} vs ${count((b / pb) * 1e3)} kW per 1,000 people` : '')
+  },
+  manpower: (ctx) => {
+    const d = both(ctx); if (!d) return null
+    const a = d[ctx.home]!.meta.totals.pop, b = d[ctx.rival]!.meta.totals.pop
+    const la = d[ctx.home]!.meta.totals.land_km2, lb = d[ctx.rival]!.meta.totals.land_km2
+    return pairComment(ctx, 'manpower', '👥', 'Manpower — residents: ', a, b, count, msrc(ctx, 'pop'), mvint(ctx, 'pop'), 'neutral',
+      la > 0 && lb > 0 ? `; land to defend: ${count(la)} vs ${count(lb)} km²` : '')
+  },
+  mil_sites: (ctx) => {
+    const d = both(ctx); if (!d) return null
+    const a = natAgg(d[ctx.home]!, 'military_sites'), b = natAgg(d[ctx.rival]!, 'military_sites')
+    if (!(a > 0 || b > 0)) return null
+    const pa = d[ctx.home]!.meta.totals.pop, pb = d[ctx.rival]!.meta.totals.pop
+    return pairComment(ctx, 'mil_sites', '🏰', 'Garrisons mapped (military bases & installations): ', a, b, count, msrc(ctx, 'military_sites'), mvint(ctx, 'military_sites'), 'neutral',
+      pa > 0 && pb > 0 ? `; ${((a / pa) * 1e6).toFixed(1)} vs ${((b / pb) * 1e6).toFixed(1)} per million people` : '')
+  },
+  supply: (ctx) => {
+    const d = both(ctx); if (!d) return null
+    const a = natAgg(d[ctx.home]!, 'port_cargo_t'), b = natAgg(d[ctx.rival]!, 'port_cargo_t')
+    if (!(a > 0 && b > 0)) return null
+    return pairComment(ctx, 'supply', '⚓', 'Supply lines — port cargo handled: ', a, b, tonnes, msrc(ctx, 'port_cargo_t'), mvint(ctx, 'port_cargo_t'), 'higher')
+  },
+  culture_yield: (ctx) => {
+    const d = both(ctx); if (!d) return null
+    const ca = yieldPerTile(d[ctx.home]!, 'culture'), cb = yieldPerTile(d[ctx.rival]!, 'culture')
+    const fa = yieldPerTile(d[ctx.home]!, 'faith'), fb = yieldPerTile(d[ctx.rival]!, 'faith')
+    if (!ok(ca) && !ok(fa)) return null
+    const { home, rival } = ctx
+    const segs: Seg[] = ['Yields per land tile (shared scale): ']
+    if (ok(ca) && ok(cb)) segs.push('Culture ', fig(ca.toFixed(2), home), ' vs ', fig(cb.toFixed(2), rival))
+    if (ok(fa) && ok(fb)) segs.push(ok(ca) && ok(cb) ? '; Faith ' : 'Faith ', fig(fa.toFixed(2), home), ' vs ', fig(fb.toFixed(2), rival))
+    if (segs.length === 1) return null
+    segs.push(` (${SHORT[home]} vs ${SHORT[rival]}).`)
+    return { id: 'culture_yield', icon: 'y:culture', segs, sources: yieldSources(ctx, 'culture', 'faith'), meta: 'Culture from arts, recreation & hospitality jobs + heritage; Faith from places of worship (see Methodology)', status: statusOf('higher', ca, cb) }
+  },
+  wonders: (ctx) => {
+    const d = both(ctx); if (!d) return null
+    const wa = d[ctx.home]!.wonders, wb = d[ctx.rival]!.wonders
+    if (!wa.length && !wb.length) return null
+    const cats = (ws: typeof wa) => {
+      const m = new Map<string, number>()
+      ws.forEach((w) => m.set(w.category, (m.get(w.category) ?? 0) + 1))
+      return [...m.entries()].sort((x, y) => y[1] - x[1]).slice(0, 2).map(([k, v]) => `${v} ${k}`).join(', ')
+    }
+    const { home, rival } = ctx
+    const src = [...wa, ...wb].flatMap((w) => w.sources ?? [])
+    return {
+      id: 'wonders', icon: '🏯', sources: src,
+      segs: [`Wonders on the map: ${SHORT[home]} `, fig(String(wa.length), home), wa.length ? ` (${cats(wa)})` : '', ` vs ${SHORT[rival]} `, fig(String(wb.length), rival), wb.length ? ` (${cats(wb)})` : '', '.'],
+      meta: 'Wonders are chosen by published ranking rules (Wonders tab)',
+    }
+  },
+  heritage: (ctx) => {
+    const d = both(ctx); if (!d) return null
+    const { home, rival } = ctx
+    const parts: Seg[][] = []
+    const keys: string[] = []
+    const pa = d[home]!.meta.totals.pop, pb = d[rival]!.meta.totals.pop
+    const add = (key: string, f: (a: number, b: number) => Seg[] | null) => {
+      const a = natAgg(d[home]!, key), b = natAgg(d[rival]!, key)
+      if (!ok(a) || !ok(b) || (a <= 0 && b <= 0)) return
+      const s = f(a, b)
+      if (s) { parts.push(s); keys.push(key) }
+    }
+    add('museums', (a, b) => [fig(count(a), home), ' vs ', fig(count(b), rival), ' museums'])
+    add('park_visitors', (a, b) => ['parks drew ', fig(count(a), home), ' vs ', fig(count(b), rival), ' visitors'])
+    add('worship_sites', (a, b) => pa > 0 && pb > 0 ? [fig(count((a / pa) * 1e5), home), ' vs ', fig(count((b / pb) * 1e5), rival), ' places of worship per 100k people'] : null)
+    if (!parts.length) return null
+    const segs: Seg[] = [`Heritage (${SHORT[home]} vs ${SHORT[rival]}): `]
+    parts.forEach((p, i) => segs.push(...(i ? ['; ', ...p] : p)))
+    segs.push('.')
+    return { id: 'heritage', icon: '🏛️', segs, sources: msrc(ctx, ...keys), meta: keys.map((k) => mvint(ctx, k)).filter(Boolean).join(' · ') }
+  },
+  science_yield: (ctx) => {
+    const d = both(ctx); if (!d) return null
+    return pairComment(ctx, 'science_yield', 'y:science', 'Science yield per land tile (shared scale): ', yieldPerTile(d[ctx.home]!, 'science'), yieldPerTile(d[ctx.rival]!, 'science'),
+      (v) => v.toFixed(2), yieldSources(ctx, 'science'), 'From STEM workers per km² plus research-output bonuses (see Methodology)', 'higher')
+  },
+  research_works: (ctx) => {
+    const d = both(ctx); if (!d) return null
+    const r = (c: CountryId) => { const w = natAgg(d[c]!, 'research_works_5y'); const p = d[c]!.meta.totals.pop; return w >= 0 && p > 0 ? (w / p) * 1e6 : NaN }
+    return pairComment(ctx, 'research_works', '📚', 'Research output of local institutions, works per million people over 5 years: ', r(ctx.home), r(ctx.rival), count, msrc(ctx, 'research_works_5y', 'pop'), mvint(ctx, 'research_works_5y'), 'higher')
+  },
+  bachelors: (ctx) => {
+    const d = both(ctx); if (!d) return null
+    return pairComment(ctx, 'bachelors', '🎓', "Adults with a bachelor's degree or higher: ", natAgg(d[ctx.home]!, 'pct_bachelors'), natAgg(d[ctx.rival]!, 'pct_bachelors'), pct, msrc(ctx, 'pct_bachelors'), mvint(ctx, 'pct_bachelors'), 'higher')
+  },
+  engineers: (ctx) => {
+    const d = both(ctx); if (!d) return null
+    return pairComment(ctx, 'engineers', '🧑‍🔬', 'Engineers (STEM occupations) as a share of workers: ', natAgg(d[ctx.home]!, 'cit_engineers_pct'), natAgg(d[ctx.rival]!, 'cit_engineers_pct'), pct, msrc(ctx, 'cit_engineers_pct'), mvint(ctx, 'cit_engineers_pct'), 'higher')
+  },
+  landcover: (ctx) => {
+    const d = both(ctx); if (!d) return null
+    const { home, rival } = ctx
+    const segs: Seg[] = ['Land cover (ESA WorldCover): ']
+    const used: string[] = []
+    for (const [k, l] of [['lc_tree', 'trees'], ['lc_crop', 'cropland'], ['lc_built', 'built-up']] as const) {
+      const a = natAgg(d[home]!, k), b = natAgg(d[rival]!, k)
+      if (!ok(a) || !ok(b)) continue
+      if (used.length) segs.push('; ')
+      segs.push(`${l} `, fig(pct(a * 100), home), ' vs ', fig(pct(b * 100), rival))
+      used.push(k)
+    }
+    if (!used.length) return null
+    segs.push(` of land (${SHORT[home]} vs ${SHORT[rival]}).`)
+    return { id: 'landcover', icon: '🌳', segs, sources: msrc(ctx, ...used), meta: mvint(ctx, 'lc_tree') }
+  },
+  hazard: (ctx) => {
+    const d = both(ctx); if (!d) return null
+    const a = d[ctx.home]!.metricByKey.get('hazard_index')?.stats.p50, b = d[ctx.rival]!.metricByKey.get('hazard_index')?.stats.p50
+    if (!ok(a) || !ok(b)) return null
+    return pairComment(ctx, 'hazard', '🌪️', 'Natural hazard index (cyclones, M5+ quakes, tsunamis; 0–100, one scale), median land tile: ', a, b, (v) => v.toFixed(1), msrc(ctx, 'hazard_index'), mvint(ctx, 'hazard_index'), 'lower')
+  },
+  elevation: (ctx) => {
+    const d = both(ctx); if (!d) return null
+    const { home, rival } = ctx
+    const ma = natAgg(d[home]!, 'elev_mean_m'), mb = natAgg(d[rival]!, 'elev_mean_m')
+    const xa = d[home]!.metricByKey.get('elev_max_m')?.stats.max, xb = d[rival]!.metricByKey.get('elev_max_m')?.stats.max
+    if (!ok(ma) || !ok(mb)) return null
+    const segs: Seg[] = ['Terrain: mean land elevation ', fig(fmtMetric('m', ma), home), ' vs ', fig(fmtMetric('m', mb), rival)]
+    if (ok(xa) && ok(xb)) segs.push('; highest tile summit ', fig(fmtMetric('m', xa), home), ' vs ', fig(fmtMetric('m', xb), rival))
+    segs.push(` (${SHORT[home]} vs ${SHORT[rival]}).`)
+    return { id: 'elevation', icon: '🏔️', segs, sources: msrc(ctx, 'elev_mean_m'), meta: `Copernicus DEM GLO-90 · ${mvint(ctx, 'elev_mean_m')}` }
+  },
+  climate: (ctx) => {
+    const d = both(ctx); if (!d) return null
+    const { home, rival } = ctx
+    const ta = natAgg(d[home]!, 'temp_mean_c'), tb = natAgg(d[rival]!, 'temp_mean_c')
+    const pa = natAgg(d[home]!, 'precip_mm'), pb = natAgg(d[rival]!, 'precip_mm')
+    if (!ok(ta) || !ok(tb)) return null
+    const segs: Seg[] = ['Climate (area-weighted): ', fig(fmtMetric('degC', ta), home), ' vs ', fig(fmtMetric('degC', tb), rival), ' mean temperature']
+    if (ok(pa) && ok(pb)) segs.push('; ', fig(fmtMetric('mm/yr', pa), home), ' vs ', fig(fmtMetric('mm/yr', pb), rival), ' of rain')
+    segs.push(` (${SHORT[home]} vs ${SHORT[rival]}).`)
+    return { id: 'climate', icon: '🌦️', segs, sources: msrc(ctx, 'temp_mean_c', 'precip_mm'), meta: `WorldClim 2.1 · ${mvint(ctx, 'temp_mean_c')}` }
+  },
+}
+
+/** Display order per advisor: national spec keys and generator ids. */
+const ORDER: Record<AdvisorId, string[]> = {
+  economic: ['gdp_pc', 'ppp_gap', 'gdp_pc_ppp', 'sector_mix', 'agri', 'industry', 'services', 'unemp', 'gdp', 'gini', 'exports', 'gni_pc', 'gni_pc_ppp', 'gdp_pipeline', 'gold_tile', 'power'],
+  military: ['mil_gdp', 'mil_usd', 'mil_pers', 'mil_lab', 'mil_gov', 'manpower', 'mil_sites', 'supply'],
+  cultural: ['tour_arr', 'tour_rcpt', 'culture_yield', 'wonders', 'internet', 'life', 'urban', 'heritage'],
+  scientific: ['rd', 'researchers', 'articles', 'patents', 'hitech', 'tertiary', 'science_yield', 'research_works', 'bachelors', 'engineers'],
+  environmental: ['forest', 'co2', 'renew_elec', 'protected', 'water', 'renew_energy', 'landcover', 'hazard', 'elevation', 'climate'],
+}
+export function advisorRows(rows: NationalIndicator[], advisor: AdvisorId): NationalIndicator[] {
+  const order = ORDER[advisor]
+  const rank = (r: NationalIndicator) => {
+    const s = specFor(r)
+    const i = s ? order.indexOf(s.key) : -1
+    return i < 0 ? 100 + (s ? NAT_SPECS.indexOf(s) : 0) : i
+  }
+  return rows.filter((r) => (r.advisor || specFor(r)?.advisor) === advisor).sort((a, b) => rank(a) - rank(b))
+}
+
+const FOLDS: Record<string, string[]> = { ppp_gap: ['gdp_pc_ppp'], sector_mix: ['agri', 'industry', 'services'] }
+
+/** All comments for one advisor in the national view, in display order. Grouping follows row.advisor. */
+export function nationalComments(advisor: AdvisorId, ctx: NatCtx): Comment[] {
+  const out: Comment[] = []
+  const folded = new Set<string>()
+  const used = new Set<NationalIndicator>()
+  for (const id of ORDER[advisor]) {
+    const gen = GENERATORS[id]
+    if (gen) {
+      const c = gen(ctx)
+      if (c) { out.push(c); FOLDS[id]?.forEach((k) => folded.add(k)) }
+      continue
+    }
+    if (folded.has(id)) continue
+    const row = ctx.byKey.get(id)
+    if (!row || (row.advisor && row.advisor !== advisor)) continue
+    used.add(row)
+    const c = rowComment(row, ctx)
+    if (c) out.push(c)
+  }
+  // rows grouped under this advisor that the order list does not place
+  for (const r of ctx.rows) {
+    if (r.advisor !== advisor || used.has(r)) continue
+    const s = specFor(r)
+    if (s && (folded.has(s.key) || s.key === 'pop')) continue
+    const c = rowComment(r, ctx)
+    if (c) out.push(c)
+  }
+  return out
+}
+
+/** Rows to draw as sparklines for an advisor (series in both countries, ≥ 3 points). */
+export function sparkRows(rows: NationalIndicator[], advisor: AdvisorId, max = 2): NationalIndicator[] {
+  const good = (r: NationalIndicator) => ['LKA', 'USA'].every((k) => ((r as unknown as Record<string, { series?: [number, number][] }>)[k]?.series ?? []).filter((p) => ok(p[1])).length >= 3)
+  return advisorRows(rows, advisor)
+    .filter((r) => specFor(r)?.spark != null && good(r))
+    .sort((a, b) => (specFor(a)!.spark! - specFor(b)!.spark!))
+    .slice(0, max)
+}
+
+/** Fallback verdict from the map itself: population density. */
+export function densityVerdict(ctx: NatCtx): Comment | null {
+  const d = both(ctx); if (!d) return null
+  const { home, rival } = ctx
+  const da = d[home]!.meta.totals.pop / d[home]!.meta.totals.land_km2, db = d[rival]!.meta.totals.pop / d[rival]!.meta.totals.land_km2
+  if (!(da > 0 && db > 0)) return null
+  const big = da >= db ? home : rival, small = da >= db ? rival : home
+  const bd = Math.max(da, db), sd = Math.min(da, db)
+  return {
+    id: 'density', icon: '👥', sources: msrc(ctx, 'pop', 'land_km2'),
+    segs: [`${nm(big, true)} packs `, fig(count(d[big]!.meta.totals.pop), big), ' people into ', fig(`${count(d[big]!.meta.totals.land_km2)} km²`, big),
+      ` — ${times(bd / sd)} ${poss(small)} density (`, fig(`${count(bd)}`, big), ' vs ', fig(`${count(sd)}`, small), ` people per km², ${mvint(ctx, 'pop') || '2023'}).`],
+  }
+}
+
