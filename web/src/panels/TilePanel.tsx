@@ -195,9 +195,13 @@ function HexInspector({ d, idx, i }: { d: CountryData; idx: IndexJson; i: number
   )
 }
 
+// open by default on desktop, collapsed in the phone bottom sheet; remembers the user's last toggle
+let whyOpen: boolean | null = null
+
 function YieldBreakdown({ explain, idx }: { explain: YieldExplain[]; idx: IndexJson }) {
+  const open = whyOpen ?? (typeof window === 'undefined' || window.innerWidth >= 900)
   return (
-    <details className="card tilepanel-why" open>
+    <details className="card tilepanel-why" open={open} onToggle={(e) => { whyOpen = (e.currentTarget as HTMLDetailsElement).open }}>
       <summary><h3>Why these yields</h3></summary>
       <p className="tilepanel-formula">
         Yield = ⌊2·log<sub>10</sub>(density ÷ base)⌋ + 1 when density ≥ base — one point per ×3.16 — capped at {idx.yield_scale.cap}, plus facility bonuses. The same scale is used in both countries.
@@ -284,12 +288,16 @@ function AdminInspector({ d, idx, level, ui }: { d: CountryData; idx: IndexJson;
       rank: () => {
         const r = adminRank(table, key, ui)
         if (!r) return null
-        return { pct: r.pct, text: `#${fmtInt(r.rank)}/${fmtInt(r.n)}`, title: `#${fmtInt(r.rank)} of ${fmtInt(r.n)} ${levelLabel.toLowerCase()} units with data (highest first)` }
+        const tie = r.ties > 1
+        return {
+          pct: r.pct, text: `#${fmtInt(r.rank)}${tie ? '=' : ''}/${fmtInt(r.n)}`,
+          title: `#${fmtInt(r.rank)} of ${fmtInt(r.n)} ${levelLabel.toLowerCase()} units with data (highest first)${tie ? `, tied with ${fmtInt(r.ties - 1)} other${r.ties > 2 ? 's' : ''}` : ''}`,
+        }
       },
     }
   }), [d, table, ui, landKm2, levelLabel])
 
-  const zoom = (country === 'lka' ? { adm1: 8.4, adm2: 9, adm3: 10.5 } : { adm1: 5.5, adm2: 8 })[level] ?? undefined
+  const zoom = ((country === 'lka' ? { adm1: 8.4, adm2: 9, adm3: 10.5 } : { adm1: 5.5, adm2: 8 }) as Record<string, number>)[level]
 
   return (
     <div className="tilepanel">

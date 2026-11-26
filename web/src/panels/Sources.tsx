@@ -159,7 +159,7 @@ function SourceCard({ s, labelOf, national, wonders }: {
           {host(s.url)} <span aria-hidden>↗</span>
         </a>
       )}
-      {s.notes && <p className="sources-notes">{s.notes}</p>}
+      {s.notes && <Notes text={s.notes} />}
 
       {feeds.length > 0 && (
         <div className="sources-feeds">
@@ -217,13 +217,33 @@ function SourceCard({ s, labelOf, national, wonders }: {
   )
 }
 
+function Notes({ text }: { text: string }) {
+  const [more, setMore] = useState(false)
+  const long = text.length > 220
+  return (
+    <p className="sources-notes">
+      {long && !more ? `${text.slice(0, 200).replace(/\s+\S*$/, '')}… ` : text}
+      {long && (
+        <button className="sources-more" onClick={() => setMore(!more)} aria-expanded={more}>{more ? ' less' : 'more'}</button>
+      )}
+    </p>
+  )
+}
+
+// expanded on desktop, collapsed in the phone bottom sheet; remembers the user's toggle
+let pipelineOpen: boolean | null = null
+
 function PipelineCard({ app, nSources, files, bytes }: { app: AppData; nSources: number; files: number; bytes: number }) {
   const idx = app.index
   const ds = COUNTRIES.map((c) => app.countries[c])
   const cell = (fn: (d: CountryData) => ReactNode) => ds.map((d, k) => <td key={k} className="num">{d ? fn(d) : '…'}</td>)
+  const open = pipelineOpen ?? (typeof window === 'undefined' || window.innerWidth >= 900)
   return (
-    <div className="card sources-pipeline">
-      <h3>Data pipeline</h3>
+    <details className="card sources-pipeline" open={open} onToggle={(e) => { pipelineOpen = (e.currentTarget as HTMLDetailsElement).open }}>
+      <summary>
+        <h3>Data pipeline</h3>
+        <span className="sources-psum">6 stages{nSources > 0 ? ` · ${nSources} sources · ${fmtInt(files)} files · ${fmtBytes(bytes)}` : ''}</span>
+      </summary>
       <p className="sources-lede">
         Every number on the maps is traceable: open data is downloaded once, reconciled onto H3 hexagons and translated into Civilization terms by published rules.
         Run it with <code>python -m civmap.run</code> (see README).
@@ -268,6 +288,6 @@ function PipelineCard({ app, nSources, files, bytes }: { app: AppData; nSources:
       <p className="muted sources-built">
         {idx ? <>Built {idx.built_at.slice(0, 16).replace('T', ' ')} UTC.</> : null} The pipeline may still be adding data domains; missing metrics appear here as they are published.
       </p>
-    </div>
+    </details>
   )
 }

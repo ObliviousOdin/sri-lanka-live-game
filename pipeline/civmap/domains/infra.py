@@ -19,7 +19,6 @@ from __future__ import annotations
 import json
 import re
 import time
-from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -97,11 +96,13 @@ SOURCES = [
            "net generation (MWh) by plant, prime mover and fuel."),
     Source("imf_portwatch", "IMF PortWatch - Daily Port Activity Data and Trade Estimates; PortWatch ports database",
            "International Monetary Fund (IMF) PortWatch / UN Global Platform (via HDX)",
-           "https://portwatch.imf.org/", "IMF PortWatch terms (open data, attribution)", "2025", ["lka", "usa"],
+           "https://portwatch.imf.org/", "IMF copyright and terms (https://www.imf.org/en/about/copyright-and-terms)",
+           "2025", ["lka", "usa"],
            "Daily AIS-based port calls and estimated import / export volumes (metric tonnes) per port, "
            "from HDX datasets 'sri-lanka-daily-port-activity-data-and-shipment-estimates' and "
            "'united-states-of-america-daily-port-activity-data-and-shipment-estimates'. Port coordinates "
-           f"from the PortWatch_ports_database ArcGIS feature service ({PW_PORTS_DB})."),
+           f"from the PortWatch_ports_database ArcGIS feature service ({PW_PORTS_DB}). Methodology: IMF "
+           "Working Papers 'Tracking Trade from Space' (2021) and 'Nowcasting Global Trade from Space' (2025)."),
     Source("slpa_annual_report_2024", "Sri Lanka Ports Authority Annual Report 2024",
            "Sri Lanka Ports Authority (SLPA)", "https://www.slpa.lk/port-colombo/annual-reports",
            "public document (SLPA)", "2024", ["lka"],
@@ -114,7 +115,8 @@ SOURCES = [
            f"Table 7.14 Total cargo handled by port 2018-2024 ({DCS_714_URL}); Table 7.16 number of air "
            f"passengers to/from Sri Lanka 2024 ({DCS_716_URL}): national totals only, no per-airport split."),
     Source("ourairports", "OurAirports open airport database (airports.csv)", "OurAirports (David Megginson et al.)",
-           "https://ourairports.com/data/", "public domain", "2026 (continuously updated)", ["lka", "usa"],
+           "https://davidmegginson.github.io/ourairports-data/", "public domain", "2026 (continuously updated)",
+           ["lka", "usa"],
            f"{OURAIRPORTS_URL}; types large_airport and medium_airport."),
     Source("faa_enplanements_cy2025", "CY 2025 Passenger Boarding (Enplanement) Data - all airports",
            "U.S. Federal Aviation Administration (FAA), Air Carrier Activity Information System",
@@ -123,7 +125,8 @@ SOURCES = [
            f"{FAA_URL} (updated 2026-09-24). Revenue passenger enplanements (boardings) per airport, CY 2025."),
     Source("dod_mirta", "Military Installations, Ranges, and Training Areas (MIRTA) - Points",
            "U.S. Department of Defense, Defense Installation Spatial Data Infrastructure (DISDI); "
-           "served by Esri US Federal Data", "https://www.acq.osd.mil/eie/imr/rpid/disdi/",
+           "served by Esri US Federal Data",
+           "https://services2.arcgis.com/FiaPA4ga0iQKduv3/arcgis/rest/services/MIRTA_Points_A_view/FeatureServer/0",
            "public domain", "2025", ["usa"],
            f"ArcGIS feature service {MIRTA_URL}; points of the most commonly known DoD sites, "
            "installations, ranges and training areas reported in the Base Structure Report."),
@@ -184,12 +187,14 @@ METRICS = [
     Metric("port_cargo_t", "Seaport cargo (imports + exports)", "t", "trade", "extensive", "none", "points_ports",
            ["imf_portwatch"], "2025",
            "Estimated annual maritime import + export volume handled by each port (metric tonnes).",
-           "IMF PortWatch daily port activity (AIS-based estimates of tonnes discharged/loaded for trade), "
-           "summed over calendar year 2025 (import + export, all vessel types). Same method in both "
-           "countries. PortWatch estimates trade flows, so transshipment volumes (dominant in Colombo: "
-           "SLPA reports 114.6 Mt total cargo handled in 2024, column official_cargo_t) are largely "
-           "not counted. Ports with zero estimated cargo dropped; US ports outside the 50 states + DC "
-           "(Puerto Rico etc.) dropped.", "higher"),
+           "IMF PortWatch daily port activity (AIS-based estimates of tonnes discharged / loaded for trade), "
+           "import + export summed over calendar year 2025, all vessel types. Same method in both countries. "
+           "PortWatch measures trade: its Colombo estimate (30.6 Mt in 2025) is about a quarter of the cargo "
+           "SLPA reports as handled incl. transshipment (114.6 Mt in 2024, DCS Abstract Table 7.14; kept in "
+           "column official_cargo_t), so transshipment is evidently not captured. Ports with zero estimated "
+           "cargo are dropped (Galle), as are PortWatch 'USA' ports that do not snap to the 50-states + DC grid "
+           "(a mislabelled 'Sydney' at 46.2N 60.2W and the deep-water 'Offshore Oil Terminal 1' at 26.4N 90.8W). "
+           "Port names are PortWatch's (its 'Freeport (US-FL)' lies at Freeport, Texas).", "higher"),
     Metric("port_calls", "Seaport calls", "calls", "trade", "extensive", "none", "points_ports",
            ["imf_portwatch"], "2025", "Number of cargo-vessel port calls per year.",
            "IMF PortWatch daily 'portcalls' (container, dry bulk, general cargo, ro-ro, tanker) summed over 2025.",
@@ -216,14 +221,17 @@ METRICS = [
     Metric("military_sites", "Military installations", "count", "military", "extensive", "none",
            "points_military", ["dod_mirta", "wikidata"], "2025 (USA) / 2026 (LKA)",
            "Military bases, stations, ranges and training areas (one per site).",
-           "USA: DoD MIRTA points with operational status 'act' or 'semi' in the 50 states + DC (all "
-           "components incl. Reserve and National Guard). LKA: Wikidata items in Sri Lanka that are "
-           "military installations / bases / airbases / naval bases, or that are operated by the Sri Lanka "
-           "Army, Navy, Air Force or Armed Forces, with coordinates; historic forts, fortresses, citadels, "
-           "universities, units, accidents and the civil Bandaranaike International Airport are excluded. "
-           "Also items whose English label starts with SLAF/SLNS/SLN or ends with Garrison, Army Camp, Army Base, "
-           "Cantonment, Naval Base or Navy Camp. Coverage differs strongly (an official register vs. crowd-sourced data), so compare "
-           "with care.", "neutral"),
+           "USA: DoD MIRTA points with operational status 'act' (active) or 'semi' (semi-active) in the 50 "
+           "states + DC, all reporting components incl. Reserve and National Guard (caretaker, closed and excess "
+           "sites dropped). LKA: union of three Wikidata queries - items in Sri Lanka that are instances of "
+           "military installation / military base / airbase / naval base (or subclasses), items operated by the "
+           "Sri Lanka Army, Navy, Air Force, Coast Guard or Armed Forces, and items whose English label starts "
+           "with SLAF/SLNS/SLN or ends with Garrison, Army Camp, Army Base, Cantonment, Naval Base or Navy Camp "
+           "- all with coordinates and no dissolution date. Excluded: colonial forts (label contains the word "
+           "'fort'), fortresses, citadels, castles, former sites (label 'Old ...'), universities, military "
+           "units, aircraft accidents and the civil Bandaranaike International Airport. An official register "
+           "(MIRTA) is compared with crowd-sourced data (Wikidata has few Sri Lanka Navy and Army camps), so "
+           "Sri Lankan counts are a lower bound.", "neutral"),
     Metric("spaceports", "Spaceports and launch sites", "count", "infrastructure", "extensive", "none",
            "points_spaceports", ["wikidata"], "2026",
            "Spaceports / launch sites (one per site).",
@@ -874,32 +882,52 @@ def build_industrial_zones(country: str) -> pd.DataFrame:
 # ---------------------------------------------------------------------------------------------
 
 
+def _wb(ind: str, iso3: str) -> dict:
+    v, y = util.wb_value(ind, iso3)
+    return {"value": v, "year": y}
+
+
 def _report(country: str, results: dict) -> None:
-    """National sanity checks against published totals; written to report.json."""
+    """National totals and sanity checks against published figures; written to report.json."""
+    iso3 = country.upper()
     rep: dict = {}
     pw = results["power"]
-    rep["power_capacity_mw"] = float(pw.power_capacity_mw.sum())
-    rep["generation_gwh"] = float(pw.generation_gwh.sum())
-    rep["renewable_capacity_mw"] = float(pw.renewable_capacity_mw.sum())
-    rep["plants"] = int(len(pw))
+    gen = pw.generation_gwh.sum()
+    share = lambda kinds: float(pw[pw.kind.isin(kinds)].generation_gwh.sum() / gen)  # noqa: E731
+    rep["power"] = {
+        "plants": int(len(pw)), "capacity_mw": float(pw.power_capacity_mw.sum()), "generation_gwh": float(gen),
+        "renewable_capacity_mw": float(pw.renewable_capacity_mw.sum()),
+        "generation_share": {"renewable": share(RENEWABLE_FUELS), "hydro": share({"Hydro"}),
+                             "coal": share({"Coal"})},
+        "wb_check": {"renewable_output_pct EG.ELC.RNEW.ZS": _wb("EG.ELC.RNEW.ZS", iso3),
+                     "hydro_output_pct EG.ELC.HYRO.ZS": _wb("EG.ELC.HYRO.ZS", iso3),
+                     "coal_output_pct EG.ELC.COAL.ZS": _wb("EG.ELC.COAL.ZS", iso3)},
+    }
     if country == "lka":
-        # CEB Statistical Digest 2025 p.2-3 (transcribed): installed capacity excl. rooftop solar 4,814 MW
-        # (2025), 4,651 MW (2024); net generation incl. rooftop 17,812 GWh (2025).
-        rep["published"] = {"installed_capacity_mw_2025_excl_rooftop": 4814,
-                            "net_generation_gwh_2025_incl_rooftop": 17812,
-                            "ceb_owned_capacity_mw_2023": 3218,
-                            "source": "CEB Statistical Digest 2025 p.2-3; CEB Annual Report 2023 p.22"}
-        rep["capacity_coverage_vs_2025"] = rep["power_capacity_mw"] / 4814
+        # CEB Statistical Digest 2025 pp.2-3 (transcribed): installed capacity excl. rooftop solar
+        # 4,814 MW (2025) / 4,651 MW (2024); net generation incl. 1,674 GWh rooftop solar 17,812 GWh (2025).
+        rep["power"]["published"] = {"installed_capacity_mw_2025_excl_rooftop": 4814,
+                                     "net_generation_gwh_2025_incl_rooftop": 17812,
+                                     "ceb_owned_capacity_mw_end2023": 3218,
+                                     "source": "CEB Statistical Digest 2025 pp.2-3; CEB Annual Report 2023 p.22"}
+        rep["power"]["capacity_coverage_vs_2025"] = rep["power"]["capacity_mw"] / 4814
     else:
-        rep["published"] = {"eia923_net_generation_twh_2025_all_plants": "4412.5 (sum of Page 1, excl. state increments)"}
-    v, y = util.wb_value("EG.ELC.RNEW.ZS", country.upper())
-    rep["wb_renewable_output_share_pct"] = {"value": v, "year": y}
+        rep["power"]["published"] = {"eia923_2025_net_generation_gwh_all_rows_excl_state_increments": 4412549}
     pt = results["ports"]
-    rep["port_cargo_t"] = float(pt.port_cargo_t.sum())
-    rep["ports"] = int(len(pt))
+    rep["ports"] = {"ports": int(len(pt)), "port_cargo_t": float(pt.port_cargo_t.sum()),
+                    "port_calls": float(pt.port_calls.sum()),
+                    "wb_check": {"container_port_traffic_teu IS.SHP.GOOD.TU": _wb("IS.SHP.GOOD.TU", iso3)}}
+    if country == "lka":
+        rep["ports"]["port_teu_colombo_2024"] = float(pt.port_teu.sum())
+        rep["ports"]["official_cargo_t_2024"] = float(pt.official_cargo_t.sum())
     ap = results["airports"]
-    rep["airports"] = int(len(ap))
-    rep["airport_pax"] = float(np.nansum(ap.airport_pax))
+    rep["airports"] = {"airports": int(len(ap)), "large": int((ap.kind == "large_airport").sum()),
+                       "airport_pax": float(np.nansum(ap.airport_pax)),
+                       "wb_check": {"air_passengers_carried IS.AIR.PSGR": _wb("IS.AIR.PSGR", iso3)}}
+    if country == "lka":
+        rep["airports"]["published"] = {"passengers_departing_by_air_2024": 4437156,
+                                        "passengers_arriving_by_air_2024": 4378767,
+                                        "source": "DCS Statistical Abstract 2025 Table 7.16 (Civil Aviation Authority)"}
     rep["military_sites"] = int(len(results["military"]))
     rep["spaceports"] = int(len(results["spaceports"]))
     rep["industrial_zones"] = int(len(results["industrial_zones"]))

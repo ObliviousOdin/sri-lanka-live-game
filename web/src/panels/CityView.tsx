@@ -375,11 +375,13 @@ function CityRing({ d, city, idx, selectedHex }: { d: CountryData; city: City; i
   }, [d])
   const [active, setActive] = useState<string | null>(null)
   const pointer = useRef<string>('mouse')
+  // touch: first tap previews a tile (tooltip), a second tap on the same tile inspects it
+  const armed = useRef(false)
   useEffect(() => setActive(null), [city])
 
   const choose = (h: string) => useStore.getState().select({ country: d.id, kind: 'hex', id: h }, 'tile')
   const onClick = (h: string) => {
-    if (pointer.current === 'touch' && active !== h) { setActive(h); return }
+    if (pointer.current === 'touch' && !armed.current) { setActive(h); return }
     choose(h)
   }
   const onKey = (e: KeyboardEvent, h: string) => {
@@ -427,7 +429,7 @@ function CityRing({ d, city, idx, selectedHex }: { d: CountryData; city: City; i
                 tabIndex={0}
                 aria-label={label}
                 aria-pressed={isSel}
-                onPointerDown={(e) => { pointer.current = e.pointerType }}
+                onPointerDown={(e) => { pointer.current = e.pointerType; armed.current = active === c.h3 }}
                 onPointerEnter={(e) => { pointer.current = e.pointerType; if (e.pointerType !== 'touch') setActive(c.h3) }}
                 onFocus={() => setActive(c.h3)}
                 onBlur={() => setActive((a) => (a === c.h3 ? null : a))}

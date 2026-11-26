@@ -1,0 +1,55 @@
+/* Wonders panel — all classes prefixed `wonders-` */
+.wonders { min-width: 0; }
+.wonders-title { margin-top: 2px; }
+.wonders-lede { margin: 0 0 10px; color: var(--muted); font-size: 12.5px; }
+.wonders .card h3 { display: flex; align-items: center; gap: 7px; }
+.wonders-icon { font-size: 18px; }
+.wonders-empty p { font-size: 12.5px; margin: 4px 0 8px; }
+.wonders-await { display: flex; flex-wrap: wrap; gap: 4px; }
+.wonders-note { font-size: 12px; margin: 6px 0 0; }
+
+/* scoreboard */
+.wonders-race { background: linear-gradient(160deg, #1b2e4b 0%, var(--bg2) 65%); border-color: var(--line2); }
+table.data.wonders-race-table { table-layout: fixed; }
+table.data.wonders-race-table th, table.data.wonders-race-table td { padding: 3px 5px; }
+table.data.wonders-race-table thead th { position: static; background: transparent; }
+table.data.wonders-race-table thead th:first-child { width: 46%; }
+table.data.wonders-race-table tbody th, table.data.wonders-race-table tfoot th { font-weight: 400; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; position: static; background: none; }
+table.data.wonders-race-table tfoot th { color: var(--muted); }
+table.data.wonders-race-table tfoot tr:first-child th, table.data.wonders-race-table tfoot tr:first-child td { border-top: 1px solid var(--line2); font-weight: 700; color: var(--text); }
+table.data.wonders-race-table td.lead { color: var(--brass2); font-weight: 700; }
+table.data.wonders-race-table td.lead::after { content: ' ▲'; font-size: 9px; vertical-align: 1px; }
+.wonders-ratio { white-space: nowrap; font-size: 11.5px; }
+.wonders-ratio .lka { color: var(--lka); }
+.wonders-ratio .usa { color: var(--usa); }
+.wonders-foot { margin: 8px 0 0; font-size: 11px; color: var(--muted); }
+
+/* filter */
+.wonders-seg { display: inline-flex; background: #0a1220; border: 1px solid var(--line2); border-radius: 999px; padding: 2px; margin: 2px 0 10px; max-width: 100%; }
+.wonders-seg button { background: none; border: 0; padding: 3px 11px; border-radius: 999px; color: var(--muted); font-size: 12.5px; white-space: nowrap; }
+.wonders-seg button.active { background: var(--brass); color: #1a1206; font-weight: 600; }
+.wonders-seg button:focus-visible { outline: 2px solid var(--brass2); outline-offset: 1px; }
+
+/* category cards */
+.wonders-rule { margin: 0 0 8px; font-size: 11.5px; color: var(--muted); }
+.wonders-rule b { color: var(--text); font-weight: 600; }
+.wonders-country + .wonders-country { margin-top: 10px; padding-top: 8px; border-top: 1px dashed var(--line); }
+.wonders-country-head { display: flex; align-items: center; gap: 6px; font-size: 12px; margin-bottom: 4px; }
+.wonders-rows { list-style: none; margin: 0; padding: 0; display: grid; gap: 3px; }
+.wonders-row {
+  width: 100%; display: grid; grid-template-columns: 22px minmax(0, 1fr) auto; gap: 8px; align-items: center; text-align: left;
+  background: #0b1422; border: 1px solid var(--line); border-radius: 7px; padding: 4px 8px; font-size: 12.5px;
+}
+.wonders-row:hover, .wonders-row:focus-visible { border-color: var(--brass); outline: none; background: #13223a; }
+.wonders-row.sel { border-color: var(--brass2); background: #d9a44122; box-shadow: inset 3px 0 0 var(--brass2); }
+.wonders-rank { display: inline-grid; place-items: center; width: 20px; height: 20px; border-radius: 50%; font: 700 11px/1 var(--serif); background: var(--line); color: var(--text); }
+.wonders-rank.r1 { background: linear-gradient(135deg, var(--brass2), var(--brass)); color: #1a1206; }
+.wonders-rank.r2 { background: #c3ccd6; color: #1a1f26; }
+.wonders-rank.r3 { background: #b07a4a; color: #1a1206; }
+.wonders-name { display: grid; min-width: 0; }
+.wonders-name > span { overflow-wrap: anywhere; }
+.wonders-name small { color: var(--muted); font-size: 11px; }
+.wonders-val { display: grid; text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.wonders-val small { color: var(--muted); font-size: 10.5px; }
+.wonders-more { margin-top: 5px; font-size: 12px; padding: 3px 9px; }
+.wonders-src { margin-top: 6px; }

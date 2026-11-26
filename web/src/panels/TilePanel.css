@@ -100,7 +100,7 @@
 .tilepanel-pct-bar i { display: block; height: 100%; background: linear-gradient(90deg, var(--brass), var(--brass2)); border-radius: 2px; }
 .tilepanel-msub { display: flex; flex-wrap: wrap; gap: 3px 6px; align-items: center; font-size: 11px; color: var(--muted); margin-top: 2px; }
 .tilepanel-msub:empty { display: none; }
-.tilepanel-msub .chip { font-size: 10.5px; padding: 0 6px; max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
+.tilepanel-msub .chip { display: inline-block; font-size: 10.5px; line-height: 16px; padding: 0 6px; max-width: 150px; overflow: hidden; text-overflow: ellipsis; vertical-align: middle; }
 .tilepanel-dens { color: var(--text); opacity: .8; font-variant-numeric: tabular-nums; }
 .tilepanel-mdetail { font-size: 12px; margin-top: 5px; padding: 6px 8px; border-left: 2px solid var(--brass); background: #0b142266; border-radius: 0 6px 6px 0; }
 .tilepanel-mdetail p { margin: 0 0 5px; overflow-wrap: anywhere; }

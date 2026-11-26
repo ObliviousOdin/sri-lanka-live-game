@@ -129,7 +129,7 @@ export function hexPercentile(d: CountryData, m: Metric, i: number): { pct: numb
 
 const adminSortedCache = new WeakMap<AdminTable, Map<string, Float64Array>>()
 
-export function adminRank(t: AdminTable, key: string, ui: number): { rank: number; n: number; pct: number | null } | null {
+export function adminRank(t: AdminTable, key: string, ui: number): { rank: number; n: number; ties: number; pct: number | null } | null {
   const col = t.metrics[key]
   const v = col?.[ui]
   if (!col || v == null || !Number.isFinite(v)) return null
@@ -140,7 +140,8 @@ export function adminRank(t: AdminTable, key: string, ui: number): { rank: numbe
     s = Float64Array.from(col.filter((x): x is number => x != null && Number.isFinite(x))).sort()
     byKey.set(key, s)
   }
-  return { rank: s.length - upperBound(s, v) + 1, n: s.length, pct: percentileOf(s, v) }
+  const hi = upperBound(s, v)
+  return { rank: s.length - hi + 1, n: s.length, ties: hi - lowerBound(s, v), pct: percentileOf(s, v) }
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -232,6 +233,11 @@ export interface YieldPart {
 }
 export interface YieldExplain { key: YieldKey; actual: number; computed: number; parts: YieldPart[]; note?: string }
 
+const BASE_LABELS: Record<string, string> = {
+  gold: 'GDP', production: 'Industrial GVA', food: 'Agricultural GVA', food_sea: 'Fish landings',
+  science: 'STEM workers', culture: 'Arts, recreation & hospitality jobs', faith: 'Places of worship',
+}
+
 // culture / faith bonuses are constants in civ.py (not in index.json)
 const WHS_PTS = 2, WHS_MAX = 2, MUSEUM_MIN = 3, PARK_VIS_MIN = 1_000_000, HOLY_PTS = 2
 
@@ -255,15 +261,16 @@ export function explainYields(d: CountryData, idx: IndexJson, i: number): YieldE
 
   const basePart = (bkey: string, label?: string): YieldPart => {
     const b = ys.bases[bkey]
-    if (!b) return { label: label ?? bkey, amount: '–', detail: 'no yield base defined', points: 0, counted: true, missing: true }
+    if (!b) return { label: label ?? BASE_LABELS[bkey] ?? bkey, amount: '–', detail: 'no yield base defined', points: 0, counted: true, missing: true }
     const m = d.metricByKey.get(b.metric)
-    const name = label ?? m?.label ?? b.metric
+    const name = label ?? m?.label ?? BASE_LABELS[bkey] ?? b.metric
+    const baseTxt = `${fmtThreshold(b.base, isMoneyUnit(m?.unit ?? '') || b.unit.startsWith('US$') ? 'usd' : '')}/km²`
     if (!m) {
-      return { label: name, amount: 'not yet available', detail: `${b.metric} has not been published for ${d.meta.name} yet`, points: 0, counted: true, missing: true, metric: b.metric }
+      return { label: name, amount: 'awaiting data', detail: `1 point at ${baseTxt} (${b.unit}) · ${b.metric} not published yet`, points: 0, counted: true, missing: true, metric: b.metric }
     }
     const v = d.matrix[m.col * d.n + i]
     if (!Number.isFinite(v)) {
-      return { label: name, amount: 'no data', detail: `no value for this tile · base ${fmtThreshold(b.base, m.unit)}/km²`, points: 0, counted: true, missing: true, metric: m.key, sources: m.sources }
+      return { label: name, amount: 'no data', detail: `no value for this tile · 1 point at ${baseTxt}`, points: 0, counted: true, missing: true, metric: m.key, sources: m.sources }
     }
     const dens = v / area
     const p = logYield(dens, b.base, cap)
@@ -296,7 +303,7 @@ export function explainYields(d: CountryData, idx: IndexJson, i: number): YieldE
   const bonusPart = (label: string, amt: ReturnType<typeof tileAmount>, unit: string, points: (v: number) => number, rule: string): YieldPart =>
     amt
       ? { label, amount: `${fmtNumber(amt.v)} ${unit}`.trim(), detail: `${rule} · from ${amt.from}`, points: points(amt.v), counted: true, sources: amt.sources }
-      : { label, amount: 'not yet available', detail: rule, points: 0, counted: true, missing: true }
+      : { label, amount: 'awaiting data', detail: rule, points: 0, counted: true, missing: true }
 
   const stepsText = (steps: [number, number][], unit: string) => steps.map(([t, b]) => `≥ ${fmtNumber(t)} ${unit} +${b}`).join(' · ')
 

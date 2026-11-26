@@ -1,6 +1,6 @@
 // Grouped, filterable "All metrics" list used by the Tile inspector for tiles and admin units.
 import { useMemo, useState } from 'react'
-import { SourceChips } from '../components/SourceChip'
+import { SourceChip, SourceChips } from '../components/SourceChip'
 import { YieldIcon } from '../components/YieldIcon'
 import { useStore } from '../store'
 import type { Metric } from '../types'
@@ -117,7 +117,7 @@ function MetricRow({ r, scopeLabel }: { r: MetricRowData; scopeLabel: string }) 
       <div className="tilepanel-msub">
         {r.densityText && <span className="tilepanel-dens">{r.densityText}</span>}
         {m?.vintage && <span>{m.vintage}</span>}
-        {m && m.sources.length > 0 && <SourceChips ids={m.sources} />}
+        {m && m.sources.length > 0 && <RowSources ids={m.sources} />}
         {m && !m.sources.length && m.domain === 'derived' && <span>derived</span>}
       </div>
       {open && (
@@ -142,5 +142,16 @@ function MetricRow({ r, scopeLabel }: { r: MetricRowData; scopeLabel: string }) 
         </div>
       )}
     </div>
+  )
+}
+
+/** At most two compact source chips per row (all of them are listed when the row is expanded). */
+function RowSources({ ids }: { ids: string[] }) {
+  const u = [...new Set(ids)]
+  return (
+    <>
+      {u.slice(0, 2).map((id) => <SourceChip key={id} id={id} compact />)}
+      {u.length > 2 && <span title={u.slice(2).join(', ')}>+{u.length - 2}</span>}
+    </>
   )
 }
