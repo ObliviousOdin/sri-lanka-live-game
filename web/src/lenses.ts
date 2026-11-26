@@ -103,8 +103,16 @@ function dominantKeys(lens: LensDef, d: CountryData) {
   const keys = d.meta.metrics
     .map((m) => m.key)
     .filter((k) => k.startsWith(dm.prefix) && (!dm.suffix || k.endsWith(dm.suffix)) && !(dm.exclude ?? []).includes(k))
-  // drop aggregate categories (e.g. all-Christian) when their components are published
-  return keys.filter((k) => !(dm.aggregates?.[k] ?? []).some((c) => keys.includes(c)))
+  // Aggregate categories (e.g. all-Christian): when ≥ 2 components are published use the
+  // components (US traditions), otherwise keep the aggregate and drop the lone subset (LKA Catholics).
+  const drop = new Set<string>()
+  for (const [agg, comps] of Object.entries(dm.aggregates ?? {})) {
+    if (!keys.includes(agg)) continue
+    const present = comps.filter((c) => keys.includes(c))
+    if (present.length >= 2) drop.add(agg)
+    else present.forEach((c) => drop.add(c))
+  }
+  return keys.filter((k) => !drop.has(k))
 }
 
 /** Values used for colouring a metric lens (densities for extensive metrics). */

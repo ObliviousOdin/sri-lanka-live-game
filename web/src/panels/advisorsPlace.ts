@@ -291,7 +291,7 @@ function military(ctx: PlaceCtx): Comment[] {
   out.push(rankComment(ctx, 'soldiers', '💂', mm(d, 'cit_soldiers_pct', { label: 'Soldiers (share of workers)' }), mm(other, 'cit_soldiers_pct', { label: 'Soldiers (share of workers)' })))
   out.push(rankComment(ctx, 'slope', '⛰️', mm(d, 'slope_mean_deg', { label: 'Defensive ground — mean slope', ratio: true }), mm(other, 'slope_mean_deg', { ratio: true }), {
     suffix: (r) => (r.p >= 75 ? ' (rough terrain favours defenders)' : r.p <= 25 ? ' (open ground, hard to hold)' : ''),
-    vlabel: 'rugged terrain (mean slope)',
+    vlabel: 'ruggedness — mean slope',
   }))
   // strategic assets
   const assets: Seg[] = []
@@ -413,6 +413,6 @@ export function twinName(d: CountryData, level: string, index: number, idx?: Ind
   if (!u) return { title: '?', subtitle: '' }
   const parent = level === 'adm2' ? d.admin.adm1?.units.find((x) => x.id === u.parent) : undefined
   const sub = d.id === 'lka' ? (parent ? unitName(d, 'adm1', parent) : '') : level === 'adm2' ? (d.admin.adm1?.units.find((x) => x.id === u.parent)?.name ?? '') : ''
-  return { title: unitName(d, level, u), subtitle: sub || (d.meta.admin_levels[level]?.label ?? '') }
+  return { title: unitName(d, level, u), subtitle: sub || (level === 'adm1' ? '' : d.meta.admin_levels[level]?.label ?? '') }
 }
 

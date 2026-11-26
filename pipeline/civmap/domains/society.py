@@ -28,7 +28,6 @@ import json
 import re
 import time
 import zipfile
-from datetime import datetime, timezone
 from functools import lru_cache
 
 import geopandas as gpd
@@ -82,7 +81,7 @@ SOURCES = [
            "(via civmap.core)."),
     Source("hot_rawdata_api", "HOT Raw Data API - OpenStreetMap snapshot (amenity=place_of_worship, Sri Lanka)",
            "Humanitarian OpenStreetMap Team (data: OpenStreetMap contributors)",
-           "https://api-prod.raw-data.hotosm.org/v1/docs", "ODbL 1.0", "snapshot (see fetched_at)", ["lka"],
+           "https://api-prod.raw-data.hotosm.org/v1/docs", "ODbL 1.0", "OSM snapshot 2026-11-26", ["lka"],
            "POST /v1/snapshot/ with the COD-AB national outline (buffered 0.02 deg, simplified), tags filter "
            "amenity=place_of_worship and attributes name, name:en, name:si, name:ta, amenity, religion, denomination, "
            "building, historic, wikidata; centroids of ways/relations. Gives the OSM religion tag that the HDX "
@@ -161,16 +160,14 @@ def _metric(key, label, unit, category, kind, weight, table, sources, vintage, d
     return Metric(key, label, unit, category, kind, weight, table, sources, vintage, desc, method, better, [cc])
 
 
-def _lka_rel(key, label, cats):
+def _lka_rel(key, label, desc, cats):
     return _metric(key, label, "%", "society", "intensive", "pop", "admin_adm3", _LKA_SRC, "2024",
-                   f"Share of the population whose religion is {label.split(' (')[0].lower()} (census self-report).",
-                   _LKA_REL_M + f" Categories: {cats}.", "neutral", "lka")
+                   desc + " (Census 2024 self-report).", _LKA_REL_M + f" Categories: {cats}.", "neutral", "lka")
 
 
-def _lka_eth(key, label, cats):
+def _lka_eth(key, label, desc, cats):
     return _metric(key, label, "%", "society", "intensive", "pop", "admin_adm3", _LKA_SRC, "2024",
-                   f"Share of the population of {label.split(' (')[0]} ethnicity (census self-report).",
-                   _LKA_ETH_M + f" Categories: {cats}.", "neutral", "lka")
+                   desc + " (Census 2024 self-report).", _LKA_ETH_M + f" Categories: {cats}.", "neutral", "lka")
 
 
 def _us_rel(key, label, vars_, desc):
@@ -185,21 +182,30 @@ def _us_eth(key, label, cols, desc):
 
 METRICS = [
     # ---- Sri Lanka: religion (Census 2024, DS division)
-    _lka_rel("rel_buddhist_pct", "Buddhist (% of population)", "tot_Ra_Buddhist"),
-    _lka_rel("rel_hindu_pct", "Hindu (% of population)", "tot_Ra_Hindu"),
-    _lka_rel("rel_muslim_pct", "Muslim (% of population)", "tot_Ra_Islam ('Islam')"),
+    _lka_rel("rel_buddhist_pct", "Buddhist (% of population)", "Share of residents who are Buddhist",
+             "tot_Ra_Buddhist"),
+    _lka_rel("rel_hindu_pct", "Hindu (% of population)", "Share of residents who are Hindu", "tot_Ra_Hindu"),
+    _lka_rel("rel_muslim_pct", "Muslim (% of population)", "Share of residents whose religion is Islam",
+             "tot_Ra_Islam ('Islam')"),
     _lka_rel("rel_christian_pct", "Christian (% of population)",
+             "Share of residents who are Christian (Roman Catholic or other Christian)",
              "tot_Ra_Roman_Catholic + tot_Ra_Other_Christian"),
-    _lka_rel("rel_catholic_pct", "Roman Catholic (% of population)", "tot_Ra_Roman_Catholic"),
+    _lka_rel("rel_catholic_pct", "Roman Catholic (% of population)", "Share of residents who are Roman Catholic",
+             "tot_Ra_Roman_Catholic"),
     _lka_rel("rel_other_pct", "Other religion (% of population)",
-             "tot_Ra_Other (all religions other than Buddhist, Hindu, Islam, Roman Catholic and other Christian, "
-             "including none / not stated as published)"),
+             "Share of residents reporting a religion other than the five main census categories",
+             "tot_Ra_Other (the census 'Other' religion category, as published)"),
     # ---- Sri Lanka: ethnicity
-    _lka_eth("eth_sinhalese_pct", "Sinhalese (% of population)", "tot_Eth_Sinhalese"),
-    _lka_eth("eth_sl_tamil_pct", "Sri Lankan Tamil (% of population)", "tot_Eth_SL_Tamil"),
-    _lka_eth("eth_indian_tamil_pct", "Indian Tamil / Malaiyaga Thamilar (% of population)", "tot_Eth_Ind_Tamil"),
-    _lka_eth("eth_moor_pct", "Sri Lanka Moor (% of population)", "tot_Eth_SL_Moor"),
+    _lka_eth("eth_sinhalese_pct", "Sinhalese (% of population)", "Share of residents who are Sinhalese",
+             "tot_Eth_Sinhalese"),
+    _lka_eth("eth_sl_tamil_pct", "Sri Lankan Tamil (% of population)", "Share of residents who are Sri Lankan Tamil",
+             "tot_Eth_SL_Tamil"),
+    _lka_eth("eth_indian_tamil_pct", "Indian Tamil / Malaiyaga Thamilar (% of population)",
+             "Share of residents who are Indian Tamil (Malaiyaga Thamilar)", "tot_Eth_Ind_Tamil"),
+    _lka_eth("eth_moor_pct", "Sri Lanka Moor (% of population)", "Share of residents who are Sri Lanka Moor",
+             "tot_Eth_SL_Moor"),
     _lka_eth("eth_other_pct", "Other ethnic groups (% of population)",
+             "Share of residents who are Burgher, Malay, Sri Lanka Chetty, Bharatha, Veddha or another group",
              "tot_Eth_Burgher + tot_Eth_Malay + tot_Eth_SL_Chetty + tot_Eth_Bharatha + tot_Eth_Veddhas + tot_Eth_Other"),
     _metric("religious_diversity", "Religious diversity (Gini-Simpson)", "index", "society", "intensive", "pop",
             "admin_adm3", _LKA_SRC, "2024",
@@ -214,7 +220,7 @@ METRICS = [
             "Lanka Moor, Burgher, Malay, Sri Lanka Chetty, Bharatha, Veddha, other) of each COD-AB DS division, from "
             "the Census 2024 portal counts. Hexes: population-weighted average.", "neutral", "lka"),
     _metric("worship_sites", "Places of worship", "count", "faith", "extensive", "pop", "admin_adm3",
-            ["hot_rawdata_api", "hotosm_lka_cultural_places", "ocha_codab_lka"], "OSM snapshot 2026-11",
+            ["hot_rawdata_api", "hotosm_lka_cultural_places", "ocha_codab_lka"], "OSM snapshot 2026-11-26",
             "Places of worship mapped in OpenStreetMap (temples, kovils, mosques, churches...).",
             "OpenStreetMap amenity=place_of_worship (nodes, and centroids of ways/relations), de-duplicated where a "
             "node and a way/relation with the same normalised name lie within 100 m, assigned to COD-AB DS divisions "
@@ -588,8 +594,7 @@ def _osm_worship_raw() -> tuple[gpd.GeoDataFrame, str]:
             g = g.set_crs(4326)
         cols = {c.lower().replace(":", "_"): c for c in g.columns}
         df = gpd.GeoDataFrame({
-            "osm_id": [f"{t}/{i}" for t, i in zip(g.get(cols.get("osm_type", "osm_type"), pd.Series(["osm"] * len(g))),
-                                                     g.get(cols.get("osm_id", "osm_id"), pd.Series(range(len(g)))))],
+            "osm_id": [f"{str(t).rstrip('s')}/{i}" for t, i in zip(g["osm_type"], g["osm_id"])],
             "name": g.get(cols.get("name", "name")),
             "name_en": g.get(cols.get("name_en", "name_en")),
             "name_si": g.get(cols.get("name_si", "name_si")),
@@ -626,7 +631,8 @@ _NAME_RULES = [
                   r"spirit|trinity)|church of|தேவாலயம்|திருச்சபை|சபை|දේවස්ථානය|පල්ලිය|කතෝලික"),
     ("hindu", r"kovil|koil|kovilan|amman|pillaiyar|pillayar|vinayagar|vinayakar|murugan|kandasw|kanthasw|"
               r"sivan|\bsiva|shiva|eeswar|eswar|ishwar|vishnu|perumal|kali\b|kaali|ganesh|ganapathi|hindu|"
-              r"devasthan|aalayam|alayam|mariamman|muthumari|kannaki|ayyanar|சிவ|கோவில்|கோயில்|ஆலயம்|அம்மன்|"
+              r"devasthan|aalayam|alayam|mariamman|muthumari|kannaki|ayyanar|mandir|akshardham|swaminarayan|"
+              r"\bbaps\b|iskcon|krishna|சிவ|கோவில்|கோயில்|ஆலயம்|அம்மன்|"
               r"பிள்ளையார்|முருக|விநாயக|කෝවිල"),
     ("buddhist", r"vihar|viharay|pansala|aramaya|\barama|ashramaya|asramaya|dagoba|dageba|dagaba|chaitya|"
                  r"cetiya|stupa|bodhi|bo tree|bomaluwa|pirivena|buddh|maha vihara|raja maha|tapowana|thapowana|"
@@ -634,8 +640,10 @@ _NAME_RULES = [
                  r"விகாரை|பௌத்த"),
 ]
 _NAME_RX = [(r, re.compile(p, re.I)) for r, p in _NAME_RULES]
-_OSM_REL = {"buddhist": "buddhist", "hindu": "hindu", "muslim": "muslim", "christian": "christian",
-            "jewish": "jewish", "sikh": "sikh"}
+_OSM_REL = {"buddhist": "buddhist", "bud": "buddhist", "buddhism": "buddhist", "hindu": "hindu",
+            "hinduism": "hindu", "muslim": "muslim", "islam": "muslim", "islamic": "muslim",
+            "christian": "christian", "christianity": "christian", "catholic": "christian",
+            "jewish": "jewish", "sikh": "sikh"}   # any other tag value (multifaith, none, a;b, ...) -> "other"
 
 
 def _religion_from_names(*names) -> str | None:
@@ -707,6 +715,15 @@ def lka_worship() -> tuple[pd.DataFrame, pd.DataFrame, dict]:
     adm["worship_sites"] = adm.admin_id.map(cnt.sum(axis=1)).fillna(0).astype(int)
     for k in ("buddhist", "hindu", "muslim", "christian", "other", "unknown"):
         adm[f"worship_{k}"] = adm.admin_id.map(cnt[k] if k in cnt else pd.Series(dtype=float)).fillna(0).astype(int)
+    if src == "hot_rawdata_api":   # cross-check against the HDX pre-built export
+        try:
+            z = fetch(HOT_CULTURAL_GPKG, "hotosm_lka_cultural_places", "lka/osm",
+                      "hotosm_lka_cultural_places_osm_gpkg.zip")
+            hdx = gpd.read_file(next(unzip(z).rglob("*.gpkg")), columns=["amenity"], ignore_geometry=True)
+            print(f"  cross-check: HDX cultural_places export has {int((hdx.amenity == 'place_of_worship').sum()):,} "
+                  f"amenity=place_of_worship features vs {n_raw:,} in the snapshot", flush=True)
+        except Exception as e:  # noqa: BLE001 - cross-check only
+            print(f"  cross-check with the HDX export skipped: {str(e)[:80]}")
     diag = {"source": src, "raw": n_raw, "duplicates_dropped": len(drop), "outside_country": n_out,
             "kept": len(out), "by_kind": out.kind.value_counts().to_dict(),
             "religion_source": out.religion_source.value_counts().to_dict()}

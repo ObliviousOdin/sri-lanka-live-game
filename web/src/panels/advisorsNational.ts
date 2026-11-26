@@ -26,11 +26,13 @@ export interface NatSpec {
   icon: string
   /** sparkline priority within its advisor (lower first) */
   spark?: number
+  /** headline indicator: eligible for the national verdict */
+  headline?: boolean
 }
 
 export const NAT_SPECS: NatSpec[] = [
   // ---- economic
-  { key: 'gdp_pc', codes: ['NY.GDP.PCAP.CD'], re: /^GDP per capita \(current/i, advisor: 'economic', short: 'GDP per capita', fmt: 'usd', say: 'earns {v} per citizen (GDP per capita)', better: 'higher', intensive: true, icon: 'y:gold', spark: 1 },
+  { key: 'gdp_pc', codes: ['NY.GDP.PCAP.CD'], re: /^GDP per capita \(current/i, advisor: 'economic', short: 'GDP per capita', fmt: 'usd', say: 'earns {v} per citizen (GDP per capita)', better: 'higher', intensive: true, icon: 'y:gold', spark: 1, headline: true },
   { key: 'gdp_pc_ppp', codes: ['NY.GDP.PCAP.PP.CD'], re: /^GDP per capita, PPP/i, advisor: 'economic', short: 'GDP per capita, PPP', fmt: 'usd', say: 'earns {v} per citizen at purchasing-power parity', better: 'higher', intensive: true, icon: 'y:gold' },
   { key: 'gdp', codes: ['NY.GDP.MKTP.CD'], re: /^GDP \(current US/i, advisor: 'economic', short: 'GDP', fmt: 'usd', say: 'commands an economy of {v} (GDP)', better: 'higher', intensive: false, icon: '🏦', spark: 2 },
   { key: 'gni_pc', codes: ['NY.GNP.PCAP.CD'], re: /^GNI per capita, Atlas/i, advisor: 'economic', short: 'GNI per capita (Atlas)', fmt: 'usd', say: 'has a gross national income of {v} per citizen (Atlas method)', better: 'higher', intensive: true, icon: '💵' },
@@ -43,31 +45,49 @@ export const NAT_SPECS: NatSpec[] = [
   { key: 'unemp', codes: ['SL.UEM.TOTL.ZS', 'SL.UEM.TOTL.NE.ZS'], re: /^Unemployment, total/i, advisor: 'economic', short: 'Unemployment', fmt: 'pct', say: 'has {v} of its labour force out of work', better: 'lower', intensive: true, icon: '🪑' },
   { key: 'gini', codes: ['SI.POV.GINI'], re: /^Gini/i, advisor: 'economic', short: 'Gini index', fmt: 'num', say: 'scores {v} on the Gini inequality index', better: 'lower', intensive: true, icon: '⚖️' },
   { key: 'pop', codes: ['SP.POP.TOTL'], re: /^Population, total/i, advisor: 'population', short: 'Population', fmt: 'num', say: 'counts {v} citizens', better: 'neutral', intensive: false, icon: '👥' },
+  { key: 'gdp_growth', codes: ['NY.GDP.MKTP.KD.ZG'], advisor: 'economic', short: 'GDP growth', fmt: 'pct', say: 'grew its real GDP by {v} in the latest year', better: 'higher', intensive: true, icon: '📈' },
+  { key: 'inflation', codes: ['FP.CPI.TOTL.ZG'], advisor: 'economic', short: 'Consumer-price inflation', fmt: 'pct', say: 'saw consumer prices change by {v}', better: 'neutral', intensive: true, icon: '🏷️' },
+  { key: 'emp_agri', codes: ['SL.AGR.EMPL.ZS'], advisor: 'economic', short: 'Employment in agriculture', fmt: 'pct', say: 'keeps {v} of its workers on farms, in forests and fisheries', better: 'neutral', intensive: true, icon: '🧑‍🌾', headline: true },
+  { key: 'remit', codes: ['BX.TRF.PWKR.DT.GD.ZS'], advisor: 'economic', short: 'Remittances received, % of GDP', fmt: 'pct', say: 'receives {v} of GDP as remittances from citizens abroad', better: 'neutral', intensive: true, icon: '✉️' },
+  { key: 'lfp_f', codes: ['SL.TLF.CACT.FE.ZS'], advisor: 'economic', short: 'Female labour-force participation', fmt: 'pct', say: 'has {v} of women aged 15+ in the labour force', better: 'higher', intensive: true, icon: '👩‍💼' },
+  { key: 'debt', codes: ['GC.DOD.TOTL.GD.ZS'], advisor: 'economic', short: 'Central government debt, % of GDP', fmt: 'pct', say: 'owes central-government debt worth {v} of GDP', better: 'lower', intensive: true, icon: '📜' },
   // ---- military
-  { key: 'mil_gdp', codes: ['MS.MIL.XPND.GD.ZS'], re: /^Military expenditure \(% of GDP/i, advisor: 'military', short: 'Military spending, % of GDP', fmt: 'pct', say: 'spends {v} of GDP on its armed forces', better: 'neutral', intensive: true, icon: '🛡️', spark: 1 },
+  { key: 'mil_gdp', codes: ['MS.MIL.XPND.GD.ZS'], re: /^Military expenditure \(% of GDP/i, advisor: 'military', short: 'Military spending, % of GDP', fmt: 'pct', say: 'spends {v} of GDP on its armed forces', better: 'neutral', intensive: true, icon: '🛡️', spark: 1, headline: true },
   { key: 'mil_usd', codes: ['MS.MIL.XPND.CD'], re: /^Military expenditure \(current/i, advisor: 'military', short: 'Military spending', fmt: 'usd', say: 'spends {v} a year on its armed forces', per: { n: 1, label: 'citizen', fmt: 'usd' }, better: 'neutral', intensive: false, icon: '⚔️', spark: 2 },
   { key: 'mil_gov', codes: ['MS.MIL.XPND.ZS'], re: /^Military expenditure \(% of general government/i, advisor: 'military', short: 'Military, % of government spending', fmt: 'pct', say: 'devotes {v} of government spending to the military', better: 'neutral', intensive: true, icon: '🛡️' },
   { key: 'mil_pers', codes: ['MS.MIL.TOTL.P1'], re: /^Armed forces personnel, total/i, advisor: 'military', short: 'Armed forces personnel', fmt: 'num', say: 'fields {v} armed forces personnel', per: { n: 1000, label: '1,000 people', fmt: 'num' }, better: 'neutral', intensive: false, icon: '💂' },
-  { key: 'mil_lab', codes: ['MS.MIL.TOTL.TF.ZS'], re: /^Armed forces personnel \(% of total labor/i, advisor: 'military', short: 'Armed forces, % of labour force', fmt: 'pct', say: 'keeps {v} of its labour force under arms', better: 'neutral', intensive: true, icon: '💂' },
+  { key: 'mil_lab', codes: ['MS.MIL.TOTL.TF.ZS'], re: /^Armed forces personnel \(% of total labor/i, advisor: 'military', short: 'Armed forces, % of labour force', fmt: 'pct', say: 'keeps {v} of its labour force under arms', better: 'neutral', intensive: true, icon: '💂', headline: true },
+  { key: 'arms_imp', codes: ['MS.MIL.MPRT.KD'], advisor: 'military', short: 'Arms imports (SIPRI TIV)', fmt: 'num', say: 'imported arms worth {v} SIPRI trend-indicator units', better: 'neutral', intensive: false, icon: '📦' },
+  { key: 'homicide', codes: ['VC.IHR.PSRC.P5'], advisor: 'military', short: 'Intentional homicides per 100,000', fmt: 'num', say: 'records {v} intentional homicides per 100,000 people', better: 'lower', intensive: true, icon: '🚨' },
   // ---- cultural
   { key: 'tour_arr', codes: ['ST.INT.ARVL'], re: /^International tourism, number of arrivals/i, advisor: 'cultural', short: 'International tourist arrivals', fmt: 'num', say: 'welcomes {v} international tourists a year', per: { n: 100, label: '100 residents', fmt: 'num' }, better: 'higher', intensive: false, icon: '🧳', spark: 1 },
   { key: 'tour_rcpt', codes: ['ST.INT.RCPT.CD'], re: /^International tourism, receipts \(current/i, advisor: 'cultural', short: 'International tourism receipts', fmt: 'usd', say: 'earns {v} a year from international tourism', per: { n: 1, label: 'citizen', fmt: 'usd' }, better: 'higher', intensive: false, icon: '🎟️' },
-  { key: 'urban', codes: ['SP.URB.TOTL.IN.ZS'], re: /^Urban population \(%/i, advisor: 'cultural', short: 'Urban population', fmt: 'pct', say: 'houses {v} of its people in cities', better: 'neutral', intensive: true, icon: '🏙️' },
-  { key: 'internet', codes: ['IT.NET.USER.ZS'], re: /using the Internet/i, advisor: 'cultural', short: 'Internet users', fmt: 'pct', say: 'has {v} of its people online', better: 'higher', intensive: true, icon: '📡', spark: 2 },
-  { key: 'life', codes: ['SP.DYN.LE00.IN'], re: /^Life expectancy at birth, total/i, advisor: 'cultural', short: 'Life expectancy', fmt: 'years', say: 'has a life expectancy at birth of {v}', better: 'higher', intensive: true, icon: '🧑‍⚕️' },
+  { key: 'urban', codes: ['SP.URB.TOTL.IN.ZS'], re: /^Urban population \(%/i, advisor: 'cultural', short: 'Urban population', fmt: 'pct', say: 'houses {v} of its people in cities', better: 'neutral', intensive: true, icon: '🏙️', headline: true },
+  { key: 'internet', codes: ['IT.NET.USER.ZS'], re: /using the Internet/i, advisor: 'cultural', short: 'Internet users', fmt: 'pct', say: 'has {v} of its people online', better: 'higher', intensive: true, icon: '📡', spark: 2, headline: true },
+  { key: 'life', codes: ['SP.DYN.LE00.IN'], re: /^Life expectancy at birth, total/i, advisor: 'cultural', short: 'Life expectancy', fmt: 'years', say: 'has a life expectancy at birth of {v}', better: 'higher', intensive: true, icon: '🧑‍⚕️', headline: true },
+  { key: 'tour_share', codes: ['ST.INT.RCPT.XP.ZS'], advisor: 'cultural', short: 'Tourism receipts, % of exports', fmt: 'pct', say: 'earns {v} of its export income from international tourism', better: 'neutral', intensive: true, icon: '🏖️' },
+  { key: 'health_pc', codes: ['SH.XPD.CHEX.PC.CD'], advisor: 'cultural', short: 'Health spending per capita', fmt: 'usd', say: 'spends {v} per citizen on health care', better: 'higher', intensive: true, icon: '🧑‍⚕️' },
+  { key: 'u5mort', codes: ['SH.DYN.MORT'], advisor: 'cultural', short: 'Under-5 mortality per 1,000 births', fmt: 'num', say: 'loses {v} of every 1,000 children before age five', better: 'lower', intensive: true, icon: '👶' },
   // ---- scientific
-  { key: 'rd', codes: ['GB.XPD.RSDV.GD.ZS'], re: /^Research and development expenditure/i, advisor: 'scientific', short: 'R&D spending, % of GDP', fmt: 'pct', say: 'spends {v} of GDP on R&D', better: 'higher', intensive: true, icon: 'y:science', spark: 1 },
-  { key: 'researchers', codes: ['SP.POP.SCIE.RD.P6'], re: /^Researchers in R&D/i, advisor: 'scientific', short: 'Researchers per million people', fmt: 'num', say: 'employs {v} researchers per million people', better: 'higher', intensive: true, icon: '🧑‍🔬' },
+  { key: 'rd', codes: ['GB.XPD.RSDV.GD.ZS'], re: /^Research and development expenditure/i, advisor: 'scientific', short: 'R&D spending, % of GDP', fmt: 'pct', say: 'spends {v} of GDP on R&D', better: 'higher', intensive: true, icon: 'y:science', spark: 1, headline: true },
+  { key: 'researchers', codes: ['SP.POP.SCIE.RD.P6'], re: /^Researchers in R&D/i, advisor: 'scientific', short: 'Researchers per million people', fmt: 'num', say: 'employs {v} researchers per million people', better: 'higher', intensive: true, icon: '🧑‍🔬', headline: true },
   { key: 'articles', codes: ['IP.JRN.ARTC.SC'], re: /journal articles/i, advisor: 'scientific', short: 'Scientific & technical journal articles', fmt: 'num', say: 'publishes {v} scientific and technical articles a year', per: { n: 1e6, label: 'million people', fmt: 'num' }, better: 'higher', intensive: false, icon: '📄', spark: 2 },
   { key: 'patents', codes: ['IP.PAT.RESD'], re: /^Patent applications, residents/i, advisor: 'scientific', short: 'Resident patent applications', fmt: 'num', say: 'files {v} resident patent applications a year', per: { n: 1e6, label: 'million people', fmt: 'num' }, better: 'higher', intensive: false, icon: '💡' },
-  { key: 'hitech', codes: ['TX.VAL.TECH.MF.ZS'], re: /^High-technology exports \(%/i, advisor: 'scientific', short: 'High-tech exports, % of manufactured exports', fmt: 'pct', say: 'ships {v} of its manufactured exports as high-tech goods', better: 'higher', intensive: true, icon: '🖥️' },
-  { key: 'tertiary', codes: ['SE.TER.ENRR'], re: /^School enrollment, tertiary/i, advisor: 'scientific', short: 'Tertiary enrolment (gross)', fmt: 'pct', say: 'enrols {v} of the university-age population in tertiary education (gross ratio)', better: 'higher', intensive: true, icon: '🎓' },
+  { key: 'hitech', codes: ['TX.VAL.TECH.MF.ZS'], re: /^High-technology exports \(%/i, advisor: 'scientific', short: 'High-tech exports, % of manufactured exports', fmt: 'pct', say: 'ships {v} of its manufactured exports as high-tech goods', better: 'higher', intensive: true, icon: '🖥️', headline: true },
+  { key: 'tertiary', codes: ['SE.TER.ENRR'], re: /^School enrollment, tertiary/i, advisor: 'scientific', short: 'Tertiary enrolment (gross)', fmt: 'pct', say: 'enrols {v} of the university-age population in tertiary education (gross ratio)', better: 'higher', intensive: true, icon: '🎓', headline: true },
+  { key: 'ba_attain', codes: ['SE.TER.CUAT.BA.ZS'], advisor: 'scientific', short: "Adults 25+ with a bachelor's degree", fmt: 'pct', say: "counts {v} of adults (25+) with at least a bachelor's degree", better: 'higher', intensive: true, icon: '🎓', headline: true },
+  { key: 'edu_spend', codes: ['SE.XPD.TOTL.GD.ZS'], advisor: 'scientific', short: 'Public education spending, % of GDP', fmt: 'pct', say: 'spends {v} of GDP on public education', better: 'higher', intensive: true, icon: '🏫' },
+  { key: 'mht_manuf', codes: ['NV.MNF.TECH.ZS.UN'], advisor: 'scientific', short: 'Medium & high-tech share of manufacturing', fmt: 'pct', say: 'makes {v} of its manufacturing value in medium- and high-tech industries', better: 'higher', intensive: true, icon: '⚙️' },
   // ---- environmental
-  { key: 'forest', codes: ['AG.LND.FRST.ZS'], re: /^Forest area \(%/i, advisor: 'environmental', short: 'Forest area', fmt: 'pct', say: 'keeps {v} of its land under forest', better: 'higher', intensive: true, icon: '🌲', spark: 1 },
-  { key: 'protected', codes: ['ER.PTD.TOTL.ZS', 'ER.LND.PTLD.ZS'], re: /protected areas/i, advisor: 'environmental', short: 'Protected areas', fmt: 'pct', say: 'protects {v} of its territory', better: 'higher', intensive: true, icon: '🦌' },
-  { key: 'co2', codes: ['EN.GHG.CO2.PC.CE.AR5', 'EN.ATM.CO2E.PC'], re: /CO2\) emissions.*per capita/i, advisor: 'environmental', short: 'CO₂ emissions per capita', fmt: 'num', unit: 't', say: 'emits {v} of CO₂ per citizen', better: 'lower', intensive: true, icon: '🏭', spark: 2 },
-  { key: 'renew_elec', codes: ['EG.ELC.RNEW.ZS'], re: /^Renewable electricity output/i, advisor: 'environmental', short: 'Renewable electricity', fmt: 'pct', say: 'generates {v} of its electricity from renewables', better: 'higher', intensive: true, icon: '⚡', spark: 3 },
+  { key: 'forest', codes: ['AG.LND.FRST.ZS'], re: /^Forest area \(%/i, advisor: 'environmental', short: 'Forest area', fmt: 'pct', say: 'keeps {v} of its land under forest', better: 'higher', intensive: true, icon: '🌲', spark: 1, headline: true },
+  { key: 'protected', codes: ['ER.PTD.TOTL.ZS', 'ER.LND.PTLD.ZS'], re: /protected areas/i, advisor: 'environmental', short: 'Protected areas', fmt: 'pct', say: 'protects {v} of its territory', better: 'higher', intensive: true, icon: '🦌', headline: true },
+  { key: 'co2', codes: ['EN.GHG.CO2.PC.CE.AR5', 'EN.ATM.CO2E.PC'], re: /CO2\) emissions.*per capita/i, advisor: 'environmental', short: 'CO₂ emissions per capita', fmt: 'num', unit: 't', say: 'emits {v} of CO₂ per citizen', better: 'lower', intensive: true, icon: '🏭', spark: 2, headline: true },
+  { key: 'renew_elec', codes: ['EG.ELC.RNEW.ZS'], re: /^Renewable electricity output/i, advisor: 'environmental', short: 'Renewable electricity', fmt: 'pct', say: 'generates {v} of its electricity from renewables', better: 'higher', intensive: true, icon: '⚡', spark: 3, headline: true },
   { key: 'renew_energy', codes: ['EG.FEC.RNEW.ZS'], re: /^Renewable energy consumption/i, advisor: 'environmental', short: 'Renewable energy', fmt: 'pct', say: 'meets {v} of final energy use with renewables', better: 'higher', intensive: true, icon: '⚡' },
+  { key: 'pm25', codes: ['EN.ATM.PM25.MC.M3'], advisor: 'environmental', short: 'PM2.5 air pollution', fmt: 'num', unit: 'µg/m³', say: 'breathes air with {v} of fine particulates (PM2.5, annual mean)', better: 'lower', intensive: true, icon: '🌫️', headline: true },
+  { key: 'water_stress', codes: ['ER.H2O.FWST.ZS'], advisor: 'environmental', short: 'Water stress', fmt: 'pct', say: 'withdraws {v} of its available freshwater (water stress)', better: 'lower', intensive: true, icon: '💧' },
+  { key: 'energy_pc', codes: ['EG.USE.PCAP.KG.OE'], advisor: 'environmental', short: 'Energy use per capita', fmt: 'num', unit: 'kgoe', say: 'uses {v} of oil-equivalent energy per citizen', better: 'neutral', intensive: true, icon: '🛢️' },
+  { key: 'hydro', codes: ['EG.ELC.HYRO.ZS'], advisor: 'environmental', short: 'Hydroelectric share of power', fmt: 'pct', say: 'generates {v} of its electricity from hydropower', better: 'neutral', intensive: true, icon: '🌊' },
   { key: 'water', codes: ['ER.H2O.FWTL.ZS'], re: /^Annual freshwater withdrawals, total \(%/i, advisor: 'environmental', short: 'Freshwater withdrawals', fmt: 'pct', say: 'withdraws {v} of its internal freshwater resources each year', better: 'lower', intensive: true, icon: '💧' },
 ]
 
@@ -105,6 +125,28 @@ export function fmtRow(row: NationalIndicator, v: number) {
   const s = specFor(row)
   return fmtV(s?.fmt ?? inferFmt(row), v, s?.unit)
 }
+
+/** Extra fields the national stage writes (not yet in types.ts). */
+type Row = NationalIndicator & {
+  name?: string
+  yield?: string | null
+  better?: 'higher' | 'lower' | 'neutral'
+  common?: { year: number; LKA: number | null; USA: number | null } | null
+  source_org?: string
+}
+
+/** Values for both countries, using the latest common year when the latest years differ. */
+export function pairVals(row: NationalIndicator | undefined, home: CountryId, rival: CountryId) {
+  const a = rowVal(row, home), b = rowVal(row, rival)
+  if (!a || !b) return null
+  const cm = (row as Row).common
+  if (a.y !== b.y && cm && ok(cm[ISO[home]]) && ok(cm[ISO[rival]])) {
+    return { a: { v: cm[ISO[home]]!, y: cm.year }, b: { v: cm[ISO[rival]]!, y: cm.year }, shared: true }
+  }
+  return { a, b, shared: false }
+}
+
+const firstOrg = (o?: string) => (o ? o.split(/[;\n]/)[0].split(', uri:')[0].trim() : '')
 
 export function rowVal(row: NationalIndicator | undefined, c: CountryId): { v: number; y: number | null } | null {
   const s = row?.[ISO[c]]
@@ -186,11 +228,14 @@ function popAt(ctx: NatCtx, c: CountryId, year: number | null): { pop: number; s
 
 /** Comment for one national row (spec-driven or generic). */
 export function rowComment(row: NationalIndicator, ctx: NatCtx): Comment | null {
+  const r = row as Row
   const spec = specFor(row)
   const { home, rival } = ctx
-  const a = rowVal(row, home), b = rowVal(row, rival)
-  if (!a || !b) return null
-  const o = spec ?? { short: row.label, fmt: inferFmt(row), better: 'neutral' as const, intensive: false, icon: '📊' }
+  const pv = pairVals(row, home, rival)
+  if (!pv) return null
+  const { a, b } = pv
+  const better = r.better ?? spec?.better ?? 'neutral'
+  const o = spec ?? { short: `${row.label}${row.unit ? ` (${row.unit})` : ''}`, fmt: inferFmt(row), icon: r.yield ? `y:${r.yield}` : '📊' }
   const segs = compareSentence(o, home, rival, a.v, b.v)
   const sources = [row.source].filter(Boolean)
   if (spec?.per) {
@@ -204,14 +249,15 @@ export function rowComment(row: NationalIndicator, ctx: NatCtx): Comment | null 
     }
   }
   const yt = yearsText(home, a.y, rival, b.y)
-  segs.push(yt ? ` (${yt}).` : '.')
+  segs.push(yt ? ` (${yt}${pv.shared ? ', latest year with data for both' : ''}).` : '.')
   const k = a.v > 0 && b.v > 0 ? Math.abs(Math.log(a.v / b.v)) : 0
   const sameEra = a.y == null || b.y == null || Math.abs(a.y - b.y) <= 3
+  const org = firstOrg(r.source_org)
   return {
     id: spec?.key ?? row.code, icon: o.icon, segs, sources,
-    meta: `${row.label}${row.code ? ` · ${row.code}` : ''}`,
-    status: statusOf(o.better, a.v, b.v),
-    weight: spec?.intensive && sameEra ? k : 0,
+    meta: [r.name ?? row.label, row.code, org && org.length < 70 ? `via ${org}` : ''].filter(Boolean).join(' · '),
+    status: statusOf(better, a.v, b.v),
+    weight: spec?.headline && sameEra ? k : 0,
   }
 }
 
@@ -259,8 +305,10 @@ function yieldSources(ctx: NatCtx, ...ys: string[]) {
 const GENERATORS: Record<string, Gen> = {
   ppp_gap: (ctx) => {
     const n = ctx.byKey.get('gdp_pc'), p = ctx.byKey.get('gdp_pc_ppp')
-    const na = rowVal(n, ctx.home), nb = rowVal(n, ctx.rival), pa = rowVal(p, ctx.home), pb = rowVal(p, ctx.rival)
-    if (!na || !nb || !pa || !pb || !(na.v > 0 && nb.v > 0 && pa.v > 0 && pb.v > 0)) return null
+    const nv = pairVals(n, ctx.home, ctx.rival), pv = pairVals(p, ctx.home, ctx.rival)
+    if (!nv || !pv) return null
+    const na = nv.a, nb = nv.b, pa = pv.a, pb = pv.b
+    if (!(na.v > 0 && nb.v > 0 && pa.v > 0 && pb.v > 0)) return null
     if ((na.v > nb.v) !== (pa.v > pb.v)) return null
     const k1 = Math.max(na.v, nb.v) / Math.min(na.v, nb.v), k2 = Math.max(pa.v, pb.v) / Math.min(pa.v, pb.v)
     if (Math.abs(k1 - k2) / k1 < 0.05) return null
@@ -277,8 +325,8 @@ const GENERATORS: Record<string, Gen> = {
   sector_mix: (ctx) => {
     const keys = ['agri', 'industry', 'services']
     const rows = keys.map((k) => ctx.byKey.get(k))
-    const vals = (c: CountryId) => rows.map((r) => rowVal(r, c))
-    const a = vals(ctx.home), b = vals(ctx.rival)
+    const pvs = rows.map((r) => pairVals(r, ctx.home, ctx.rival))
+    const a = pvs.map((x) => x?.a ?? null), b = pvs.map((x) => x?.b ?? null)
     const have = keys.filter((_, i) => a[i] && b[i])
     if (have.length < 2) return null
     const names = { agri: 'agriculture', industry: 'industry', services: 'services' } as Record<string, string>
@@ -450,11 +498,12 @@ const GENERATORS: Record<string, Gen> = {
 
 /** Display order per advisor: national spec keys and generator ids. */
 const ORDER: Record<AdvisorId, string[]> = {
-  economic: ['gdp_pc', 'ppp_gap', 'gdp_pc_ppp', 'sector_mix', 'agri', 'industry', 'services', 'unemp', 'gdp', 'gini', 'exports', 'gni_pc', 'gni_pc_ppp', 'gdp_pipeline', 'gold_tile', 'power'],
-  military: ['mil_gdp', 'mil_usd', 'mil_pers', 'mil_lab', 'mil_gov', 'manpower', 'mil_sites', 'supply'],
-  cultural: ['tour_arr', 'tour_rcpt', 'culture_yield', 'wonders', 'internet', 'life', 'urban', 'heritage'],
-  scientific: ['rd', 'researchers', 'articles', 'patents', 'hitech', 'tertiary', 'science_yield', 'research_works', 'bachelors', 'engineers'],
-  environmental: ['forest', 'co2', 'renew_elec', 'protected', 'water', 'renew_energy', 'landcover', 'hazard', 'elevation', 'climate'],
+  economic: ['gdp_pc', 'gdp_pipeline', 'ppp_gap', 'gdp_pc_ppp', 'sector_mix', 'agri', 'industry', 'services', 'emp_agri', 'unemp', 'gold_tile', 'remit',
+    'gdp_growth', 'gini', 'gdp', 'power', 'exports', 'lfp_f', 'debt', 'inflation', 'gni_pc', 'gni_pc_ppp', 'manuf'],
+  military: ['mil_gdp', 'mil_usd', 'mil_pers', 'mil_lab', 'mil_gov', 'manpower', 'mil_sites', 'supply', 'arms_imp', 'homicide'],
+  cultural: ['tour_arr', 'tour_share', 'culture_yield', 'wonders', 'tour_rcpt', 'life', 'urban', 'internet', 'heritage', 'health_pc', 'u5mort'],
+  scientific: ['rd', 'researchers', 'articles', 'ba_attain', 'patents', 'hitech', 'tertiary', 'internet', 'science_yield', 'research_works', 'bachelors', 'engineers', 'edu_spend', 'mht_manuf'],
+  environmental: ['forest', 'co2', 'renew_elec', 'protected', 'pm25', 'water_stress', 'landcover', 'hazard', 'elevation', 'climate', 'renew_energy', 'hydro', 'energy_pc', 'water'],
 }
 export function advisorRows(rows: NationalIndicator[], advisor: AdvisorId): NationalIndicator[] {
   const order = ORDER[advisor]
@@ -466,6 +515,8 @@ export function advisorRows(rows: NationalIndicator[], advisor: AdvisorId): Nati
   return rows.filter((r) => (r.advisor || specFor(r)?.advisor) === advisor).sort((a, b) => rank(a) - rank(b))
 }
 
+const MAX_COMMENTS = 10
+
 const FOLDS: Record<string, string[]> = { ppp_gap: ['gdp_pc_ppp'], sector_mix: ['agri', 'industry', 'services'] }
 
 /** All comments for one advisor in the national view, in display order. Grouping follows row.advisor. */
@@ -474,6 +525,7 @@ export function nationalComments(advisor: AdvisorId, ctx: NatCtx): Comment[] {
   const folded = new Set<string>()
   const used = new Set<NationalIndicator>()
   for (const id of ORDER[advisor]) {
+    if (out.length >= MAX_COMMENTS) break
     const gen = GENERATORS[id]
     if (gen) {
       const c = gen(ctx)
@@ -487,8 +539,9 @@ export function nationalComments(advisor: AdvisorId, ctx: NatCtx): Comment[] {
     const c = rowComment(row, ctx)
     if (c) out.push(c)
   }
-  // rows grouped under this advisor that the order list does not place
+  // rows grouped under this advisor that the order list does not place (the ledger lists them all)
   for (const r of ctx.rows) {
+    if (out.length >= MAX_COMMENTS) break
     if (r.advisor !== advisor || used.has(r)) continue
     const s = specFor(r)
     if (s && (folded.has(s.key) || s.key === 'pop')) continue

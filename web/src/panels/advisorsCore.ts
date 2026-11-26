@@ -463,8 +463,8 @@ export function resolvePlace(sel: Selection, d: CountryData, idx: IndexJson): Pl
     const parent = parentLevel ? unitById(d, parentLevel).get(u.parent) : undefined
     const grand = parentLevel === 'adm2' && parent ? unitById(d, 'adm1').get(parent.parent) : undefined
     const subtitle = d.id === 'usa'
-      ? (level === 'adm2' ? (parent?.name ?? '') : 'State')
-      : [parent && unitName(d, parentLevel!, parent), grand && unitName(d, 'adm1', grand)].filter(Boolean).join(' · ') || 'Province'
+      ? (level === 'adm2' ? (parent?.name ?? '') : '')
+      : [parent && unitName(d, parentLevel!, parent), grand && unitName(d, 'adm1', grand)].filter(Boolean).join(' · ')
     return {
       d, country: d.id, level, index: ui, kind: d.meta.admin_levels[level]?.label ?? level,
       title: unitName(d, level, u), subtitle, lon: u.lon, lat: u.lat,

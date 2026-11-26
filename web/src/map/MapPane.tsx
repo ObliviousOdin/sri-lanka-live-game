@@ -159,6 +159,24 @@ export function MapPane({ country, data, app, lens, compact }: Props) {
   }, [data, idx, zoom >= iconMinZoom + 1.2])
   const atlas = useMemo(() => emojiAtlas([...new Set(iconData.map((d) => d.icon))]), [iconData])
 
+  // declutter city banners: keep the biggest cities, drop labels whose boxes would overlap
+  const zKey = view ? Math.round(view.zoom * 4) / 4 : 0
+  const visibleCities = useMemo(() => {
+    if (!view || !size) return data.cities
+    const vp = new WebMercatorViewport({ width: size.w, height: size.h, longitude: view.longitude, latitude: view.latitude, zoom: view.zoom })
+    const boxes: [number, number, number, number][] = []
+    const fs = compact ? 11 : 13
+    return [...data.cities].sort((a, b) => b.size - a.size).filter((c) => {
+      const [x, y] = vp.project([c.lon, c.lat])
+      const w = (c.name.length + 4) * fs * 0.62 + 12, h = fs + 8
+      const b: [number, number, number, number] = [x - w / 2, y - 26 - h / 2, x + w / 2, y - 26 + h / 2]
+      if (boxes.some((o) => b[0] < o[2] && b[2] > o[0] && b[1] < o[3] && b[3] > o[1])) return false
+      boxes.push(b)
+      return true
+    })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [data.cities, zKey, size?.w, size?.h, compact, Math.round((view?.longitude ?? 0) * 10), Math.round((view?.latitude ?? 0) * 10)])
+
   const pointLayers = (lensDef.pointLayers ?? []).flatMap((name) => {
     const layer = data.points[name]
     if (!layer) return []
@@ -215,8 +233,8 @@ export function MapPane({ country, data, app, lens, compact }: Props) {
       getIcon: (d) => d.icon, getPosition: (d) => d.pos, getSize: (d) => d.size, sizeUnits: 'pixels',
       pickable: true, updateTriggers: { getIcon: [atlas] },
     }),
-    showIcons && new TextLayer({
-      id: `cities-${country}`, data: data.cities, getPosition: (c) => [c.lon, c.lat], getText: (c) => `${c.size}  ${c.name}`,
+    showIcons && new TextLayer<CountryData['cities'][number]>({
+      id: `cities-${country}`, data: visibleCities, getPosition: (c) => [c.lon, c.lat], getText: (c) => `${c.size}  ${c.name}`,
       getSize: compact ? 11 : 13, getColor: [255, 246, 220, 255], background: true, getBackgroundColor: [12, 22, 38, 225],
       backgroundPadding: [6, 3, 6, 3], getBorderColor: [217, 164, 65, 255], getBorderWidth: 1,
       fontFamily: 'system-ui, -apple-system, Segoe UI, sans-serif', fontWeight: 700, getPixelOffset: [0, -26],
