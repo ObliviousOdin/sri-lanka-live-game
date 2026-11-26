@@ -13,14 +13,15 @@ Output (data/interim/<country>/terrain/hex.csv), one row per hex of civmap.core.
   elevation statistics are computed over land pixels (DEM != 0).
 * Land cover (ESA WorldCover 10 m 2021 v200).  Sri Lanka: every native 10 m pixel (whole tiles
   downloaded, processed in windows).  United States: the COG's 8x internal overview (~80 m).
-  The overviews are MODE-resampled (tested: dominant classes gain ~1 percentage point at 8x,
-  ~5-10 at 32x), which is why 8x was chosen over the coarser 32x/64x levels.
+  The overviews are MODE-resampled (tested against 10 m windows: dominant classes gain ~1
+  percentage point at 8x but 4-11 at 32x), which is why 8x was chosen over 32x/64x.
   Fractions are over the whole hex; ocean outside the tiles / no-data = water.
 * Allocation weights cropland_km2 / tree_km2 / built_km2 / grass_km2 = class share of the
   hex's *in-country* pixels x core land_km2, so Canadian / Mexican land in border hexes does
   not count.
-* Climate (WorldClim 2.1, 1970-2000 normals): BIO1 mean annual temperature, BIO12 annual
-  precipitation, mean of the H3 child-point samples (res+2, 49 points per hex).
+* Climate (WorldClim 2.1, 1970-2000 normals, 2.5 arc-min grid for both countries): BIO1 mean
+  annual temperature, BIO12 annual precipitation, mean of the H3 child-point samples (res+2,
+  49 points per hex).
 """
 from __future__ import annotations
 
@@ -112,15 +113,16 @@ SOURCES = [
     Source("copernicus_dem_glo90", "Copernicus DEM GLO-90 (Copernicus_DSM_COG_30, Cloud Optimized GeoTIFF)",
            "European Space Agency / Copernicus Programme (DEM produced by Airbus Defence and Space from TanDEM-X)",
            "https://registry.opendata.aws/copernicus-dem/",
-           "Copernicus DEM licence: free of charge, worldwide, for any lawful use with attribution "
-           "('produced using Copernicus WorldDEM-90 (c) DLR e.V. 2010-2014 and (c) Airbus Defence and "
-           "Space GmbH 2014-2018 provided under COPERNICUS by the European Union and ESA')",
-           "TanDEM-X acquisitions 2011-2015", ["lka", "usa"],
+           "GLO-90 is available on a free basis for the general public under the terms and conditions of "
+           "the Copernicus DEM licence (https://dataspace.copernicus.eu/explore-data/data-collections/"
+           "copernicus-contributing-missions/collections-description/COP-DEM)",
+           "Copernicus DEM 2021 release", ["lka", "usa"],
            "1x1 degree tiles s3://copernicus-dem-90m/Copernicus_DSM_COG_30_<N|S>yy_00_<E|W>xxx_00_DEM/ "
            "(tile list: tileList.txt). Digital surface model (includes canopy and buildings), heights "
            "above EGM2008 geoid, ocean = 0 m; tiles exist only where there is land. Sri Lanka: whole "
            "3 arc-second tiles downloaded. USA: the 4x internal overview (12 arc-sec) read with GDAL "
-           "/vsicurl/ range requests and cached as .npz under data/cache/terrain/copdem90_f4/."),
+           "/vsicurl/ range requests and cached as .npz under data/cache/terrain/copdem90_f4/. The AWS COGs "
+           "were built with average downsampling (readme: https://copernicus-dem-30m.s3.amazonaws.com/readme.html)."),
     Source("esa_worldcover_2021", "ESA WorldCover 10 m 2021 v200 (land cover map)",
            "European Space Agency, ESA WorldCover consortium (Zanaga et al. 2022)",
            "https://esa-worldcover.org/en", "CC BY 4.0", "2021", ["lka", "usa"],
@@ -152,9 +154,11 @@ _DEM_METHOD = (
     "Copernicus GLO-90 DSM pixels assigned to the H3 hex whose boundary contains the pixel centre "
     "(H3 polygons rasterised on each DEM tile grid). Sri Lanka: native 3 arc-sec (~90 m) tiles; USA: "
     "the COG's 4x internal overview (12 arc-sec N-S, ~370 m; coarser E-W spacing north of 50N follows "
-    "the GLO tiling), read with GDAL /vsicurl/. Statistics use land pixels only (DEM != 0; ocean is "
+    "the GLO tiling; average-downsampled, so peaks are smoothed), read with GDAL /vsicurl/. "
+    "Statistics use land pixels only (DEM != 0; ocean is "
     "0 m and absent tiles are sea); hexes without land pixels get 0 m and 0 deg. Means are weighted "
-    "by pixel area. DSM heights include canopy/buildings, relative to the EGM2008 geoid."
+    "by pixel area. DSM heights include canopy/buildings, relative to the EGM2008 geoid. Border "
+    "hexes are described as whole tiles (foreign land inside a US border hex is included)."
 )
 _SLOPE_METHOD = (
     " Slope = atan(|grad z|) from central differences (numpy.gradient) on the sampled DEM grid with "
@@ -166,7 +170,8 @@ _LC_METHOD = (
     "Share of the hex's pixels in WorldCover class {code} ({name}). WorldCover pixels ({res}) "
     "are assigned to the hex containing their centre (rasterised H3 "
     "polygons); fractions are over the whole hex area, so the 11 classes sum to 1. Open ocean "
-    "(no-data 0 inside tiles, or no tile at all) is counted as water (class 80)."
+    "(no-data 0 inside tiles, or no tile at all) is counted as water (class 80). Border hexes are "
+    "described as whole tiles (foreign land included); the *_km2 weights are in-country only."
 )
 _RES_TXT = ("Sri Lanka: all native 10 m pixels; USA: the COG's 8x internal overview, 0.00067 deg ~ 80 m, "
             "which GDAL built with mode resampling, so locally dominant classes are over-represented by "
@@ -183,25 +188,25 @@ _CLIM_METHOD = (
     "{bio} of the WorldClim 2.1 1970-2000 normals, nearest-pixel value at the centres of the hex's "
     "H3 children (res+2, 49 points/hex), averaged over points with data, on the 2.5 arc-min grid "
     "(~4.6 km) for both countries. Land hexes with no valid sample "
-    "(coastal slivers) take the nearest valid pixel within 10 pixels; open-water hexes with no valid "
-    "sample are left empty."
+    "(coastal slivers) take the nearest valid pixel within 10 pixels (~46 km); open-water hexes and "
+    "remote atolls (e.g. Northwestern Hawaiian Islands) with no valid sample are left empty."
 )
 
 METRICS = [
     Metric("elev_mean_m", "Mean elevation", "m", "elevation", "intensive", "land", "hex", _ELEV_SRC,
-           "2011-2015", "Mean height of the land surface in the hex (DSM, metres above EGM2008 geoid).",
+           "2021 release", "Mean height of the land surface in the hex (DSM, metres above EGM2008 geoid).",
            _DEM_METHOD, "neutral"),
     Metric("elev_min_m", "Minimum elevation", "m", "elevation", "intensive", "land", "hex", _ELEV_SRC,
-           "2011-2015", "Lowest land pixel in the hex.", _DEM_METHOD, "neutral"),
+           "2021 release", "Lowest land pixel in the hex.", _DEM_METHOD, "neutral"),
     Metric("elev_max_m", "Maximum elevation", "m", "elevation", "intensive", "land", "hex", _ELEV_SRC,
-           "2011-2015", "Highest land pixel in the hex (peaks are smoothed by the pixel size: ~90 m "
+           "2021 release", "Highest land pixel in the hex (peaks are smoothed by the pixel size: ~90 m "
            "LKA, ~370 m USA).", _DEM_METHOD, "neutral"),
     Metric("relief_m", "Local relief", "m", "elevation", "intensive", "land", "hex", _ELEV_SRC,
-           "2011-2015", "Robust elevation range inside the hex: 95th minus 5th percentile of land pixels "
+           "2021 release", "Robust elevation range inside the hex: 95th minus 5th percentile of land pixels "
            "(drives Hills / Mountains terrain).",
            _DEM_METHOD + " Percentiles are nearest-rank over the hex's land pixels (unweighted).", "neutral"),
     Metric("slope_mean_deg", "Mean slope", "deg", "elevation", "intensive", "land", "hex", _ELEV_SRC,
-           "2011-2015", "Average terrain slope of land pixels in the hex.", _DEM_METHOD + _SLOPE_METHOD,
+           "2021 release", "Average terrain slope of land pixels in the hex.", _DEM_METHOD + _SLOPE_METHOD,
            "neutral"),
 ]
 for _code, _key, _name in WC_CLASSES:
