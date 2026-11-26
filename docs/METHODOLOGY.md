@@ -86,9 +86,9 @@ A tile receives every district whose rule it meets; the first in this priority o
 | Theater Square | a cultural World Heritage Site, ≥ 5 museums, or arts/recreation/hospitality LQ ≥ 2 at ≥ 300 people/km² |
 | Encampment | a military installation |
 | Entertainment Complex | arts, recreation & hospitality LQ ≥ 2.5 (tourism economies) |
-| Plantation | perennial/tree-crop share of agriculture ≥ 30%, Food ≥ 3, ≥ 40% tree + crop cover |
-| Farmland | Food ≥ 5 and ≥ 40% cropland |
-| Fishery | sea tile with Food ≥ 4 |
+| Plantation | perennial/tree-crop share of agriculture ≥ 40%, Food ≥ 3, ≥ 40% tree + crop cover |
+| Farmland | Food ≥ 4 and ≥ 40% cropland |
+| Fishery | sea tile with Food ≥ 6 (≥ 31.6 t of fish per km² of coastal sea) |
 | Neighborhood | ≥ 1,500 people/km² |
 | Preserve | ≥ 75% strictly protected (WDPA, IUCN Ia–IV), or a national park with visitor statistics |
 

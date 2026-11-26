@@ -52,6 +52,7 @@ for _k, _v in {
     "VSI_CACHE": "TRUE",
     "GDAL_HTTP_MAX_RETRY": "4",
     "GDAL_HTTP_RETRY_DELAY": "2",
+    "GDAL_CACHEMAX": "256",  # MB; keep the block cache small, whole overviews are read at once
 }.items():
     os.environ.setdefault(_k, _v)
 if "CURL_CA_BUNDLE" not in os.environ and Path("/root/.ccr/ca-bundle.crt").exists():
@@ -88,7 +89,8 @@ CFG = {
     "lka": {"wc_factor": 1, "clim": "2.5m", "clim_child": 2},
     "usa": {"wc_factor": 4, "clim": "2.5m", "clim_child": 2},
 }
-THREADS = 8
+THREADS = 8      # parallel downloads of whole files (DEM tiles, 10 m WorldCover tiles)
+COG_THREADS = 4  # parallel /vsicurl/ overview reads (each holds a decoded 9000 x 9000 array, ~330 MB peak)
 WC_CHUNK = 4000  # window size for WorldCover processing (10 m windows / overview blocks)
 DEM_BIN = 0.1    # m, histogram bin width for the per-hex relief percentiles
 
@@ -395,12 +397,25 @@ def read_cog_cached(url: str, source_id: str, subdir: str, key: str, factor: int
     return arr, tr
 
 
+def _cache_only(url: str, source_id: str, subdir: str, key: str, factor: int) -> None:
+    """Make sure a tile is in the read_cog_cached cache without keeping the array around."""
+    npy = CACHE / subdir / f"{key}.npz"
+    if npy.exists() and npy.with_name(npy.name + ".meta.json").exists():
+        return None
+    read_cog_cached(url, source_id, subdir, key, factor)
+    return None
+
+
 def _prefetch(jobs, label: str):
-    """Run read_cog_cached jobs in a thread pool (I/O bound), printing progress."""
+    """Cache read_cog_cached jobs in a thread pool (I/O bound), printing progress.
+
+    The workers return nothing: holding every decoded tile in the futures (81 MB per 4x
+    WorldCover tile) would need ~17 GB for the US.
+    """
     t0 = time.time()
     done = 0
-    with ThreadPoolExecutor(THREADS) as ex:
-        futs = {ex.submit(read_cog_cached, *j): j for j in jobs}
+    with ThreadPoolExecutor(COG_THREADS) as ex:
+        futs = {ex.submit(_cache_only, *j): j for j in jobs}
         for f in as_completed(futs):
             f.result()
             done += 1

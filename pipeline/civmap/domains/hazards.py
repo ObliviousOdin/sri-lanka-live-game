@@ -5,7 +5,7 @@ Outputs (data/interim/<country>/hazards/):
                    cyclone_tracks, cyclone_max_wind_kt, quakes_m5, quake_max_mag,
                    tsunami_runups, tsunami_events, tsunami_max_m, hazard_index
   admin_adm2.csv   USA: FEMA National Risk Index (county risk score + expected annual losses)
-                   LKA: DesInventar disaster losses by district, 1990-latest
+                   LKA: DesInventar disaster losses by district, 1990 to the last complete year (2019)
 
 Hex metrics are computed from point/track catalogues with great-circle radius searches around
 each hex centre (3-D unit vectors + scipy cKDTree, so the Aleutians' antimeridian crossing is
@@ -48,6 +48,8 @@ QUAKE_MIN_MAG = 5.0
 TSUNAMI_MIN_YEAR = 1900
 TSUNAMI_MIN_VALIDITY = 3       # NCEI event validity: 3 = probable, 4 = definite tsunami
 DESINV_MIN_YEAR = 1990
+DESINV_DEFAULT_LAST_YEAR = 2019   # last complete year of the cached export (labels below); checked at build
+DESINV_MIN_MONTHS = 10            # a year counts as complete if datacards fall in >= 10 calendar months
 
 IBTRACS_URL = ("https://www.ncei.noaa.gov/data/international-best-track-archive-for-climate-stewardship-ibtracs/"
                "v04r01/access/csv/ibtracs.since1980.list.v04r01.csv")
@@ -65,14 +67,18 @@ QUAKE_REGIONS = {
     "lka": {"lka": (4.0, 11.8, 77.8, 83.8)},
     "usa": {"conus": (22.0, 51.0, -128.0, -64.0),
             "alaska": (49.0, 73.0, 168.0, 232.0),
-            "hawaii": (16.0, 25.0, -163.0, -152.0)},
+            "hawaii": (16.0, 25.0, -163.0, -152.0),
+            # Northwestern Hawaiian Islands (French Frigate Shoals to Kure Atoll, Honolulu County 15003)
+            # are land hexes of the grid; the main Hawaii box stops at 163W.
+            "nwhi": (21.0, 30.0, -180.0, -161.0)},
 }
 TSUNAMI_REGIONS = {   # HazEL does not wrap the antimeridian -> Alaska is split in two boxes
     "lka": {"lka": (4.5, 11.3, 78.2, 83.3)},
     "usa": {"conus": (23.0, 50.5, -127.0, -65.0),
             "alaska_w": (50.0, 72.5, 168.0, 180.0),
             "alaska_e": (50.0, 72.5, -180.0, -128.0),
-            "hawaii": (17.5, 23.5, -161.5, -153.5)},
+            "hawaii": (17.5, 23.5, -161.5, -153.5),
+            "nwhi": (22.5, 29.0, -179.5, -161.0)},
 }
 
 # DesInventar Sri Lanka event types -> hazard families used here.  Only natural hazards count
@@ -126,7 +132,11 @@ SOURCES = [
            "1980-2026 (2026 season provisional)", ["lka", "usa"],
            "File ibtracs.since1980.list.v04r01.csv (" + IBTRACS_URL + "), one row per 3-hourly track point "
            "from all agencies merged.  Read columns SID, SEASON, ISO_TIME, NATURE, LAT, LON, WMO_WIND, "
-           "USA_WIND, TRACK_TYPE; TRACK_TYPE main, PROVISIONAL and US-PROVISIONAL (recent storms not yet in the final best track, e.g. Cyclone Ditwah, Nov 2025); spur tracks (spur-merge, spur-split, spur-other, US-PROVISIONAL_spur) dropped."),
+           "USA_WIND, TRACK_TYPE; TRACK_TYPE main, PROVISIONAL and US-PROVISIONAL (recent storms not yet in the final best track, e.g. Cyclone Ditwah, Nov 2025); spur tracks (spur-merge, spur-split, spur-other, US-PROVISIONAL_spur) dropped.  "
+           "Column definitions (NATURE: DS Disturbance, TS Tropical, ET Extratropical, SS Subtropical, NR Not "
+           "reported, MX Mixture; USA_WIND 1-min mean; WMO_WIND not adjusted for averaging period) from "
+           "IBTrACS v04r01 column documentation, https://www.ncei.noaa.gov/sites/default/files/2025-09/"
+           "IBTrACS_v04r01_column_documentation.pdf."),
     Source("usgs_comcat",
            "ANSS Comprehensive Earthquake Catalog (ComCat), FDSN event web service",
            "U.S. Geological Survey, Earthquake Hazards Program",
@@ -134,7 +144,8 @@ SOURCES = [
            "public domain (U.S. Government work)", "1976-2025", ["lka", "usa"],
            "CSV queries with minmagnitude=5, eventtype=earthquake, per search box and decade "
            "(each response < 20,000 rows).  Boxes: Sri Lanka 4-11.8N 77.8-83.8E; USA CONUS "
-           "22-51N 128-64W, Alaska 49-73N 168E-128W (antimeridian crossing), Hawaii 16-25N 163-152W."),
+           "22-51N 128-64W, Alaska 49-73N 168E-128W (antimeridian crossing), Hawaii 16-25N 163-152W, "
+           "Northwestern Hawaiian Islands 21-30N 180-161W."),
     Source("ncei_tsunami_runups",
            "NCEI/WDS Global Historical Tsunami Database - tsunami runups (Hazard Event Library API)",
            "NOAA National Centers for Environmental Information (NCEI)",
@@ -156,13 +167,16 @@ SOURCES = [
            "current geography (Connecticut planning regions 09110-09190; Alaska 02063/02066)."),
     Source("desinventar_lka",
            "DesInventar Sendai - Sri Lanka national disaster loss database (full XML export)",
-           "Disaster Management Centre (DMC), Ministry of Defence, Sri Lanka / UNDRR DesInventar",
+           "Disaster Management Centre (DMC), Sri Lanka / UNDRR DesInventar",
            "https://www.desinventar.net/DesInventar/profiletab.jsp?countrycode=lka",
-           "CC BY 4.0 (as published on HDX 'disaster-loss-and-damage-dataset-for-sri-lanka')",
-           "1974-2020 (records used: 1990-2020)", ["lka"],
-           "Full database export " + DESINV_EXPORT + " (DI_export_lka.xml, 130,140 datacards, latest "
-           "datacard year 2020) - a superset of the 2016 HDX snapshot DI_report-SriLanka.xls (records to "
-           "2014; " + DESINV_HDX_XLS + "), which is used only as a fallback if the export is unavailable. "
+           "CC BY (HDX licence 'cc-by' of the same DMC database, dataset "
+           "'disaster-loss-and-damage-dataset-for-sri-lanka')",
+           "1974-2020 (2 stray datacards 1965/1968; 2020 has Jan-Feb only) - records used: 1990-2019", ["lka"],
+           "Full database export " + DESINV_EXPORT + " (DI_export_lka.xml, 130,140 datacards; the 2020 "
+           "datacards cover January-February only, so 2020 is dropped and the period ends with the last "
+           "complete year, 2019) - a superset of the HDX snapshot DI_report-SriLanka.xls (HDX dataset date "
+           "2015-10-01, records to 2014; " + DESINV_HDX_XLS + "), which is used only as a fallback if the "
+           "export is unavailable. "
            "Datacard fields: evento, fechano/fechames/fechadia, level1 (district code lka00P00D), "
            "muertos (deaths), afectados (affected), vivdest (houses destroyed).  District codes mapped "
            "to COD-AB pcodes via the database's lev1 names."),
@@ -181,11 +195,14 @@ METRICS = [
            "IBTrACS since1980 list: main, PROVISIONAL and US-PROVISIONAL tracks (spurs dropped), points filtered to a box 5 deg around the "
            "country.  Wind = USA_WIND (1-min sustained, JTWC/NHC/CPHC) if reported, else WMO_WIND "
            "(agency-specific averaging, e.g. IMD 3-min, RSMC Tokyo 10-min).  A track point qualifies if "
-           "NATURE is not ET (extratropical) or DS (disturbance) and wind >= 34 kt, or - when no wind is "
-           "reported - NATURE = 'TS'.  Consecutive points of a storm (<= 6 h apart) are densified to "
-           "<= 10 km steps (great-circle interpolation of position, linear interpolation of wind) so fast "
-           "storms are not missed between 3-hourly fixes.  Count = distinct SIDs with any qualifying "
-           "point within 100 km.  Exposure frequency at a point (not additive across hexes). "
+           "NATURE is not ET (extratropical) or DS (disturbance) - TS (tropical), SS (subtropical), MX and "
+           "NR are kept - and its wind is >= 34 kt.  Points with no reported wind never qualify (IBTrACS "
+           "NATURE 'TS' means 'Tropical', any intensity, so it is not used as a strength proxy).  "
+           "Consecutive points of a storm (<= 6 h apart) are densified to <= 10 km steps (great-circle "
+           "interpolation of position; wind interpolated linearly when both fixes report one, otherwise "
+           "the half-segment next to the fix with a wind takes that wind) so fast storms are not missed "
+           "between 3-hourly fixes.  Count = distinct SIDs with any qualifying point within 100 km.  "
+           "Exposure frequency at a point (not additive across hexes). "
            + _HEX_METHOD_COMMON, "lower"),
     Metric("cyclone_max_wind_kt", "Strongest cyclone wind nearby (1980-2026)", "kt", "hazard", "intensive",
            "land", "hex", ["ibtracs_v04r01"], "1980-2026",
@@ -240,7 +257,9 @@ METRICS = [
            "hazard_index = 100 x mean of the three scores, so a place exposed to only one hazard tops out "
            "near 33 and multi-hazard coasts (Hawaii, Alaska, California) score highest.  The reference "
            "distribution is pooled, so values are comparable between countries (inputs are radius counts, "
-           "independent of hex size).  Floods, droughts, landslides, wildfire and tornadoes are not in this "
+           "independent of hex size).  Each land hex counts once in the pool, so per km2 Sri Lanka's smaller "
+           "res-6 tiles carry ~7x the weight of US res-5 tiles (Sri Lanka is ~5% of the pooled land hexes, "
+           "but a larger share of the cyclone-exposed ones).  Floods, droughts, landslides, wildfire and tornadoes are not in this "
            "index (no consistent hex-level catalogue for both countries); see the admin tables for those.",
            "lower"),
     # ---------------- USA: FEMA National Risk Index (county) -------------------------------------
@@ -248,10 +267,12 @@ METRICS = [
            "admin_adm2", ["fema_nri_counties"], "NRI Dec 2025",
            "FEMA National Risk Index composite risk score (0-100): a county's percentile-based score of "
            "NRI risk (expected annual loss from 18 natural hazards, scaled by social vulnerability and "
-           "community resilience) relative to all US counties.",
-           "Field RISK_SCORE of the NRI Counties feature layer (NRI_VER 'December 2025'), joined on "
-           "STCOFIPS = county GEOID (cb_2023 geography; no splitting needed).  The score ranks counties "
-           "within the USA only, so it has no Sri Lankan counterpart.", "lower", ["usa"]),
+           "community resilience) relative to all counties in the NRI layer.",
+           "Field RISK_SCORE ('National Risk Index - Score - Composite') of the NRI Counties feature layer "
+           "(NRI_VER 'December 2025'), joined on STCOFIPS = county GEOID (cb_2023 geography; no splitting "
+           "needed).  The layer has 3,232 rows: the 3,144 counties of the 50 states + DC kept here plus 88 "
+           "Puerto Rico / Island Area units (dropped), and FEMA's percentile ranks are over all 3,232.  US-only "
+           "ranking, so it has no Sri Lankan counterpart.", "lower", ["usa"]),
     Metric("nri_eal_usd", "Expected annual loss from natural hazards (FEMA NRI)", "USD/yr", "hazard",
            "extensive", "pop", "admin_adm2", ["fema_nri_counties"], "NRI Dec 2025",
            "FEMA NRI expected annual loss, all 18 hazards: buildings + population (statistical value of "
@@ -263,10 +284,12 @@ METRICS = [
            "as published by FEMA for the December 2025 release (Hazus building inventory, value of a "
            "statistical life) - not re-based.  Allocated to hexes by population.", "lower", ["usa"]),
     Metric("nri_eal_coastal_flood_usd", "Expected annual loss: coastal flooding (FEMA NRI)", "USD/yr",
-           "hazard", "extensive", "coast", "admin_adm2", ["fema_nri_counties"], "NRI Dec 2025",
+           "hazard", "extensive", "pop", "admin_adm2", ["fema_nri_counties"], "NRI Dec 2025",
            "FEMA NRI expected annual loss from coastal flooding.",
            "Field CFLD_EALT, joined on STCOFIPS; NULL where FEMA rates the hazard 'Not Applicable' (no "
-           "coastline) -> 0.  Allocated to hexes with the coast weight.", "lower", ["usa"]),
+           "coastline) -> 0.  Allocated to hexes by population (the losses are to buildings, people and "
+           "crops on land, so the sea-ring 'coast' weight is not used; within a coastal county the loss is "
+           "spread over all its populated hexes, not only the shoreline ones).", "lower", ["usa"]),
     Metric("nri_eal_riverine_flood_usd", "Expected annual loss: inland (riverine) flooding (FEMA NRI)",
            "USD/yr", "hazard", "extensive", "pop", "admin_adm2", ["fema_nri_counties"], "NRI Dec 2025",
            "FEMA NRI expected annual loss from inland flooding (published as 'Riverine Flooding' in "
@@ -302,51 +325,52 @@ METRICS = [
            "Field DRGT_EALT, joined on STCOFIPS; NULL where FEMA rates the hazard 'Not Applicable' -> 0.  "
            "Allocated to hexes by cropland.", "lower", ["usa"]),
     # ---------------- Sri Lanka: DesInventar (district) ------------------------------------------
-    Metric("disaster_deaths", "Deaths in natural disasters (1990-2020)", "persons", "hazard", "extensive",
-           "pop", "admin_adm2", ["desinventar_lka"], "1990-2020",
-           "Deaths recorded in DesInventar datacards for natural-hazard events, 1990-2020 cumulative "
+    Metric("disaster_deaths", "Deaths in natural disasters (1990-2019)", "persons", "hazard", "extensive",
+           "pop", "admin_adm2", ["desinventar_lka"], "1990-2019",
+           "Deaths recorded in DesInventar datacards for natural-hazard events, 1990-2019 cumulative "
            "(dominated by the 26 Dec 2004 Indian Ocean tsunami).",
-           "Sum of 'muertos' over datacards with year 1990-2020, approved = 0 and a natural-hazard event "
+           "Sum of 'muertos' over datacards with year 1990-2019, approved = 0 and a natural-hazard event "
            "type (floods, rains, cyclones, winds, lightning, drought, forest fire, landslides/slope failures, "
            "subsidence, earthquake, tsunami, coastal surge/erosion); excluded: " + DESINV_EXCLUDED + ". "
            "Grouped by district (level1 code -> COD-AB pcode by name).  Allocated to hexes by population.",
            "lower", ["lka"]),
-    Metric("disaster_affected", "People affected by natural disasters (1990-2020)", "persons", "hazard",
-           "extensive", "pop", "admin_adm2", ["desinventar_lka"], "1990-2020",
-           "People reported affected by natural-hazard events, 1990-2020 cumulative (a person affected "
+    Metric("disaster_affected", "People affected by natural disasters (1990-2019)", "persons", "hazard",
+           "extensive", "pop", "admin_adm2", ["desinventar_lka"], "1990-2019",
+           "People reported affected by natural-hazard events, 1990-2019 cumulative (a person affected "
            "by several events is counted each time).",
            "Sum of 'afectados' (DesInventar 'Affected') over the same datacards as disaster_deaths.  "
            "Drought datacards contribute most of the total.  Allocated to hexes by population.",
            "lower", ["lka"]),
-    Metric("houses_destroyed", "Houses destroyed by natural disasters (1990-2020)", "houses", "hazard",
-           "extensive", "pop", "admin_adm2", ["desinventar_lka"], "1990-2020",
-           "Houses reported destroyed by natural-hazard events, 1990-2020 cumulative.",
+    Metric("houses_destroyed", "Houses destroyed by natural disasters (1990-2019)", "houses", "hazard",
+           "extensive", "pop", "admin_adm2", ["desinventar_lka"], "1990-2019",
+           "Houses reported destroyed by natural-hazard events, 1990-2019 cumulative.",
            "Sum of 'vivdest' (Houses destroyed) over the same datacards as disaster_deaths.  Allocated to "
            "hexes by population.", "lower", ["lka"]),
-    Metric("flood_events", "Flood events (1990-2020)", "events", "hazard", "intensive", "land",
-           "admin_adm2", ["desinventar_lka"], "1990-2020",
-           "Number of distinct flood events recorded in the district, 1990-2020.",
-           "Distinct (event type, date) combinations with at least one datacard in the district for "
-           "FLOOD, FLASH FLOOD, URBAN FLOOD and CYCLONE & FLOOD (datacards of the same event at several "
-           "GN / DS units on the same date count once).  A district-level frequency: every hex in the "
-           "district carries the district's count (intensive, land weight).", "lower", ["lka"]),
-    Metric("landslide_events", "Landslide events (1990-2020)", "events", "hazard", "intensive", "land",
-           "admin_adm2", ["desinventar_lka"], "1990-2020",
-           "Number of distinct landslide / slope-failure events recorded in the district, 1990-2020.",
+    Metric("flood_events", "Flood events (1990-2019)", "events", "hazard", "intensive", "land",
+           "admin_adm2", ["desinventar_lka"], "1990-2019",
+           "Number of flood event-days recorded in the district, 1990-2019.",
+           "Event-days: distinct dates with at least one datacard in the district for FLOOD, FLASH FLOOD, "
+           "URBAN FLOOD or CYCLONE & FLOOD (datacards of the same day at several GN / DS units, or of "
+           "several types of the family, count once; a multi-day event reported on several dates counts "
+           "once per date).  A district-level frequency: every hex in the district carries the "
+           "district's count (intensive, land weight).", "lower", ["lka"]),
+    Metric("landslide_events", "Landslide events (1990-2019)", "events", "hazard", "intensive", "land",
+           "admin_adm2", ["desinventar_lka"], "1990-2019",
+           "Number of landslide / slope-failure event-days recorded in the district, 1990-2019.",
            "As flood_events, for LANDSLIDE, EARTH SLIP, ROCK FALL and CUTTING FAILURE.", "lower", ["lka"]),
-    Metric("drought_events", "Drought events (1990-2020)", "events", "hazard", "intensive", "land",
-           "admin_adm2", ["desinventar_lka"], "1990-2020",
-           "Number of distinct drought events recorded in the district, 1990-2020.",
+    Metric("drought_events", "Drought events (1990-2019)", "events", "hazard", "intensive", "land",
+           "admin_adm2", ["desinventar_lka"], "1990-2019",
+           "Number of drought event-days recorded in the district, 1990-2019.",
            "As flood_events, for DROUGHT.", "lower", ["lka"]),
-    Metric("cyclone_events", "Cyclone events (1990-2020)", "events", "hazard", "intensive", "land",
-           "admin_adm2", ["desinventar_lka"], "1990-2020",
-           "Number of distinct cyclone events recorded in the district, 1990-2020.",
+    Metric("cyclone_events", "Cyclone events (1990-2019)", "events", "hazard", "intensive", "land",
+           "admin_adm2", ["desinventar_lka"], "1990-2019",
+           "Number of cyclone event-days recorded in the district, 1990-2019.",
            "As flood_events, for CYCLONE and CYCLONE & FLOOD (strong winds / gales are not included).",
            "lower", ["lka"]),
-    Metric("disaster_deaths_per_100k", "Disaster deaths per 100k per year (1990-2020 avg)",
-           "deaths/100k/yr", "hazard", "intensive", "pop", "admin_adm2", ["desinventar_lka"], "1990-2020",
-           "Average annual deaths in natural disasters per 100,000 residents, 1990-2020.",
-           "disaster_deaths / 31 years / district population (2023, core.load_admin, DCS/UNFPA COD-PS) "
+    Metric("disaster_deaths_per_100k", "Disaster deaths per 100k per year (1990-2019 avg)",
+           "deaths/100k/yr", "hazard", "intensive", "pop", "admin_adm2", ["desinventar_lka"], "1990-2019",
+           "Average annual deaths in natural disasters per 100,000 residents, 1990-2019.",
+           "disaster_deaths / 30 years / district population (2023, core.load_admin, DCS/UNFPA COD-PS) "
            "x 100,000.  Uses current population as the denominator for the whole period.", "lower", ["lka"]),
 ]
 
@@ -454,7 +478,9 @@ def _densified_track_points(country: str) -> pd.DataFrame:
     p = xyz[rep_i] * (1 - frac)[:, None] + xyz[rep_j] * frac[:, None]
     p /= np.linalg.norm(p, axis=1)[:, None]
     wa, wb = wind[rep_i], wind[rep_j]
-    w = np.where(np.isfinite(wa) & np.isfinite(wb), wa + frac * (wb - wa), np.where(np.isfinite(wa), wa, wb))
+    # both fixes have a wind: linear interpolation; only one has a wind: the half of the segment
+    # nearer that fix takes it (a fix without any reported wind stays unknown, never qualifies)
+    w = np.where(np.isfinite(wa) & np.isfinite(wb), wa + frac * (wb - wa), np.where(frac < 0.5, wa, wb))
     natp = np.where(frac < 0.5, nat[rep_i], nat[rep_j])
     sidp = sid[rep_i]
     # last point of each run (no valid successor) is added as-is
@@ -463,8 +489,10 @@ def _densified_track_points(country: str) -> pd.DataFrame:
     w = np.concatenate([w, wind[last]])
     natp = np.concatenate([natp, nat[last]])
     sidp = np.concatenate([sidp, sid[last]])
+    # IBTrACS NATURE: TS = "Tropical" (any intensity, depressions included), so it says nothing
+    # about tropical-storm strength; a point qualifies only on a reported (or interpolated) wind.
     tropical = ~np.isin(natp, ["ET", "DS"])
-    qual = tropical & np.where(np.isfinite(w), w >= CYCLONE_MIN_WIND_KT, natp == "TS")
+    qual = tropical & np.isfinite(w) & (w >= CYCLONE_MIN_WIND_KT)
     out = pd.DataFrame({"sid": sidp[qual], "x": p[qual, 0], "y": p[qual, 1], "z": p[qual, 2], "wind": w[qual]})
     print(f"  {country}: {len(d):,} track points in box -> {len(out):,} qualifying densified points, "
           f"{out.sid.nunique():,} storms", flush=True)
@@ -624,7 +652,12 @@ def _usa_admin() -> pd.DataFrame:
     d = _nri()
     adm = load_admin("usa", "adm2")
     d["admin_id"] = d.STCOFIPS.astype(str).str.zfill(5)
-    d = d[d.admin_id.isin(set(adm.admin_id))].drop_duplicates("admin_id")
+    if d.admin_id.duplicated().any():
+        raise RuntimeError(f"NRI: duplicate STCOFIPS {d.admin_id[d.admin_id.duplicated()].head().tolist()}")
+    other = d[~d.admin_id.isin(set(adm.admin_id))]
+    print(f"  NRI: dropped {len(other)} rows outside the 50 states + DC: "
+          f"{other.STATEABBRV.value_counts().to_dict()}", flush=True)
+    d = d[d.admin_id.isin(set(adm.admin_id))]
     miss = sorted(set(adm.admin_id) - set(d.admin_id))
     if miss:
         print(f"  WARNING NRI: {len(miss)} counties without NRI rows, e.g. {miss[:8]}")
@@ -736,11 +769,18 @@ def _lka_admin() -> tuple[pd.DataFrame, dict]:
     d["admin_id"] = d.level1.map(code2pc)
     n_all = len(d)
     d = d[(d.approved.astype(str).str.strip().isin(["0", ""])) & (d.fechano >= DESINV_MIN_YEAR)]
-    last_year = int(d.fechano.max())
+    # Last COMPLETE year: the export's final year can be a stub (the 2020 export has datacards for
+    # Jan-Feb only, plus one in Dec), so use the latest year with datacards in >= 10 calendar months.
+    months = d[d.fechames.between(1, 12)].groupby("fechano").fechames.nunique()
+    last_datacard_year = int(d.fechano.max())
+    last_year = int(months[months >= DESINV_MIN_MONTHS].index.max())
+    d = d[d.fechano <= last_year]
     n_period = len(d)
     nat = d[d.family.notna() & d.admin_id.notna()].copy()
     stats = {"origin": origin, "datacards_total": n_all, "datacards_period": n_period,
              "datacards_natural_with_district": len(nat), "first_year": DESINV_MIN_YEAR, "last_year": last_year,
+             "last_datacard_year": last_datacard_year,
+             "months_with_datacards_after_last_year": {int(y): int(n) for y, n in months[months.index > last_year].items()},
              "unmapped_event_types": sorted(set(d.ev) - set(DESINV_FAMILY))}
     agg = nat.groupby("admin_id").agg(disaster_deaths=("muertos", "sum"), disaster_affected=("afectados", "sum"),
                                       houses_destroyed=("vivdest", "sum"))
@@ -748,7 +788,9 @@ def _lka_admin() -> tuple[pd.DataFrame, dict]:
                        + "-" + nat.fechadia.fillna(0).astype(int).astype(str))
     for key, fams in DESINV_EVENT_COUNTS.items():
         sub = nat[nat.family.isin(fams)]
-        agg[key] = sub.drop_duplicates(["admin_id", "ev", "date_key"]).groupby("admin_id").size()
+        # one event-day per district and date, whatever the datacard type within the family
+        # (e.g. LANDSLIDE + CUTTING FAILURE, or FLOOD + FLASH FLOOD, on the same day count once)
+        agg[key] = sub.drop_duplicates(["admin_id", "date_key"]).groupby("admin_id").size()
     out = adm[["admin_id", "pop"]].merge(agg, left_on="admin_id", right_index=True, how="left")
     cols = ["disaster_deaths", "disaster_affected", "houses_destroyed"] + list(DESINV_EVENT_COUNTS)
     out[cols] = out[cols].fillna(0.0)
@@ -788,11 +830,13 @@ def build(country: str) -> None:
               f"datacards {DESINV_MIN_YEAR}-{stats['last_year']}; deaths {adm.disaster_deaths.sum():,.0f}, "
               f"affected {adm.disaster_affected.sum():,.0f}, houses destroyed {adm.houses_destroyed.sum():,.0f}",
               flush=True)
-        if stats["last_year"] != 2020:   # e.g. HDX fallback (to 2014): keep vintages/labels truthful
+        if stats["last_year"] != DESINV_DEFAULT_LAST_YEAR:   # e.g. HDX fallback: keep vintages/labels truthful
+            old = f"{DESINV_MIN_YEAR}-{DESINV_DEFAULT_LAST_YEAR}"
             span = f"{DESINV_MIN_YEAR}-{stats['last_year']}"
-            metrics = [dataclasses.replace(m, vintage=span, label=m.label.replace("1990-2020", span),
-                                           method=m.method.replace("1990-2020", span).replace(
-                                               "31 years", f"{stats['n_years']} years"))
+            n0 = f"{DESINV_DEFAULT_LAST_YEAR - DESINV_MIN_YEAR + 1} years"
+            metrics = [dataclasses.replace(m, vintage=span, label=m.label.replace(old, span),
+                                           description=m.description.replace(old, span),
+                                           method=m.method.replace(old, span).replace(n0, f"{stats['n_years']} years"))
                        if "desinventar_lka" in m.sources else m for m in METRICS]
     schema.write_domain_meta(config.interim_dir(country, DOMAIN), metrics, SOURCES, country)
 

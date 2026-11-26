@@ -1,5 +1,5 @@
 {
- "built_at": "2026-11-26T23:25:31+00:00",
+ "built_at": "2026-11-26T23:36:08+00:00",
  "countries": [
   {
    "id": "lka",
@@ -203,17 +203,17 @@
   {
    "code": "plantation",
    "label": "Plantation",
-   "rule": "Perennial/tree-crop share of agriculture \u2265 30%, Food yield \u2265 3 and \u2265 40% tree + crop cover."
+   "rule": "Perennial/tree-crop share of agriculture \u2265 40%, Food yield \u2265 3 and \u2265 40% tree + crop cover."
   },
   {
    "code": "farmland",
    "label": "Farmland",
-   "rule": "Food yield \u2265 5 and \u2265 40% cropland."
+   "rule": "Food yield \u2265 4 and \u2265 40% cropland."
   },
   {
    "code": "fishery",
    "label": "Fishery",
-   "rule": "Sea tile with Food yield \u2265 4 from fish landings."
+   "rule": "Sea tile with Food yield \u2265 6 from fish landings (\u2265 31.6 t per km\u00b2 of coastal sea)."
   },
   {
    "code": "neighborhood",

@@ -153,9 +153,9 @@ DISTRICT_RULES = {
                       "with ≥ 300 people/km².",
     "entertainment": "Arts, recreation & hospitality employment LQ ≥ 2.5 (tourism economy).",
     "preserve": "≥ 75% strictly protected (WDPA, IUCN categories Ia–IV), or a national park with visitor statistics.",
-    "plantation": "Perennial/tree-crop share of agriculture ≥ 30%, Food yield ≥ 3 and ≥ 40% tree + crop cover.",
-    "farmland": "Food yield ≥ 5 and ≥ 40% cropland.",
-    "fishery": "Sea tile with Food yield ≥ 4 from fish landings.",
+    "plantation": "Perennial/tree-crop share of agriculture ≥ 40%, Food yield ≥ 3 and ≥ 40% tree + crop cover.",
+    "farmland": "Food yield ≥ 4 and ≥ 40% cropland.",
+    "fishery": "Sea tile with Food yield ≥ 6 from fish landings (≥ 31.6 t per km² of coastal sea).",
     "neighborhood": "≥ 1,500 people/km² without another district.",
 }
 
@@ -313,9 +313,9 @@ def build_tiles(country: str) -> tuple[pd.DataFrame, dict]:
         | ((np.nan_to_num(lq_arts) >= 2) & (popd >= 300)),
         "entertainment": (np.nan_to_num(lq_arts) >= 2.5) & (col(H, "pop", 0.0) >= 5000),
         "preserve": ((protected >= 75) | park_tile.to_numpy()) & land_mask,
-        "plantation": (tree_share >= 30) & (Y["food"].to_numpy() >= 3) & (lc_tree + lc_crop >= 0.4) & land_mask,
-        "farmland": (Y["food"].to_numpy() >= 5) & (lc_crop >= 0.4) & land_mask,
-        "fishery": (H.ring.to_numpy() > 0) & (Y["food"].to_numpy() >= 4),
+        "plantation": (tree_share >= 40) & (Y["food"].to_numpy() >= 3) & (lc_tree + lc_crop >= 0.4) & land_mask,
+        "farmland": (Y["food"].to_numpy() >= 4) & (lc_crop >= 0.4) & land_mask,
+        "fishery": (H.ring.to_numpy() > 0) & (Y["food"].to_numpy() >= 6),
         "neighborhood": (popd >= 1500) & land_mask,
     }
     D = pd.DataFrame(D, index=idx)

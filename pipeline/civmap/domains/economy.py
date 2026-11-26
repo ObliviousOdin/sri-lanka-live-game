@@ -164,7 +164,7 @@ _US_GDP_METHOD = (
     "of the matching industry (+1). Margins: every disclosed county aggregate (lines 2, 91, 92, 87, 12, "
     "50, 59, 68, 75, 88, 89, 90, minus its disclosed leaves) and every state leaf total (state value "
     "minus disclosed counties). Disclosed county aggregates are reproduced to within BEA's own $1-4 "
-    "thousand rounding except a handful of counties (worst 0.06 %, Los Alamos NM line 59) and state industry totals to within 0.02 % (exact figures in "
+    "thousand rounding except a handful of counties (all < 0.1 %) and state industry totals to within 0.02 % (exact figures in "
     "report.json); national sector totals equal the sum of BEA state rows. BEA combination areas "
     "(23 Virginia county + independent-city combinations, Maui + Kalawao) are split to Census 2023 "
     "counties pro rata to 2023 population (Census PEP vintage 2023). Totals are the sum of the 50 states "
@@ -249,7 +249,7 @@ METRICS: list[Metric] = [
            "compare levels with care (no PPP adjustment applied).",
            "higher"),
     Metric("poverty_rate", "Poverty rate", "%", "income", "intensive", "pop", "admin_adm2",
-           ["census_acs5_2024", "dcs_poverty2019"],
+           ["census_acs5_2024", "dcs_poverty2019", "worldbank_wdi"],
            f"USA ACS {ACS_YEAR - 4}-{ACS_YEAR}; Sri Lanka HIES {HIES_YEAR}",
            "Share of people living below the national official poverty line.",
            "USA: ACS 5-year B17001_E002 / B17001_E001 x 100 (people below the Census Bureau's "

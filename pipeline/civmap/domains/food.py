@@ -77,6 +77,7 @@ URL = {
     "sagdp": "https://apps.bea.gov/regional/zip/SAGDP.zip",
     "foss": "https://apps-st.fisheries.noaa.gov/ods/foss/landings/",
     "cb2021": "https://www2.census.gov/geo/tiger/GENZ2021/shp/cb_2021_us_county_500k.zip",
+    "cainc45": "https://apps.bea.gov/regional/zip/CAINC45.zip",
 }
 
 # ---------------------------------------------------------------------------------------------
@@ -158,6 +159,12 @@ SOURCES: list[Source] = [
            "units: Alaska is tabulated for 5 agricultural census districts, Connecticut for its 8 former "
            "counties, Virginia's independent cities other than Chesapeake, Suffolk and Virginia Beach are not "
            "tabulated separately. The Quick Stats bulk file and API were not usable (file gateway / API key)."),
+    Source("bea_cainc45", "CAINC45: Farm income and expenses by county (thousands of dollars)",
+           "U.S. Bureau of Economic Analysis", URL["cainc45"], "public domain", str(US_COA_YEAR), ["usa"],
+           f"CAINC45_AK_1969_{US_COA_YEAR}.csv, line 10 cash receipts from marketings, {US_COA_YEAR}. Used only as "
+           "the weight that splits Alaska's Census of Agriculture state totals over boroughs (the census "
+           "publishes 5 agricultural districts; BEA reports non-zero receipts for Aleutians West, Fairbanks "
+           "North Star, Juneau, Kenai Peninsula and Matanuska-Susitna)."),
     Source("census_acs5_2024", "American Community Survey 2020-2024 5-year estimates (table-based Summary File)",
            "U.S. Census Bureau", "https://www2.census.gov/programs-surveys/acs/summary_file/2024/table-based-SF/",
            "public domain", "2020-2024", ["usa"],
@@ -179,8 +186,8 @@ SOURCES: list[Source] = [
     Source("terrain_worldcover",
            "Cropland per hex from the terrain domain (ESA WorldCover land-cover fractions)",
            "ESA WorldCover / Hex Atlas terrain domain", "https://esa-worldcover.org", "CC BY 4.0", "2021",
-           ["usa"], "Used only as the weight that splits combined / older Census of Agriculture units "
-           "(Alaska districts, Connecticut former counties) into current counties."),
+           ["usa"], "Used only as the weight that splits Census of Agriculture values for Connecticut's "
+           "former counties into planning regions (cropland inside each former county x region cell)."),
     Source("worldbank_wdi", "World Development Indicators", "World Bank",
            "https://data.worldbank.org", "CC BY 4.0", "2021-2025", ["lka", "usa"],
            "PA.NUS.FCRF (LKR per USD, period average) for currency conversion; NV.AGR.TOTL.CD, ER.FSH.CAPT.MT "
@@ -230,7 +237,7 @@ _US_GVA_METHOD = (
     f"{ACS_YEAR - 4}-{ACS_YEAR} 5-year employment in agriculture, forestry, fishing and hunting (C24030 "
     "lines 4 + 31, place of residence). District of Columbia: all to 11001. Counties sum exactly to the "
     "BEA state rows (50 states + DC). Sales-share caveats as for ag_sales_usd (withheld cells filled; "
-    "Alaska and Connecticut split by cropland). Hex allocation: cropland weight."
+    "Alaska split by BEA farm receipts, Connecticut by cropland). Hex allocation: cropland weight."
 )
 
 _US_SALES_METHOD = (
@@ -239,8 +246,9 @@ _US_SALES_METHOD = (
     "landlord's share is NOT included at county level). Withheld '(D)' county values: the state total minus "
     "the disclosed counties is shared among the withheld counties in proportion to their number of farms. "
     "Alaska is published only for 5 agricultural census districts whose borough composition is not given "
-    "in the text files, so the Alaska state total is split to the 30 boroughs / census areas in proportion "
-    "to ESA WorldCover cropland (terrain domain). Connecticut's 8 former counties are split to the 9 "
+    "in the text files, so the Alaska state total is split to boroughs in proportion to BEA CAINC45 2022 "
+    "farm cash receipts (non-zero for Aleutians West, Fairbanks North Star, Juneau, Kenai Peninsula, "
+    "Matanuska-Susitna). Connecticut's 8 former counties are split to the 9 "
     "planning regions by the cropland inside each (former county x planning region) intersection (Census "
     "cb_2021 county polygons overlaid on cb_2023 planning regions). Virginia independent cities that the "
     "census does not tabulate separately (all except Chesapeake, Suffolk, Virginia Beach) and Kalawao "
@@ -252,24 +260,27 @@ METRICS: list[Metric] = [
            "admin_adm2",
            ["dcs_qgdp2024_rev", "dcs_abstract2025_agri", "dcs_ec2014_agri", "mof_fisheries_stats_2024",
             "cbsl_pgdp2024_press", "dcs_abstract2025", "bea_sagdp2", "usda_coa2022", "census_acs5_2024",
-            "census_cb_2021", "terrain_worldcover", "worldbank_wdi"],
+            "census_cb_2021", "bea_cainc45", "terrain_worldcover", "worldbank_wdi"],
            f"USA {US_GDP_YEAR}; Sri Lanka {LKA_YEAR}",
            "Gross value added of agriculture, forestry and fishing (ISIC A / NAICS 11), current US dollars.",
            _US_GVA_METHOD + " | " + _LKA_GVA_METHOD, "higher"),
     Metric("ag_sales_usd", "Farm sales (market value of agricultural products sold)", "USD", "food",
-           "extensive", "cropland", "admin_adm2", ["usda_coa2022", "census_cb_2021", "terrain_worldcover"],
+           "extensive", "cropland", "admin_adm2", ["usda_coa2022", "census_cb_2021", "bea_cainc45",
+                                                   "terrain_worldcover"],
            str(US_COA_YEAR), "Gross market value of crops, livestock and poultry sold by farms (gross output, "
            "not value added).", _US_SALES_METHOD, "higher", ["usa"]),
     Metric("tree_crop_share", "Tree & plantation crop share of agricultural land", "%", "food", "intensive",
            "cropland", "admin_adm2", ["dcs_abstract2025_agri", "dcs_ec2014_agri", "usda_coa2022",
-                                      "census_cb_2021", "terrain_worldcover"],
+                                      "census_cb_2021", "bea_cainc45", "terrain_worldcover"],
            f"USA {US_COA_YEAR}; Sri Lanka {LKA_CENSUS_YEAR}",
            "Share of agricultural land under perennial tree / plantation crops (drives Plantation districts).",
            f"USA: {US_COA_YEAR} Census of Agriculture land in orchards (Table 30: fruit and nut trees, citrus, "
            "vineyards, bearing + non-bearing acres) / total cropland (Table 1) x 100 - orchards are part of "
            "cropland, so the share is <= 100. Withheld '(D)' acres are filled per state from the state total "
-           "minus disclosed counties, shared by the number of farms reporting; Alaska / Connecticut are split "
-           "as for ag_sales_usd (both acreages with the same weights). | Sri Lanka: (tea + rubber + coconut "
+           "minus disclosed counties: cropland shared by farms with cropland; orchards shared by the county's "
+           "2017 orchard acres (Table 30, else farms x the state median acres per orchard farm) and capped at "
+           "the county's cropland. Alaska / Connecticut are split as for ag_sales_usd (both acreages with the "
+           "same weights). Counties with no cropland: no value. | Sri Lanka: (tea + rubber + coconut "
            "extent) / total agricultural land of small holdings and estates x 100, Economic Census 2013/14 "
            "(DCS Abstract 2025 Table 5.2 for the crops in hectares, EC 2013/14 Table 2 for the land in acres "
            "converted at 0.404686 ha/acre). Definitional difference: the US denominator is cropland (excludes "
@@ -889,8 +900,9 @@ def _coa_text(state_fips: str, state_name: str, abbr: str) -> str:
 
 
 def _coa_pages(text: str, title: str) -> list[str]:
+    """Pages of a table; `title` is a regex (Louisiana says 'Parish', Alaska 'Area' for 'County')."""
     parts = re.split(r"\n(?=Table \d+\.\s)", text)
-    return [p for p in parts if p.startswith(title)]
+    return [p for p in parts if re.match(title, p)]
 
 
 T1_ITEMS = {("Farms", "number"): "farms", ("Total cropland", "farms"): "crop_farms",
@@ -900,17 +912,18 @@ T1_ITEMS = {("Farms", "number"): "farms", ("Total cropland", "farms"): "crop_far
 
 def _coa_table1(text: str) -> tuple[pd.DataFrame, list[str]]:
     """County Summary Highlights -> DataFrame indexed by column name (first column = state)."""
-    pages = _coa_pages(text, "Table 1.  County Summary Highlights")
+    pages = _coa_pages(text, r"Table 1\.  (County|Parish|Area) Summary Highlights")
     if not pages:
         raise ValueError("Census of Agriculture: Table 1 County Summary Highlights not found")
     cols: list[str] = []
     data: dict[str, list[float]] = {v: [] for v in T1_ITEMS.values()}
+    blocks: dict[tuple, dict] = {}      # a block of counties spans 2+ pages (the table is long)
     for pg in pages:
         lines = pg.splitlines()
         hi = next(i for i, l in enumerate(lines) if re.match(r"\s+Item\s+:", l))
         names = [x.strip() for x in lines[hi].split(":")[1:]]
         names = [n for n in names if n]
-        got: dict[str, list[float]] = {}
+        got = blocks.setdefault(tuple(names), {})
         item = ""
         for l in lines[hi + 1:]:
             if ":" not in l:
@@ -930,10 +943,11 @@ def _coa_table1(text: str) -> tuple[pd.DataFrame, list[str]]:
             key = T1_ITEMS.get((item, unit))
             if key and key not in got and len(toks) == len(names):
                 got[key] = [_coa_value(t) for t in toks]
+    for names, got in blocks.items():
         missing = set(T1_ITEMS.values()) - set(got)
         if missing:
-            raise ValueError(f"Census of Agriculture Table 1 page {names[:2]}: items not parsed {missing}")
-        cols += names
+            raise ValueError(f"Census of Agriculture Table 1 block {names[:2]}: items not parsed {missing}")
+        cols += list(names)
         for k in data:
             data[k] += got[k]
     df = pd.DataFrame(data)
@@ -942,23 +956,24 @@ def _coa_table1(text: str) -> tuple[pd.DataFrame, list[str]]:
 
 
 def _coa_table30(text: str) -> tuple[dict, dict]:
-    """Land in Orchards -> ({county name: (farms, acres)}, state (farms, acres)) for 2022."""
-    pages = _coa_pages(text, "Table 30.  Land in Orchards")
+    """Land in Orchards -> ({county: (farms 2022, acres 2022, acres 2017)}, state tuple)."""
+    pages = _coa_pages(text, r"Table 30\.  Land in Orchards")
     counties, state = {}, None
     for pg in pages:
         section = None
         for l in pg.splitlines():
             if l.startswith("State Total"):
                 section = "state"
-            elif l.startswith("Counties"):
+            elif re.match(r"(Counties|Parishes|Areas)\s*:", l):
                 section = "county"
             m = re.match(r"^(\S.*?)\s*\.{2,}\s*:\s*(.*)$", l)
             if not m or section is None:
                 continue
             toks = m.group(2).split()
-            if len(toks) < 2:
+            if len(toks) < 6:
                 continue
-            v = (_coa_value(toks[0]), _coa_value(toks[1]))
+            # 2022 total (farms, acres), irrigated (farms, acres), 2017 total (farms, acres), ...
+            v = (_coa_value(toks[0]), _coa_value(toks[1]), _coa_value(toks[5]))
             if section == "state" and state is None:
                 state = v
             elif section == "county":
@@ -968,8 +983,10 @@ def _coa_table30(text: str) -> tuple[dict, dict]:
     return counties, state
 
 
-def _fill_withheld(values: pd.Series, proxy: pd.Series, state_total: float) -> tuple[pd.Series, int]:
-    """Replace NaN (withheld) county values by the state residual shared in proportion to `proxy`."""
+def _fill_withheld(values: pd.Series, proxy: pd.Series, state_total: float,
+                   cap: pd.Series | None = None) -> tuple[pd.Series, int]:
+    """Replace NaN (withheld) county values by the state residual shared in proportion to `proxy`,
+    never exceeding `cap` (excess is passed on to the other withheld counties)."""
     v = values.copy()
     w = v.isna()
     if not w.any():
@@ -978,7 +995,23 @@ def _fill_withheld(values: pd.Series, proxy: pd.Series, state_total: float) -> t
     px = proxy[w].fillna(0.0).clip(lower=0)
     if px.sum() <= 0:
         px = pd.Series(1.0, index=px.index)
-    v[w] = resid * px / px.sum()
+    fill = pd.Series(0.0, index=px.index)
+    free = px.index
+    for _ in range(20):
+        if resid <= 1e-9 or px[free].sum() <= 0:
+            break
+        add = resid * px[free] / px[free].sum()
+        new = fill[free] + add
+        if cap is not None:
+            c = cap.reindex(free).fillna(np.inf)
+            over = new > c
+            new = new.where(~over, c)
+        resid -= float((new - fill[free]).sum())
+        fill[free] = new
+        if cap is None:
+            break
+        free = free[~over.to_numpy()]
+    v[w] = fill
     return v, int(w.sum())
 
 
@@ -996,6 +1029,20 @@ def _us_cropland_by_county() -> pd.Series:
         crop = pieces.land_km2
     pieces = pieces.assign(crop=crop)
     return pieces.groupby("adm2").crop.sum(), pieces
+
+
+def _ak_weights() -> pd.Series:
+    """Alaska borough farm cash receipts from marketings 2022 (BEA CAINC45 line 10, $1,000)."""
+    z = fetch(URL["cainc45"], "bea_cainc45", "usa/bea")
+    f = unzip(z, f"CAINC45_AK_1969_{US_COA_YEAR}.csv")
+    d = pd.read_csv(f, dtype=str, encoding="latin-1")
+    d = d[d.LineCode.str.strip() == "10"]
+    d["gid"] = d.GeoFIPS.str.strip().str.strip('"')
+    v = pd.to_numeric(d.set_index("gid")[str(US_COA_YEAR)], errors="coerce")
+    v = v[(v.index != "02000")].dropna()
+    if v.sum() <= 0:
+        raise ValueError("CAINC45: no Alaska borough cash receipts")
+    return v
 
 
 def _ct_weights(pieces: pd.DataFrame) -> pd.DataFrame:
@@ -1033,28 +1080,42 @@ def _us_coa() -> tuple[pd.DataFrame, dict]:
         if fips == "11":
             continue            # DC has no Census of Agriculture county volume
         st = states.loc[fips]
+        print(f"  Census of Agriculture {US_COA_YEAR}: {st['abbr']}", flush=True)
         text = _coa_text(fips, st["name"], st["abbr"])
         t1, cols = _coa_table1(text)
         orch, orch_state = _coa_table30(text)
         state_row = t1.iloc[0]
         cty = t1.iloc[1:].copy()
-        cty["orch_farms"] = [orch.get(n, (np.nan, np.nan))[0] for n in cty.name]
-        cty["orchard_ac"] = [orch.get(n, (np.nan, np.nan))[1] for n in cty.name]
-        lost = [n for n in cty.name if n not in orch]
-        if lost:
-            raise ValueError(f"{st['abbr']}: Table 30 has no row for {lost[:5]}")
+        # counties without orchards in 2022 and 2017 are omitted from Table 30 -> 0
+        cty["orch_farms"] = [orch.get(n, (0.0, 0.0, 0.0))[0] for n in cty.name]
+        cty["orchard_ac"] = [orch.get(n, (0.0, 0.0, 0.0))[1] for n in cty.name]
+        cty["orchard_ac17"] = [orch.get(n, (0.0, 0.0, 0.0))[2] for n in cty.name]
+        extra = sorted(set(orch) - set(cty.name))
+        if extra:
+            raise ValueError(f"{st['abbr']}: Table 30 rows not in Table 1: {extra[:5]}")
         tot = {"sales_k": state_row.sales_k, "cropland_ac": state_row.cropland_ac, "orchard_ac": orch_state[1]}
         nfill = {}
         cty = cty.set_index("name")
-        for col, proxy in (("sales_k", "farms"), ("cropland_ac", "crop_farms"), ("orchard_ac", "orch_farms")):
+        for col, proxy in (("sales_k", "farms"), ("cropland_ac", "crop_farms")):
             cty[col], nfill[col] = _fill_withheld(cty[col], cty[proxy], tot[col])
+        # orchards: proxy = the county's 2017 orchard acres (often disclosed when 2022 is not), else
+        # farms x the state's median acres per orchard farm; capped at the county's cropland
+        disc = cty[cty.orchard_ac.notna() & (cty.orch_farms > 0)]
+        per_farm = float((disc.orchard_ac / disc.orch_farms).median()) if len(disc) else 1.0
+        oproxy = cty.orchard_ac17.where(cty.orchard_ac17.notna() & (cty.orchard_ac17 > 0),
+                                        cty.orch_farms * per_farm)
+        cty["orchard_ac"], nfill["orchard_ac"] = _fill_withheld(cty.orchard_ac, oproxy, tot["orchard_ac"],
+                                                                cap=cty.cropland_ac)
         info["withheld_filled"][st["abbr"]] = nfill
         info["state_sales_k"][st["abbr"]] = float(tot["sales_k"])
         mine = counties[counties.parent_id == fips]
         if fips == "02":
-            # 5 agricultural census districts with unpublished borough composition: state total -> boroughs
-            w = crop_cty.reindex(mine.admin_id).fillna(0.0)
+            # 5 agricultural census districts with unpublished borough composition: state total ->
+            # boroughs by BEA CAINC45 2022 farm cash receipts (WorldCover cropland is ~1 % of the
+            # census cropland in Alaska and unusable as a weight)
+            w = _ak_weights().reindex(mine.admin_id).fillna(0.0)
             w = w / w.sum()
+            info["alaska_weights"] = {k: round(float(v), 4) for k, v in w[w > 0].items()}
             for gid, wi in w.items():
                 rows.append({"admin_id": gid, **{c: tot[c] * wi for c in ("sales_k", "cropland_ac", "orchard_ac")}})
             continue
@@ -1104,7 +1165,6 @@ def _us_state_gdp() -> pd.DataFrame:
     gap = (out.farms + out.forfish - out.naics11).abs().max()
     if gap > 2e5:
         raise ValueError(f"SAGDP2: line 4 + line 5 != line 3 (max gap {gap:,.0f})")
-    us = d[d.fips == "00"]
     return out
 
 
@@ -1172,3 +1232,26 @@ def build_usa() -> dict:
         "fao_capture_t_wb": util.wb_value("ER.FSH.CAPT.MT", "USA", US_FISH_YEAR),
     }
     return rep
+
+
+# ---------------------------------------------------------------------------------------------
+# Entry points
+# ---------------------------------------------------------------------------------------------
+
+def build(country: str) -> None:
+    print(f"food / {country}", flush=True)
+    rep = build_lka() if country == "lka" else build_usa()
+    out = interim_dir(country, DOMAIN)
+    (out / "report.json").write_text(json.dumps(rep, indent=2, default=str))
+    write_domain_meta(out, METRICS, SOURCES, country)
+
+
+if __name__ == "__main__":
+    import sys
+
+    from civmap import validate
+
+    ccs = sys.argv[1:] or ["lka", "usa"]
+    for cc in ccs:
+        build(cc)
+    sys.exit(validate.main([DOMAIN, *ccs]))
