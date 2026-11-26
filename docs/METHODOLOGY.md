@@ -78,7 +78,7 @@ A tile receives every district whose rule it meets; the first in this priority o
 | Harbor | a seaport with ≥ 1 million t/yr of cargo, or one of the country's 3 busiest ports |
 | Aerodrome | an airport with ≥ 1 million passengers/yr, or the country's busiest airport |
 | Campus | ≥ 2,000 research works in 5 years (OpenAlex), or STEM workforce LQ ≥ 1.8 at ≥ 300 people/km² |
-| Commercial Hub | Gold ≥ 8 and finance + real estate + professional services employment LQ ≥ 1.15 |
+| Commercial Hub | finance + real estate + professional services employment LQ ≥ 1.15, and Gold ≥ 7 or GDP density in the country's top 1% of tiles |
 | Industrial Zone | Production ≥ 5 and manufacturing LQ ≥ 1.5, or an export-processing zone / industrial park |
 | Dam | ≥ 100 MW hydroelectric capacity |
 | Power Plant | ≥ 500 MW of other generating capacity |

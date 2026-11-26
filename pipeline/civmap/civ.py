@@ -137,7 +137,8 @@ DISTRICT_RULES = {
     "spaceport": "Orbital launch site.",
     "campus": "≥ 2,000 research works in 5 years from institutions in the tile (OpenAlex), "
               "or STEM workforce location quotient ≥ 1.8 with ≥ 300 people/km².",
-    "commercial_hub": "Gold yield ≥ 8 and finance + professional-services employment LQ ≥ 1.15.",
+    "commercial_hub": "Finance, real-estate & professional-services employment LQ ≥ 1.15 and either Gold ≥ 7 "
+                      "or GDP density in the country's top 1% of tiles.",
     "industrial_zone": "Production yield ≥ 5 and manufacturing employment LQ ≥ 1.5, "
                        "or an export-processing zone / industrial park in the tile.",
     "dam": "Hydroelectric capacity ≥ 100 MW in the tile.",
@@ -279,6 +280,8 @@ def build_tiles(country: str) -> tuple[pd.DataFrame, dict]:
     if holy is not None and len(holy):
         hs = holy.sort_values("sitelinks", ascending=False) if "sitelinks" in holy.columns else holy
         holy_top = pd.Series(idx.isin(set(hs.h3.dropna().head(10 if country == "lka" else 25))), index=idx)
+    gdp_dens = dens("gdp_usd")
+    gdp_top1 = np.nanquantile(gdp_dens[H.ring.to_numpy() == 0], 0.99) if (H.ring == 0).any() else np.inf
     ws = dens("worship_sites")
     land_mask = H.ring.to_numpy() == 0
     ws_thr = np.nanquantile(ws[land_mask], 0.99) if land_mask.any() else np.inf
@@ -293,7 +296,7 @@ def build_tiles(country: str) -> tuple[pd.DataFrame, dict]:
         "aerodrome": (pax >= 1e6).to_numpy() | idx.isin(top_air),
         "spaceport": (space > 0).to_numpy(),
         "campus": (works >= 2000).to_numpy() | ((np.nan_to_num(lq_stem) >= 1.8) & (popd >= 300)),
-        "commercial_hub": (Y["gold"].to_numpy() >= 8) & (np.nan_to_num(lq_fin) >= 1.15),
+        "commercial_hub": ((Y["gold"].to_numpy() >= 7) | (gdp_dens >= gdp_top1)) & (np.nan_to_num(lq_fin) >= 1.15) & land_mask,
         "industrial_zone": ((Y["production"].to_numpy() >= 5) & (np.nan_to_num(lq_mfg) >= 1.5)) | (ez > 0).to_numpy(),
         "dam": (hydro >= 100).to_numpy(),
         "power_plant": (other_cap >= 500).to_numpy(),

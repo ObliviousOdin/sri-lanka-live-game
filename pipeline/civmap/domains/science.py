@@ -371,29 +371,48 @@ def _name_score(h: list[str], o: list[str]) -> float:
 
 def herd_institutions() -> pd.DataFrame:
     """Leaf institutions of HERD FY2024 Table 5 with state and total R&D (USD)."""
+    import warnings
+
     import openpyxl
     p = fetch(HERD_TABLE5, "nsf_herd_fy2024", "usa/nsf_herd", "nsf26304-tab005.xlsx")
-    ws = openpyxl.load_workbook(p).active
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        ws = openpyxl.load_workbook(p, rich_text=True).active
     rows = []
     for r in range(5, ws.max_row + 1):
         c = ws.cell(r, 1)
         v = ws.cell(r, 2).value
         if c.value is None or not isinstance(v, (int, float)):
             continue
-        rows.append((str(c.value).strip(), int(c.alignment.indent or 0), float(v)))
+        if isinstance(c.value, str):
+            name = c.value
+        else:   # rich text: drop superscript footnote markers ("Johns Hopkins U.^c")
+            name = "".join(t.text if hasattr(t, "text") else str(t) for t in c.value
+                           if not (hasattr(t, "font") and t.font is not None and t.font.vertAlign == "superscript"))
+        rows.append((name.strip(), int(c.alignment.indent or 0), float(v)))
+    # Levels: 0 state, 1 public/private, >=2 system or institution.  Indentation is not always
+    # consistent (e.g. 'U. South Florida' is indented under 'U. North Florida'), so a row counts as
+    # an aggregate only if its value equals the sum of its direct children.
     out, state = [], None
     for i, (name, ind, v) in enumerate(rows):
         if ind == 0:
             state = name
             continue
-        nxt = rows[i + 1][1] if i + 1 < len(rows) else -1
-        if ind >= 2 and nxt <= ind:
-            clean = re.sub(r"(?<=[.)])[a-z]{1,2}$", "", name)          # footnote letter after "U."
-            clean = re.sub(r"(System|Systems|Center|Campus)[a-d]$", r"\1", clean)
-            out.append({"herd_name": clean, "state": state, "rd_usd": v * 1000.0})
+        if ind == 1:
+            continue
+        kids, j = [], i + 1
+        while j < len(rows) and rows[j][1] > ind:
+            kids.append(rows[j])
+            j += 1
+        if kids:
+            lvl = min(k[1] for k in kids)
+            s = sum(k[2] for k in kids if k[1] == lvl)
+            if abs(s - v) <= max(1.0, 0.002 * v):
+                continue                                   # system subtotal
+        out.append({"herd_name": name, "state": state, "rd_usd": v * 1000.0})
     df = pd.DataFrame(out)
     tot = sum(v for n, ind, v in rows if ind == 0)
-    print(f"  HERD FY2024 Table 5: {len(df)} leaf institutions, ${df.rd_usd.sum() / 1e9:,.2f} bn "
+    print(f"  HERD FY2024 Table 5: {len(df)} institutions, ${df.rd_usd.sum() / 1e9:,.2f} bn "
           f"(state rows sum ${tot * 1000 / 1e9:,.2f} bn)", flush=True)
     return df.sort_values("rd_usd", ascending=False).reset_index(drop=True)
 

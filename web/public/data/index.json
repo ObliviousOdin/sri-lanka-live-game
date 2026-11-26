@@ -1,5 +1,5 @@
 {
- "built_at": "2026-11-26T22:29:01+00:00",
+ "built_at": "2026-11-26T22:50:30+00:00",
  "countries": [
   {
    "id": "lka",
@@ -151,7 +151,7 @@
   {
    "code": "commercial_hub",
    "label": "Commercial Hub",
-   "rule": "Gold yield \u2265 8 and finance + professional-services employment LQ \u2265 1.15."
+   "rule": "Finance, real-estate & professional-services employment LQ \u2265 1.15 and either Gold \u2265 7 or GDP density in the country's top 1% of tiles."
   },
   {
    "code": "industrial_zone",
