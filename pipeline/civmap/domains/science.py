@@ -327,9 +327,14 @@ HERD_ASSIGN: dict[tuple[str, str], list[str]] = {
         ["University of Nebraska–Lincoln", "University of Nebraska Medical Center"],
     ("Dartmouth C. and Dartmouth Hitchcock Medical Center", "New Hampshire"):
         ["Dartmouth College", "Dartmouth–Hitchcock Medical Center"],
-    ("Western Michigan U. and Homer Stryker M.D. School of Medicine", "Michigan"):
-        ["Western Michigan University", "Western Michigan University Homer Stryker M.D. School of Medicine"],
+    # the Stryker school is not a separate OpenAlex institution with >200 works: all to WMU
+    ("Western Michigan U. and Homer Stryker M.D. School of Medicine", "Michigan"): ["Western Michigan University"],
     ("Virginia Polytechnic Institute and State U.", "Virginia"): ["Virginia Tech"],
+    ("SUNY, U. Buffalo", "New York"): ["University at Buffalo, State University of New York"],
+    ("SUNY, U. Albany", "New York"): ["University at Albany, State University of New York"],
+    ("North Carolina A&T State U.", "North Carolina"): ["North Carolina Agricultural and Technical State University"],
+    ("Van Andel Research Institute", "Michigan"): ["Van Andel Institute"],
+    ("Touro U., New York", "New York"): ["Touro College"],
     ("U. Colorado Anschutz Medical Campus", "Colorado"): ["University of Colorado Anschutz"],
     ("U. Texas M. D. Anderson Cancer Center", "Texas"): ["The University of Texas MD Anderson Cancer Center"],
 }
@@ -865,11 +870,19 @@ def _sanity(country: str, inst: pd.DataFrame, adm: pd.DataFrame | None, pct_b: f
         except Exception as e:  # noqa: BLE001 - sanity check only
             v, y = None, str(e)[:60]
         print(f"  check {label}: WB {v if v is None else round(v, 1)} ({y}) vs ours {mine:.1f}")
+    cc = config.COUNTRIES[country]["iso2"]
+    p = fetch("https://api.openalex.org/works", "openalex", "openalex",
+              f"science_distinct_research_{cc.lower()}_{YEARS[0]}_{YEARS[1]}.json",
+              params={"filter": f"institutions.country_code:{cc},publication_year:{YEARS[0]}-{YEARS[1]},"
+                                f"type:{'|'.join(RESEARCH_TYPES)}", "per-page": 1, "select": "id"})
+    distinct = json.loads(p.read_text())["meta"]["count"]
+    tot = inst.research_works_5y.sum()
+    print(f"  check OpenAlex distinct research works {YEARS[0]}-{YEARS[1]} with a {cc} affiliation: {distinct:,}; "
+          f"sum over institution points {tot:,.0f} (x{tot / distinct:.2f}: co-authorship across institutions)")
     try:
         v, y = util.wb_value("IP.JRN.ARTC.SC", iso)
-        print(f"  check S&E journal articles/yr (WB IP.JRN.ARTC.SC {y}): {v:,.0f} vs ours research_works_5y/5 "
-              f"{inst.research_works_5y.sum() / 5:,.0f} (ours counts co-authored works once per institution "
-              f"and includes conference papers, books, preprints)")
+        print(f"  check S&E journal articles/yr (WB IP.JRN.ARTC.SC {y}, fractional Scopus count): {v:,.0f} vs "
+              f"OpenAlex distinct research works/yr {distinct / 5:,.0f}")
     except Exception:  # noqa: BLE001
         pass
 

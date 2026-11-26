@@ -228,7 +228,7 @@ def build_tiles(country: str) -> tuple[pd.DataFrame, dict]:
     food_sea = log_yield(dens("fish_catch_t"), YIELD_BASES["food_sea"][1])
     Y["food"] = np.where(H.ring > 0, food_sea, np.maximum(food_land, food_sea))
     inst = pts.get("institutions")
-    wcol = first_col(inst, "works_5y", "research_works_5y")
+    wcol = first_col(inst, "research_works_5y", "works_5y")
     works = point_sum(inst, wcol, idx) if wcol else pd.Series(0.0, index=idx)
     Y["science"] = log_yield(dens("cit_engineers"), YIELD_BASES["science"][1]) + step_bonus(works, RESEARCH_BONUS)
     heritage = pts.get("heritage")
@@ -334,8 +334,8 @@ def build_tiles(country: str) -> tuple[pd.DataFrame, dict]:
 # ---------------------------------------------------------------------------------------------
 WONDER_RULES = [
     # (category, points table, value column(s), N lka, N usa, rule text, unit)
-    ("Great University", "universities", ("works_5y",), 5, 10,
-     "Top research universities by scholarly works published in the last five complete years (OpenAlex).", "works"),
+    ("Great University", "universities", ("research_works_5y", "works_5y"), 5, 10,
+     "Top research universities by research articles & reviews published 2021–2025 (OpenAlex).", "works"),
     ("Great Port", "ports", ("port_cargo_t", "cargo_tonnes"), 3, 10,
      "Busiest seaports by annual cargo volume.", "tonnes"),
     ("Great Power Station", "power_plants", ("capacity_mw",), 5, 10,
