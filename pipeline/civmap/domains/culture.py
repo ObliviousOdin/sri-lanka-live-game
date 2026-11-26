@@ -592,6 +592,8 @@ def parks_lka(loc: _Locator, wdpa: gpd.GeoDataFrame) -> pd.DataFrame:
         assert loc.locate(la, lo) is not None, key
         if site is not None and site in wdpa_area.index:
             area, area_src = float(wdpa_area[site]), "WDPA"
+        elif kind == "wildlife area":   # located via a reservoir / town item: its area is not the park's
+            area, area_src = np.nan, ""
         else:
             a = pd.to_numeric(w.get("area_km2"), errors="coerce")
             area, area_src = (float(a), "Wikidata") if np.isfinite(a) else (np.nan, "")
@@ -600,6 +602,8 @@ def parks_lka(loc: _Locator, wdpa: gpd.GeoDataFrame) -> pd.DataFrame:
                          local_visitors=local, foreign_visitors=foreign, visitors_year=2025,
                          revenue_lkr=rev, revenue_usd=round(rev / rate, 0),
                          area_km2=round(area, 2) if np.isfinite(area) else np.nan, area_source=area_src,
+                         location=("Wikidata item of the nearby reservoir (park not in Wikidata/WDPA)"
+                                   if kind == "wildlife area" else ""),
                          wdpa_id=site if site is not None else np.nan, wikidata=qid))
     df = pd.DataFrame(rows).sort_values("park_visitors", ascending=False).reset_index(drop=True)
     print(f"  parks: {len(df)} Sri Lankan parks, {df.park_visitors.sum():,.0f} visitors (2025); "

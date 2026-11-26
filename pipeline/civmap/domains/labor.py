@@ -40,7 +40,7 @@ import numpy as np
 import pandas as pd
 
 from .. import util
-from ..config import CACHE, COUNTRIES, interim_dir
+from ..config import interim_dir
 from ..core import POP_RASTER, load_admin
 from ..fetch import fetch
 from ..schema import Metric, Source, write_domain_meta
@@ -484,7 +484,7 @@ def lfs_district_sector(pages) -> pd.DataFrame:
 def _province_table(pages, title: str, cols: list[str]) -> pd.DataFrame:
     lines = _table_lines(pages, title, "These")
     n = len(cols) + 1
-    pat = re.compile(rf"^([A-Za-z][A-Za-z ]*?)" + rf"\s+{_NUM}" * n + "$")
+    pat = re.compile(r"^([A-Za-z][A-Za-z ]*?)" + rf"\s+{_NUM}" * n + "$")
     rows = {}
     for ln in lines:
         m = pat.match(ln)

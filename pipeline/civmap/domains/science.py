@@ -311,11 +311,32 @@ def institutions(country: str) -> pd.DataFrame:
 # NSF HERD (US university R&D) and name matching
 # ---------------------------------------------------------------------------------------------
 
-# HERD leaf name -> OpenAlex id, for pairs the automatic matcher cannot resolve (checked by hand
-# against both lists).  None = known to have no counterpart in the OpenAlex list.
-HERD_OVERRIDES: dict[tuple[str, str], str | None] = {}
+# Manual HERD -> OpenAlex assignments (OpenAlex display names, looked up within the state), checked by
+# hand against both lists.  One name = an override of the automatic matcher; several names = HERD
+# reports the campuses as one unit (Table 5 footnotes / combined names) and the R&D is split across
+# them in proportion to their 2021-2025 research works.
+HERD_ASSIGN: dict[tuple[str, str], list[str]] = {
+    ("U. Maryland", "Maryland"): ["University of Maryland, College Park", "University of Maryland, Baltimore"],
+    ("Texas A&M U., College Station and Health Science Center", "Texas"):
+        ["Texas A&M University", "Texas A&M Health Science Center"],
+    ("Pennsylvania State U., University Park and Hershey Medical Center", "Pennsylvania"):
+        ["Pennsylvania State University", "Penn State Milton S. Hershey Medical Center"],
+    ("Vanderbilt U. and Vanderbilt U. Medical Center", "Tennessee"):
+        ["Vanderbilt University", "Vanderbilt University Medical Center"],
+    ("U. Nebraska, Lincoln and Medical Center", "Nebraska"):
+        ["University of Nebraska–Lincoln", "University of Nebraska Medical Center"],
+    ("Dartmouth C. and Dartmouth Hitchcock Medical Center", "New Hampshire"):
+        ["Dartmouth College", "Dartmouth–Hitchcock Medical Center"],
+    ("Western Michigan U. and Homer Stryker M.D. School of Medicine", "Michigan"):
+        ["Western Michigan University", "Western Michigan University Homer Stryker M.D. School of Medicine"],
+    ("Virginia Polytechnic Institute and State U.", "Virginia"): ["Virginia Tech"],
+    ("U. Colorado Anschutz Medical Campus", "Colorado"): ["University of Colorado Anschutz"],
+    ("U. Texas M. D. Anderson Cancer Center", "Texas"): ["The University of Texas MD Anderson Cancer Center"],
+}
+HERD_CAND_KINDS = ("education", "healthcare", "nonprofit", "facility", "government")
 
 _ABBR = [
+    (r"^(SUNY|CUNY),\s*", ""), (r"\bU\.S\.", "United States"),
     (r"\bU\.", "University"), (r"\bC\.", "College"), (r"\bInst\.", "Institute"), (r"\bSch\.", "School"),
     (r"\bMed\.", "Medicine"), (r"\bCtr\.", "Center"), (r"\bHlth\.", "Health"), (r"\bSci\.", "Science"),
     (r"\bSt\.", "Saint"), (r"\bMt\.", "Mount"), (r"\bTech\.", "Technology"), (r"\bNatl\.", "National"),
@@ -332,7 +353,7 @@ _TYPE_WORDS = {
     "cancer", "children", "childrens", "veterans", "graduate", "christian", "baptist", "methodist",
     "lutheran", "catholic", "international", "national", "global", "online", "upstate", "downstate",
     "northern", "southern", "eastern", "western", "central", "north", "south", "east", "west",
-    "northeastern", "northwestern", "southeastern", "southwestern", "mid", "a", "m", "am",
+    "northeastern", "northwestern", "southeastern", "southwestern", "mid", "aandm",
 }
 
 
@@ -340,9 +361,9 @@ def _tokens(s: str, herd: bool = False) -> list[str]:
     if herd:
         for pat, rep in _ABBR:
             s = re.sub(pat, rep, s)
-    s = unicodedata.normalize("NFKD", s).encode("ascii", "ignore").decode()
-    s = s.lower().replace("&", " and ").replace("a&m", "a and m")
-    s = re.sub(r"[^a-z0-9]+", " ", s)
+    s = "".join(ch for ch in unicodedata.normalize("NFKD", s) if not unicodedata.combining(ch))
+    s = s.lower().replace("a&m", " aandm ").replace("&", " and ")
+    s = re.sub(r"[^a-z0-9]+", " ", s)        # also splits on en/em dashes ("Wisconsin–Madison")
     out = []
     for t in s.split():
         t = _SYN.get(t, t)
@@ -418,35 +439,64 @@ def herd_institutions() -> pd.DataFrame:
 
 
 def match_herd(inst: pd.DataFrame, herd: pd.DataFrame) -> pd.DataFrame:
-    """Return herd with columns oa_id, match_score (one-to-one, greedy by score then R&D)."""
-    cand = inst[inst.kind.isin(["education", "healthcare"])].copy()
+    """HERD rows x OpenAlex ids: columns herd_name, state, rd_usd, oa_id, share, match_score, match.
+
+    Manual assignments (HERD_ASSIGN) first, then automatic one-to-one matching, greedy by score then
+    R&D.  Unmatched HERD rows are returned with oa_id None.
+    """
+    cand = inst[inst.kind.isin(HERD_CAND_KINDS)
+                & ~inst.name.str.contains(r"\bSystems?\b|^State University of New York$", regex=True)].copy()
     cand["tok"] = [_tokens(n) for n in cand.name]
+    weight = inst.set_index("id")["research_works_5y"].fillna(0) + 1.0
     by_state = {s: g for s, g in cand.groupby(cand.region.fillna(""))}
+    out, used_o, done = [], set(), set()
+    for (hn, st), names in HERD_ASSIGN.items():
+        h = herd[(herd.herd_name == hn) & (herd.state == st)]
+        if h.empty:
+            print(f"  WARNING HERD_ASSIGN: no HERD row {hn!r} ({st})")
+            continue
+        pool = inst[inst.region == st]
+        ids = [pool.id[pool.name.str.lower() == n.lower()].tolist() for n in names]
+        if not all(ids):
+            print(f"  WARNING HERD_ASSIGN {hn!r}: OpenAlex name(s) not found: "
+                  f"{[n for n, i in zip(names, ids) if not i]}")
+        ids = [i[0] for i in ids if i]
+        if not ids:
+            continue
+        w = weight.reindex(ids).fillna(1.0)
+        for oid in ids:
+            out.append({"herd_name": hn, "state": st, "rd_usd": h.rd_usd.iloc[0], "oa_id": oid,
+                        "share": float(w[oid] / w.sum()), "match_score": 1.0,
+                        "match": "manual" if len(ids) == 1 else "manual-split"})
+            used_o.add(oid)
+        done.add(h.index[0])
     herd = herd.copy()
     herd["tok"] = [_tokens(n, herd=True) for n in herd.herd_name]
     pairs = []
     for i, h in herd.iterrows():
-        key = (h.herd_name, h.state)
-        if key in HERD_OVERRIDES:
-            if HERD_OVERRIDES[key]:
-                pairs.append((2.0, h.rd_usd, i, HERD_OVERRIDES[key]))
+        if i in done:
             continue
         pool = pd.concat([by_state.get(h.state, cand.iloc[:0]), by_state.get("", cand.iloc[:0])])
-        for _, o in pool.iterrows():
+        for o in pool.itertuples():
+            if o.id in used_o:
+                continue
             s = _name_score(h.tok, o.tok)
             if s >= 0.86:
                 pairs.append((s, h.rd_usd, i, o.id))
     pairs.sort(key=lambda t: (-t[0], -t[1]))
-    used_h, used_o, res = set(), set(), {}
     for s, _, i, oid in pairs:
-        if i in used_h or oid in used_o:
+        if i in done or oid in used_o:
             continue
-        used_h.add(i)
+        done.add(i)
         used_o.add(oid)
-        res[i] = (oid, min(s, 1.0))
-    herd["oa_id"] = [res.get(i, (None, np.nan))[0] for i in herd.index]
-    herd["match_score"] = [res.get(i, (None, np.nan))[1] for i in herd.index]
-    return herd.drop(columns="tok")
+        h = herd.loc[i]
+        out.append({"herd_name": h.herd_name, "state": h.state, "rd_usd": h.rd_usd, "oa_id": oid, "share": 1.0,
+                    "match_score": round(min(s, 1.0), 3), "match": "name"})
+    for i, h in herd.iterrows():
+        if i not in done:
+            out.append({"herd_name": h.herd_name, "state": h.state, "rd_usd": h.rd_usd, "oa_id": None,
+                        "share": np.nan, "match_score": np.nan, "match": None})
+    return pd.DataFrame(out).sort_values("rd_usd", ascending=False, kind="stable").reset_index(drop=True)
 
 
 def universities(country: str, inst: pd.DataFrame) -> pd.DataFrame:
@@ -455,18 +505,26 @@ def universities(country: str, inst: pd.DataFrame) -> pd.DataFrame:
     df["herd_name"] = None
     df["herd_match_score"] = np.nan
     if country == "usa":
-        herd = match_herd(inst, herd_institutions())
-        m = herd.dropna(subset=["oa_id"]).set_index("oa_id")
-        df["rd_usd"] = df.id.map(m.rd_usd)
-        df["herd_name"] = df.id.map(m.herd_name)
-        df["herd_match_score"] = df.id.map(m.match_score)
+        states = set(load_admin("usa", "adm1").name)
+        herd = herd_institutions()
+        herd = herd[herd.state.isin(states)].reset_index(drop=True)          # drop PR, GU, VI, AS
+        pairs = match_herd(inst, herd)
+        (config.interim_dir(country, DOMAIN) / "herd_matches.csv").write_text(pairs.to_csv(index=False))
+        ok = pairs.dropna(subset=["oa_id"]).assign(rd_part=lambda d: d.rd_usd * d.share)
+        per = ok.groupby("oa_id").agg(rd_usd=("rd_part", "sum"), herd_name=("herd_name", "; ".join),
+                                      herd_match_score=("match_score", "min"))
+        df["rd_usd"] = df.id.map(per.rd_usd)
+        df["herd_name"] = df.id.map(per.herd_name)
+        df["herd_match_score"] = df.id.map(per.herd_match_score)
+        matched = set(ok.herd_name + "|" + ok.state)
+        herd["matched"] = (herd.herd_name + "|" + herd.state).isin(matched)
         top = herd.head(100)
-        cov = herd.rd_usd[herd.oa_id.notna()].sum() / herd.rd_usd.sum()
-        print(f"  HERD matched: {herd.oa_id.notna().sum()} of {len(herd)} institutions, {cov:.1%} of HERD R&D; "
-              f"top-100 matched {top.oa_id.notna().sum()}", flush=True)
-        miss = top[top.oa_id.isna()]
+        print(f"  HERD (50 states + DC): {herd.matched.sum()} of {len(herd)} institutions matched, "
+              f"{herd.rd_usd[herd.matched].sum() / herd.rd_usd.sum():.1%} of ${herd.rd_usd.sum() / 1e9:,.1f} bn; "
+              f"top-100 matched {top.matched.sum()}; manual {ok.match.str.startswith('manual').sum()} pairs", flush=True)
+        miss = herd.head(200)[~herd.head(200).matched]
         if len(miss):
-            print("  HERD top-100 unmatched:", "; ".join(f"{r.herd_name} ({r.state})" for r in miss.itertuples()))
+            print("  HERD top-200 unmatched:", "; ".join(f"{r.herd_name} ({r.state})" for r in miss.itertuples()))
         uni = df[(df.kind == "education") | df.rd_usd.notna()].copy()
     else:
         uni = df[df.kind == "education"].copy()
