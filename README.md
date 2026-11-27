@@ -16,6 +16,9 @@ assigned by published-data rules, and every number links back to its source.
   population, land cover, elevation…), City View, five Advisors, an Explorer (linked table + scatter),
   a Wonders race and a full source catalogue with download provenance.
 
+**Live site:** https://obliviousodin.github.io/sri-lanka-live-game/ (deployed by
+`.github/workflows/deploy-pages.yml` on every push to `main`).
+
 > The rules are documented in [docs/METHODOLOGY.md](docs/METHODOLOGY.md); the architecture and data
 > contract in [docs/PLAN.md](docs/PLAN.md).
 
@@ -38,6 +41,15 @@ Requires Node 18+. The optional basemap (CARTO) needs internet; everything else 
 Browser: a current desktop or mobile browser with **WebGL 2** (deck.gl 9; Chrome/Edge 56+, Firefox 51+,
 Safari 15+). The metric matrices are inflated with `DecompressionStream` where available (Chrome 80+,
 Firefox 113+, Safari 16.4+) and with the bundled fflate library otherwise.
+
+### Hosting
+
+`npm run build` produces a fully static site in `web/dist` (relative paths, so it works at a domain
+root or a sub-path). GitHub Pages: set **Settings → Pages → Source** to **GitHub Actions**; the
+workflow builds and deploys on each push to `main` (or run it manually from the Actions tab). Any
+static host works the same way (base directory `web`, build `npm run build`, output `dist`).
+Several datasets are licensed for non-commercial use only (see the Sources tab), so keep the site
+non-commercial or drop those sources before any commercial use.
 
 ## Rebuilding the data
 
