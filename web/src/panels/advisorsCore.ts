@@ -406,6 +406,8 @@ export interface Place {
   city?: City
   /** city places: true when the unit is the polygon containing the city point (false: centre-tile fallback) */
   cityUnitExact?: boolean
+  /** city places: name of the district / county the figures describe ("Harris County, TX") */
+  unitTitle?: string
   wonder?: string
 }
 
@@ -543,7 +545,7 @@ export function resolvePlace(sel: Selection, d: CountryData, idx: IndexJson, cit
     if (!cu || !u) return null
     const prov = d.id === 'lka' ? unitById(d, 'adm1').get(u.parent) : undefined
     return {
-      d, country: d.id, level: 'adm2', index: cu.index, kind: 'City', city: c, cityUnitExact: cu.exact,
+      d, country: d.id, level: 'adm2', index: cu.index, kind: 'City', city: c, cityUnitExact: cu.exact, unitTitle: unitName(d, 'adm2', u),
       title: c.name, subtitle: [unitName(d, 'adm2', u), prov && unitName(d, 'adm1', prov)].filter(Boolean).join(' · '),
       lon: c.lon, lat: c.lat,
     }

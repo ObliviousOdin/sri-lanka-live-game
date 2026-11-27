@@ -47,21 +47,35 @@ export const CATEGORICAL: RGB[] = [
   [255, 112, 67], [141, 110, 99], [189, 189, 189], [255, 238, 88], [38, 166, 154], [236, 64, 122],
 ]
 
+/** Value at quantile p (0-1) of an ascending-sorted array (lower nearest rank, as before). */
+export function sortedQuantile(sorted: ArrayLike<number>, p: number): number {
+  const n = sorted.length
+  return sorted[Math.min(n - 1, Math.max(0, Math.floor(p * (n - 1))))]
+}
+
+/** Robust domain [q(qlo), q(qhi)] of an ascending-sorted array (already filtered to the values to use). */
+export function sortedDomain(sorted: ArrayLike<number>, log: boolean, qlo = 0.02, qhi = 0.98): [number, number] {
+  if (!sorted.length) return [0, 1]
+  const lo = sortedQuantile(sorted, qlo)
+  let hi = sortedQuantile(sorted, qhi)
+  if (hi <= lo) hi = lo + (log ? lo : 1)
+  return [lo, hi]
+}
+
 /** Robust domain (quantiles) of positive / finite values across arrays. */
 export function robustDomain(arrays: ArrayLike<number>[], log: boolean, qlo = 0.02, qhi = 0.98): [number, number] {
-  const vals: number[] = []
+  let total = 0
+  for (const arr of arrays) total += arr.length
+  // typed buffer + typed-array sort (numeric, no comparator): ~10x faster than Array.sort((a, b) => a - b)
+  const buf = new Float64Array(total)
+  let k = 0
   for (const arr of arrays) {
     for (let i = 0; i < arr.length; i++) {
       const v = arr[i]
-      if (Number.isFinite(v) && (!log || v > 0)) vals.push(v)
+      if (Number.isFinite(v) && (!log || v > 0)) buf[k++] = v
     }
   }
-  if (!vals.length) return [0, 1]
-  vals.sort((a, b) => a - b)
-  const q = (p: number) => vals[Math.min(vals.length - 1, Math.max(0, Math.floor(p * (vals.length - 1))))]
-  let lo = q(qlo), hi = q(qhi)
-  if (hi <= lo) hi = lo + (log ? lo : 1)
-  return [lo, hi]
+  return sortedDomain(buf.subarray(0, k).sort(), log, qlo, qhi)
 }
 
 export function scaleT(v: number, dom: [number, number], log: boolean): number {

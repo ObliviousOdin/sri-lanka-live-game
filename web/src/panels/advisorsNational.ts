@@ -137,17 +137,15 @@ export function fmtV(f: Fmt, v: number, unit?: string) {
 }
 
 /** Compact display unit for a World Bank unit string ('' = the indicator name already carries it). */
-const UNIT_SHORT: [RegExp, string][] = [
-  [/^metric tons$/i, 't'], [/^million ton-km$/i, 'M ton-km'], [/route-km/i, 'route-km'], [/^TEU/i, 'TEU'],
+const UNIT_SHORT: [RegExp, string, number?][] = [
+  [/^metric tons$/i, 't'], [/^million ton-km$/i, 'ton-km', 1e6], [/route-km/i, 'route-km'], [/^TEU/i, 'TEU'],
   [/^kg per hectare$/i, 'kg/ha'], [/^sq\. km$/i, 'km²'], [/^kWh per capita$/i, 'kWh/person'], [/^kWh$/i, 'kWh'],
   [/^Mt CO2e$/i, 'Mt CO₂e'], [/^t CO2e\/capita$/i, 't CO₂e/person'], [/^billion cubic meters$/i, 'bn m³'], [/^cubic meters$/i, 'm³'],
   [/^micrograms per cubic meter$/i, 'µg/m³'], [/^kg of oil equivalent per capita$/i, 'kgoe/person'], [/^SIPRI trend indicator/i, 'TIV'],
-  [/^passengers$/i, 'passengers'],
 ]
-export function shortUnit(unit: string | undefined): string {
-  if (!unit) return ''
-  for (const [re, u] of UNIT_SHORT) if (re.test(unit.trim())) return u
-  return ''
+export function shortUnit(unit: string | undefined): { u: string; k: number } {
+  if (unit) for (const [re, u, k] of UNIT_SHORT) if (re.test(unit.trim())) return { u, k: k ?? 1 }
+  return { u: '', k: 1 }
 }
 
 /** A national value with its unit; `c` names the country (needed for local-currency rows). */
@@ -160,7 +158,9 @@ export function fmtRow(row: NationalIndicator, v: number, c?: CountryId) {
     const per = /international/i.test(row.unit) ? 'Int$' : 'US$'
     return `${cur}${Math.abs(v) >= 10 ? count(v) : v.toFixed(2)}${cur ? '' : ' LCU'} per ${per}`
   }
-  return fmtV(f, v, s?.unit ?? (f === 'num' ? shortUnit(row.unit) : undefined))
+  if (s || f !== 'num') return fmtV(f, v, s?.unit)
+  const su = shortUnit(row.unit)
+  return fmtV(f, v * su.k, su.u)
 }
 
 /** COVID-19 collapsed international travel: tourism values for these years are not typical. */

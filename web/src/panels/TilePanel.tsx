@@ -9,7 +9,7 @@ import { adminUnitOfHex, hexesOfAdmin, value } from '../data/load'
 import { useNational, type AppData } from '../data/useData'
 import { useStore, type PickLevel } from '../store'
 import { COUNTRIES, YIELDS, type CountryData, type CountryId, type IndexJson, type Metric, type NationalIndicator, type Selection, type YieldKey } from '../types'
-import { fmtInt, fmtNumber, fmtPct, fmtUsd } from '../format'
+import { fmtInt, fmtNumber, fmtUsd } from '../format'
 import { countryVintage } from './explorerData'
 import { MetricGroups, type MetricRowData } from './TilePanelMetrics'
 import {
@@ -95,7 +95,7 @@ function HexInspector({ d, idx, i }: { d: CountryData; idx: IndexJson; i: number
     return {
       key: m.key, metric: m, label: m.label, category: m.category || 'other', raw,
       valueText: landDens ? fmtLandDensity(raw, m.unit) : fmtVal(raw, m.unit),
-      densityText: hasDensity(m) && Number.isFinite(raw) ? fmtDensity(raw / tileKm2, m.unit, 'tile')
+      densityText: hasDensity(m) && Number.isFinite(raw) && raw !== 0 ? fmtDensity(raw / tileKm2, m.unit, 'tile')
         : landDens && Number.isFinite(raw) ? 'per km² of land' : undefined,
       densityTitle: hasDensity(m) ? `Value ÷ tile area (${fmtNumber(tileKm2)} km², including any water) — the basis of yields and the map lenses`
         : landDens ? `Divided by land only (${landTxt}), so it differs from population per km² of tile on coasts and lakes` : undefined,
@@ -208,7 +208,7 @@ function hexRankInfo(d: CountryData, m: Metric, i: number) {
   const pool = `${fmtInt(r.n)} ${d.meta.name} land tiles`
   const tie = tieInfo(r)
   if (tie) {
-    const sh = fmtPct(tie.share * 100, 0)
+    const sh = tie.share < 1 ? `${Math.min(99, Math.round(tie.share * 100))}%` : 'all'
     if (tie.atMin) return { pct: null, text: 'lowest', title: `Tied for the lowest value${per} with ${sh} of ${pool}, so no percentile is shown` }
     const a = Math.floor(tie.loPct), b = Math.min(99, Math.floor(tie.hiPct))
     return { pct: null, text: `P${a}–${b}`, title: `Same value${per} as ${sh} of ${pool}: between the ${ordinal(a)} and ${ordinal(b)} percentile` }

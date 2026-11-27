@@ -64,7 +64,8 @@ function rankComment(ctx: PlaceCtx, id: string, icon: string, ms: Measure | null
     id, icon, segs, sources, pct: r.p, pctBetter: ms.better, meta: ms.vintage || undefined,
     // verdict weight: how extreme the rank is; zero values (zero-inflated pools) and minor indicators count less
     weight: r.n >= 5 && r.v !== 0 ? extreme * (opts.minor ? 0.8 : 1) : 0,
-    verdict: [`${place.title} ranks in the `, fig(r.p >= 50 ? `top ${Math.max(1, Math.round(100 - r.p))}%` : `bottom ${Math.max(1, Math.round(r.p))}%`, home),
+    // a city is ranked as its district / county: name the unit the figure belongs to
+    verdict: [`${place.city && place.unitTitle ? `${place.unitTitle}, home of ${place.city.name},` : place.title} ranks in the `, fig(r.p >= 50 ? `top ${Math.max(1, Math.round(100 - r.p))}%` : `bottom ${Math.max(1, Math.round(r.p))}%`, home),
       ` of ${ADJ[home]} ${levelNoun(place.d, place.level, r.n)} for ${opts.vlabel ?? lc1(ms.label.replace(/[:\s]+$/, ''))} (`, fig(ms.fmt(r.v), home), ').'],
   }
 }

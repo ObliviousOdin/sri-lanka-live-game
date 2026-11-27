@@ -137,6 +137,11 @@ function SourceCard({ s, labelOf, national, wonders }: {
   const dls = s.downloads ?? []
   const bytes = dls.reduce((a, d) => a + (d.bytes || 0), 0)
   const first = dls[0]
+  const urlCount = useMemo(() => {
+    const m = new Map<string, number>()
+    for (const d of dls) m.set(d.url, (m.get(d.url) ?? 0) + 1)
+    return m
+  }, [dls])
   const feeds = COUNTRIES.filter((c) => (s.metrics?.[c] ?? []).length > 0)
   return (
     <article className="card sources-item" id={`source-${s.id}`}>
@@ -192,18 +197,25 @@ function SourceCard({ s, labelOf, national, wonders }: {
           <div className="sources-dlhead">⬇ {dls.length} download{dls.length > 1 ? 's' : ''} · {fmtBytes(bytes)}</div>
           <div className="sources-first">
             <a href={first.url} target="_blank" rel="noreferrer" className="sources-dlurl">{first.url.replace(/^https?:\/\//, '')}</a>
+            {(urlCount.get(first.url) ?? 1) > 1 && <span className="sources-rep" title="Same URL, different request (e.g. a POST query) or a re-download"> #1 of {urlCount.get(first.url)}</span>}
             <span className="muted"> · sha256 <code>{first.sha256.slice(0, 12)}…</code> · {fmtDate(first.fetched_at)}</span>
           </div>
           {dls.length > 1 && (
             <details>
               <summary>All {dls.length} files</summary>
               <ul>
-                {dls.slice(1).map((d) => (
-                  <li key={d.url}>
-                    <a href={d.url} target="_blank" rel="noreferrer" className="sources-dlurl">{d.url.replace(/^https?:\/\//, '')}</a>
-                    <span className="muted"> · {fmtBytes(d.bytes)} · sha256 <code>{d.sha256.slice(0, 12)}…</code></span>
-                  </li>
-                ))}
+                {dls.slice(1).map((d, k) => {
+                  // one URL can serve many files (POST queries) or be re-fetched: number the repeats
+                  const n = urlCount.get(d.url) ?? 1
+                  const nth = dls.slice(0, k + 2).filter((x) => x.url === d.url).length
+                  return (
+                    <li key={`${k}:${d.sha256}:${d.url}`}>
+                      <a href={d.url} target="_blank" rel="noreferrer" className="sources-dlurl">{d.url.replace(/^https?:\/\//, '')}</a>
+                      {n > 1 && <span className="sources-rep" title="Same URL, different request (e.g. a POST query) or a re-download"> #{nth} of {n}</span>}
+                      <span className="muted"> · {fmtBytes(d.bytes)} · sha256 <code>{d.sha256.slice(0, 12)}…</code> · {fmtDate(d.fetched_at)}</span>
+                    </li>
+                  )
+                })}
               </ul>
             </details>
           )}

@@ -2,13 +2,17 @@ import type { YieldKey } from './types'
 
 export type RGB = [number, number, number]
 
-export const YIELD_META: Record<YieldKey, { label: string; color: string; rgb: RGB; blurb: string }> = {
-  gold: { label: 'Gold', color: '#f0c43a', rgb: [240, 196, 58], blurb: 'Economic output — GDP per km²' },
-  production: { label: 'Production', color: '#e0803a', rgb: [224, 128, 58], blurb: 'Industry (manufacturing, mining, construction, utilities) + power stations' },
-  food: { label: 'Food', color: '#7cc24e', rgb: [124, 194, 78], blurb: 'Agriculture, forestry & fishing value added; fish landings at sea' },
-  science: { label: 'Science', color: '#53b3f0', rgb: [83, 179, 240], blurb: 'STEM workforce density + research output of local institutions' },
-  culture: { label: 'Culture', color: '#c07ff0', rgb: [192, 127, 240], blurb: 'Arts, recreation & hospitality jobs; World Heritage, museums, national parks' },
-  faith: { label: 'Faith', color: '#f2ead0', rgb: [242, 234, 208], blurb: 'Places of worship density + the most notable religious sites' },
+/**
+ * `glyph` is the one text stand-in for the YieldIcon SVG (coin, gear, wheat, flask, star, flame),
+ * for places that can only show text (lens buttons, <option>/<optgroup> labels, HTML tooltips).
+ */
+export const YIELD_META: Record<YieldKey, { label: string; color: string; rgb: RGB; blurb: string; glyph: string }> = {
+  gold: { label: 'Gold', color: '#f0c43a', rgb: [240, 196, 58], glyph: '🪙', blurb: 'Economic output — GDP per km² of tile' },
+  production: { label: 'Production', color: '#e0803a', rgb: [224, 128, 58], glyph: '⚙️', blurb: 'Industry (manufacturing, mining, construction, utilities) per km² of tile + power stations' },
+  food: { label: 'Food', color: '#7cc24e', rgb: [124, 194, 78], glyph: '🌾', blurb: 'Agriculture, forestry & fishing value added per km² of tile; fish landings at sea' },
+  science: { label: 'Science', color: '#53b3f0', rgb: [83, 179, 240], glyph: '🧪', blurb: 'STEM workers per km² of tile + research output of local institutions' },
+  culture: { label: 'Culture', color: '#c07ff0', rgb: [192, 127, 240], glyph: '⭐', blurb: 'Arts, recreation & hospitality jobs per km² of tile; World Heritage, museums, national parks' },
+  faith: { label: 'Faith', color: '#f2ead0', rgb: [242, 234, 208], glyph: '🕯️', blurb: 'Places of worship per km² of tile + the most notable religious sites' },
 }
 
 export const TERRAIN_META: Record<string, { label: string; rgb: RGB }> = {

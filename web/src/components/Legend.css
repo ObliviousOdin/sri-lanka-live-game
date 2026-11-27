@@ -1,0 +1,46 @@
+/* Map legend additions (base .legend styles live in styles.css). Classes are prefixed lgx-. */
+
+/* .legend-wrap is pointer-events:none so the map stays draggable under it; re-enable the links */
+.lgx-prov {
+  pointer-events: auto;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 3px 4px;
+  margin-top: 5px;
+  font-size: 10.5px;
+  color: var(--muted);
+  max-height: 42px;
+  overflow: hidden;
+}
+.lgx-prov .row { flex-wrap: wrap; }
+.lgx-prov .chip { font-size: 10px; padding: 0 6px; }
+.lgx-vintage { margin-right: 2px; }
+.lgx-more { cursor: pointer; font: inherit; font-size: 10px; line-height: inherit; }
+.lgx-more:hover, .lgx-more:focus-visible { color: var(--text); border-color: currentColor; }
+
+.lgx-scale { display: flex; flex-wrap: wrap; column-gap: 0; }
+
+.lgx-nodata .legend-note { max-width: 300px; }
+
+.lgx-bar {
+  margin-top: 5px;
+  height: 4px;
+  min-width: 200px;
+  border-radius: 2px;
+  background: var(--line2);
+  overflow: hidden;
+}
+.lgx-bar i {
+  display: block;
+  height: 100%;
+  background: var(--brass);
+  transition: width 0.2s linear;
+}
+@media (prefers-reduced-motion: reduce) {
+  .lgx-bar i { transition: none; }
+}
+
+@media (max-width: 900px) {
+  .lgx-prov { max-height: 20px; }
+}

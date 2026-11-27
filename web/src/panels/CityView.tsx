@@ -151,7 +151,7 @@ interface CityProvenance {
   official_gdp_sources?: string[] | null
 }
 
-export interface OfficialPop {
+interface OfficialPop {
   /** row label, e.g. "Metro area (Census MSA, 2025)" */
   label: string
   /** list badge prefix, e.g. "metro" / "city proper" */
@@ -195,7 +195,7 @@ function officialPop(d: CountryData, city: City, national: NationalIndicator[]):
   return {
     label: `City proper (Wikidata${yr ? `, ${yr}` : ''})`,
     short: 'city proper',
-    scope: exportedScope ?? 'Population statement on the city’s Wikidata item (P1082): the municipal / urban council area, not a metro area; years differ by city. Not comparable with US metro figures — compare the tile-ring populations instead.',
+    scope: exportedScope ?? 'Population statement on the city’s Wikidata item (P1082), usually the municipal / urban council area (Wikidata does not record which); not a metro area, and years differ by city. Not comparable with US metro figures — compare the tile-ring populations instead.',
     note,
     sources,
   }

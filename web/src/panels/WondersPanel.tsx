@@ -1,17 +1,56 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { COUNTRY_META } from '../civ'
 import { SourceChips } from '../components/SourceChip'
-import type { AppData } from '../data/useData'
+import { useNational, type AppData } from '../data/useData'
 import { fmtInt, fmtNumber, fmtUsd } from '../format'
 import { WONDER_ICON } from '../map/MapPane'
 import { useStore } from '../store'
-import { COUNTRIES, type CountryData, type CountryId, type Wonder } from '../types'
+import { COUNTRIES, type CountryData, type CountryId, type NationalIndicator, type Wonder } from '../types'
 import { SITE_ZOOM, flyToCountry } from './cityViewNav'
+import { countryVintage } from './explorerData'
+import { wonderUnit } from './tilePanelStats'
 import './WondersPanel.css'
 
 const CATEGORY_ORDER = Object.keys(WONDER_ICON)
 const UNIT_SHORT: Record<string, string> = {
-  tonnes: 't', passengers: 'pax', 'Wikipedia editions': 'editions', visitors: 'visitors', works: 'works', MW: 'MW',
+  tonnes: 't', passengers: 'pax', enplanements: 'enpl.', 'Wikipedia editions': 'editions', visitors: 'visitors', works: 'works', MW: 'MW',
+}
+const UNIT_LONG: Record<string, string> = {
+  enplanements: 'enplanements (passenger boardings only — about half of all arriving + departing passengers)',
+}
+
+/**
+ * Where each ranked category's value lives in points.json. A country with no wonders in a category
+ * AND no value for any of its facilities has no data — that is not the same as "none qualify".
+ */
+const CATEGORY_DATA: Record<string, { layer: string; fields: string[]; what: string }> = {
+  'Great Airport': { layer: 'airports', fields: ['airport_pax', 'passengers'], what: 'open airport-level passenger statistics' },
+  'Great Port': { layer: 'ports', fields: ['port_cargo_t', 'cargo_tonnes'], what: 'port cargo statistics' },
+  'Great Power Station': { layer: 'power_plants', fields: ['capacity_mw'], what: 'power-station capacities' },
+  'Natural Wonder': { layer: 'parks', fields: ['park_visitors', 'visitors'], what: 'national-park visitor counts' },
+  'Great University': { layer: 'universities', fields: ['works_5y'], what: 'research-output counts' },
+  'Holy Wonder': { layer: 'holy_sites', fields: ['sitelinks'], what: 'holy-site documentation counts' },
+}
+
+function noData(d: CountryData | undefined, cat: string, n: number): boolean {
+  const cd = CATEGORY_DATA[cat]
+  if (!d || n > 0 || !cd) return false
+  const rows = d.points?.[cd.layer]?.rows ?? []
+  return !rows.some((r) => cd.fields.some((f) => r[f] != null && Number.isFinite(Number(r[f]))))
+}
+
+function NoDataNote({ c, cat, national }: { c: CountryId; cat: string; national: NationalIndicator[] }) {
+  const what = CATEGORY_DATA[cat]?.what ?? 'ranking data'
+  // national context for the one known gap: passengers carried by the country's airlines (World Bank)
+  const air = cat === 'Great Airport' ? national.find((r) => r.code === 'IS.AIR.PSGR')?.[c === 'lka' ? 'LKA' : 'USA'] : undefined
+  return (
+    <p className="wonders-nodata">
+      No {what} are published for {COUNTRY_META[c].name}, so no {cat === 'Great Airport' ? 'airport' : 'site'} can be ranked — this is missing data, not a zero.
+      {air?.value != null && air.year != null && (
+        <> For scale: {COUNTRY_META[c].name}-registered airlines carried {fmtNumber(air.value)} passengers in {air.year} (World Bank). <SourceChips ids={['worldbank_wdi']} /></>
+      )}
+    </p>
+  )
 }
 const SHOW_KIND = new Set(['World Heritage', 'Holy Wonder'])
 const COLLAPSED = 5
@@ -33,9 +72,10 @@ function extrasOf(w: Wonder): string[] {
 function valueOf(w: Wonder) {
   if (w.value == null || !Number.isFinite(w.value)) return null
   const yr = (w.visitors_year ?? w.year) as number | string | undefined
+  const unit = wonderUnit(w)
   return {
-    text: `${fmtNumber(w.value)}${w.unit ? ` ${UNIT_SHORT[w.unit] ?? w.unit}` : ''}`,
-    title: `${fmtInt(w.value)} ${w.unit}${yr ? ` (${yr})` : ''}`,
+    text: `${fmtNumber(w.value)}${unit ? ` ${UNIT_SHORT[unit] ?? unit}` : ''}`,
+    title: `${fmtInt(w.value)} ${UNIT_LONG[unit] ?? unit}${yr ? ` (${yr})` : ''}`,
     year: yr != null && yr !== '' ? String(yr) : null,
   }
 }
@@ -50,6 +90,7 @@ export function WondersPanel({ app }: { app: AppData }) {
   const [filter, setFilter] = useState<'all' | CountryId>('all')
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set())
   const rootRef = useRef<HTMLDivElement>(null)
+  const national = useNational()
   const { lka, usa } = app.countries
 
   const groups = useMemo(() => {
@@ -98,7 +139,7 @@ export function WondersPanel({ app }: { app: AppData }) {
           <h3>No wonders yet — data still building</h3>
           <p className="muted">
             Wonders are picked by rules once their data domains finish: national parks by visitors, universities by research
-            output, ports by cargo volume, power stations by capacity, airports by passengers, every UNESCO World Heritage
+            output, ports by cargo volume, power stations by capacity, airports by passenger boardings, every UNESCO World Heritage
             site, and the most widely documented holy sites.
           </p>
           <div className="wonders-await">
@@ -129,18 +170,23 @@ export function WondersPanel({ app }: { app: AppData }) {
                   <span>{g.cat}</span>
                 </h3>
                 {g.rules.map((r) => <p key={r} className="wonders-rule"><b>Rule:</b> {r}</p>)}
+                {g.cat === 'Great Airport' && !g.rules.some((r) => /enplane|boarding/i.test(r)) && (
+                  <p className="wonders-rule">US values are FAA enplanements: passengers boarding only, about half of all passenger movements.</p>
+                )}
                 {present.map((c) => {
                   const list = g.by[c] ?? []
                   const key = `${g.cat}:${c}`
                   const open = expanded.has(key) || selCat === key
                   const rows = open ? list : list.slice(0, COLLAPSED)
                   const srcs = [...new Set(list.flatMap((w) => w.sources ?? []))]
+                  const missing = noData(app.countries[c], g.cat, list.length)
                   return (
                     <div key={c} className="wonders-country">
                       <div className="wonders-country-head">
                         <span className={`chip ${c}`}>{COUNTRY_META[c].short}</span>
-                        <span className="muted">{list.length ? `${list.length} wonder${list.length === 1 ? '' : 's'}` : 'none qualify'}</span>
+                        <span className="muted">{list.length ? `${list.length} wonder${list.length === 1 ? '' : 's'}` : missing ? 'no data' : 'none qualify'}</span>
                       </div>
+                      {missing && <NoDataNote c={c} cat={g.cat} national={national} />}
                       {list.length > 0 && (
                         <ol className="wonders-rows">
                           {rows.map((w) => {
@@ -200,6 +246,10 @@ export function WondersPanel({ app }: { app: AppData }) {
 
 function WonderRace({ groups, lka, usa }: { groups: Group[]; lka?: CountryData; usa?: CountryData }) {
   const count = (g: Group, c: CountryId) => g.by[c]?.length ?? 0
+  const dataOf = (c: CountryId) => (c === 'lka' ? lka : usa)
+  const gap = (g: Group, c: CountryId) => noData(dataOf(c), g.cat, count(g, c))
+  const gaps = COUNTRIES.flatMap((c) => groups.filter((g) => gap(g, c)).map((g) => `${g.cat} (${COUNTRY_META[c].name})`))
+  const popYear = (d?: CountryData) => { const v = d?.metricByKey.get('pop')?.vintage; return v && d ? countryVintage(v, d.id) : '' }
   const top = (g: Group, c: CountryId) => g.by[c]?.find((w) => w.rank === 1 && w.value != null && Number.isFinite(w.value))?.value ?? null
   const tot = (c: CountryId) => groups.reduce((a, g) => a + count(g, c), 0)
   const pop = (d?: CountryData) => d?.meta.totals?.pop
@@ -225,16 +275,19 @@ function WonderRace({ groups, lka, usa }: { groups: Group[]; lka?: CountryData; 
         </thead>
         <tbody>
           {groups.map((g) => {
-            const a = lka ? count(g, 'lka') : null
-            const b = hasUsa ? count(g, 'usa') : null
+            const ga = gap(g, 'lka'), gb = gap(g, 'usa')
+            const a = lka && !ga ? count(g, 'lka') : null
+            const b = hasUsa && !gb ? count(g, 'usa') : null
+            const cell = (v: number | null, d: CountryData | undefined, miss: boolean) =>
+              miss ? <span className="muted" title={`No ${CATEGORY_DATA[g.cat]?.what ?? 'data'} for this country`}>–</span> : d ? v : '…'
             const ta = top(g, 'lka'), tb = top(g, 'usa')
             let ratio: { c: CountryId; x: number } | null = null
             if (ta != null && tb != null && ta > 0 && tb > 0) ratio = ta >= tb ? { c: 'lka', x: ta / tb } : { c: 'usa', x: tb / ta }
             return (
               <tr key={g.cat}>
                 <th scope="row"><span aria-hidden>{WONDER_ICON[g.cat] ?? '★'}</span> {g.cat}</th>
-                <td className={`num ${lead(a, b, 'a')}`}>{a ?? '…'}</td>
-                <td className={`num ${lead(a, b, 'b')}`}>{b ?? '…'}</td>
+                <td className={`num ${lead(a, b, 'a')}`}>{cell(a, lka, ga)}</td>
+                <td className={`num ${lead(a, b, 'b')}`}>{cell(b, usa, gb)}</td>
                 <td className="num wonders-ratio">
                   {ratio ? <span className={ratio.c}>{COUNTRY_META[ratio.c].short} {ratio.x >= 10 ? ratio.x.toFixed(0) : ratio.x.toFixed(1)}×</span> : <span className="muted">–</span>}
                 </td>
@@ -267,8 +320,10 @@ function WonderRace({ groups, lka, usa }: { groups: Group[]; lka?: CountryData; 
         Most rules keep a fixed top-N list per country, so raw counts are capped by design; only categories that list every
         qualifying site (such as World Heritage) compare like for like. With capped lists, rates per person and per area
         naturally favour the smaller country — the “#1 vs #1” column compares the champions’ real values instead.
-        Population and land area: {lka ? `Sri Lanka ${fmtNumber(pop(lka))} people, ${fmtNumber(land(lka))} km²` : '…'}
+        {gaps.length > 0 && <> “–” = no data, not zero: {gaps.join(', ')}; those categories add nothing to the total.</>}
+        {' '}Population (map tiles, {[popYear(lka), popYear(usa)].filter(Boolean).filter((v, i, a) => a.indexOf(v) === i).join(' / ') || 'n/a'} estimates) and land area: {lka ? `Sri Lanka ${fmtNumber(pop(lka))} people, ${fmtNumber(land(lka))} km²` : '…'}
         {usa ? `; United States ${fmtNumber(pop(usa))} people, ${fmtNumber(land(usa))} km²` : ''}.
+        {' '}<SourceChips ids={[...new Set([...(lka?.metricByKey.get('pop')?.sources ?? []), ...(usa?.metricByKey.get('pop')?.sources ?? [])])]} />
       </p>
     </section>
   )

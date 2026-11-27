@@ -150,3 +150,4 @@
 .tilepanel-civsrc { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 3px; min-width: 0; }
 .tilepanel-civsrc .chip { font-size: 10px; line-height: 15px; padding: 0 5px; max-width: 120px; overflow: hidden; text-overflow: ellipsis; }
 .tilepanel-ytable td b { font-weight: 700; color: var(--text); }
+.tilepanel-ytable thead th { white-space: normal; line-height: 1.15; vertical-align: bottom; }

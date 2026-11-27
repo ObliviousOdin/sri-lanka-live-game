@@ -249,9 +249,15 @@ def export_global() -> dict:
         if f.exists():
             for s in json.loads(f.read_text()):
                 sources.setdefault(s["id"], {**s, "metrics": {}})
-        mf = INTERIM / cc / "reconciled" / "metrics.json"
-        if mf.exists():
-            for m in json.loads(mf.read_text()):
+        # metric keys as shipped to the app (meta.json), so every key a source lists exists in the app
+        mf = web_dir(cc) / "meta.json"
+        mlist = json.loads(mf.read_text())["metrics"] if mf.exists() else []
+        if not mlist and (INTERIM / cc / "reconciled" / "metrics.json").exists():
+            mlist = json.loads((INTERIM / cc / "reconciled" / "metrics.json").read_text())
+        if mlist:
+            for m in mlist:
+                if m.get("domain") == "derived":          # e.g. citizen shares: listed via their base metric
+                    continue
                 for sid in m.get("sources", []):
                     if sid in sources:
                         sources[sid]["metrics"].setdefault(cc, []).append(m["key"])

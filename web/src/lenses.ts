@@ -1,7 +1,8 @@
-import { CITIZEN_META, DISTRICT_META, FEATURE_META, TERRAIN_META, YIELD_META, type RGB } from './civ'
-import { CATEGORICAL, PALETTES, mix, ramp, robustDomain, scaleT, shade, yieldColor } from './color'
+import { CITIZEN_META, COUNTRY_META, DISTRICT_META, FEATURE_META, TERRAIN_META, YIELD_META, type RGB } from './civ'
+import { CATEGORICAL, PALETTES, mix, ramp, scaleT, shade, sortedDomain, sortedQuantile, yieldColor } from './color'
 import { column } from './data/load'
-import type { CountryData, IndexJson, YieldKey } from './types'
+import { fmtNumber, fmtUsd } from './format'
+import { COUNTRIES, type CountryData, type CountryId, type IndexJson, type Metric, type YieldKey } from './types'
 
 export type LensGroup = 'Map' | 'Yields' | 'People' | 'Economy' | 'Environment' | 'Infrastructure'
 
@@ -17,7 +18,10 @@ export interface LensDef {
   /** for dominant lenses: metric key prefix & suffix filter, or explicit keys */
   dominant?: { prefix: string; suffix?: string; exclude?: string[]; byLQ?: boolean; aggregates?: Record<string, string[]> }
   palette?: keyof typeof PALETTES
+  /** true: always log; false/undefined: linear (densities of extensive metrics are always log) */
   log?: boolean
+  /** pick log automatically for skewed positive metrics (pooled p98/p02 ≥ 20; never for %, shares, indices) */
+  autoLog?: boolean
   description: string
   pointLayers?: string[]
 }
@@ -25,32 +29,111 @@ export interface LensDef {
 export const LENSES: LensDef[] = [
   { id: 'terrain', label: 'Terrain', group: 'Map', icon: '⛰️', kind: 'terrain', description: 'Base terrain from ESA WorldCover land cover, Copernicus DEM relief and WorldClim climate.' },
   { id: 'districts', label: 'Districts', group: 'Map', icon: '🏛️', kind: 'district', description: 'Specialist districts assigned by published-data rules (see each district’s rule).' },
-  { id: 'gold', label: 'Gold', group: 'Yields', icon: '◆', kind: 'yield', yield: 'gold', description: YIELD_META.gold.blurb },
-  { id: 'production', label: 'Production', group: 'Yields', icon: '⚒', kind: 'yield', yield: 'production', description: YIELD_META.production.blurb },
-  { id: 'food', label: 'Food', group: 'Yields', icon: '🌾', kind: 'yield', yield: 'food', description: YIELD_META.food.blurb },
-  { id: 'science', label: 'Science', group: 'Yields', icon: '⚗', kind: 'yield', yield: 'science', description: YIELD_META.science.blurb },
-  { id: 'culture', label: 'Culture', group: 'Yields', icon: '✦', kind: 'yield', yield: 'culture', description: YIELD_META.culture.blurb },
-  { id: 'faith', label: 'Faith', group: 'Yields', icon: '☼', kind: 'yield', yield: 'faith', description: YIELD_META.faith.blurb },
-  { id: 'population', label: 'Population density', group: 'People', icon: '👥', kind: 'metric', metrics: ['pop_density', 'pop'], palette: 'magma', log: true, description: 'Residents per km² (WorldPop distribution scaled to official 2023 totals).' },
-  { id: 'income', label: 'Income', group: 'Economy', icon: '💵', kind: 'metric', metrics: ['hh_income_usd', 'gdp_per_capita_usd', 'poverty_rate', 'rwi'], palette: 'viridis', log: false, description: 'Household income, GDP per capita, poverty and (Sri Lanka) the Relative Wealth Index.' },
+  { id: 'gold', label: 'Gold', group: 'Yields', icon: YIELD_META.gold.glyph, kind: 'yield', yield: 'gold', description: YIELD_META.gold.blurb },
+  { id: 'production', label: 'Production', group: 'Yields', icon: YIELD_META.production.glyph, kind: 'yield', yield: 'production', description: YIELD_META.production.blurb },
+  { id: 'food', label: 'Food', group: 'Yields', icon: YIELD_META.food.glyph, kind: 'yield', yield: 'food', description: YIELD_META.food.blurb },
+  { id: 'science', label: 'Science', group: 'Yields', icon: YIELD_META.science.glyph, kind: 'yield', yield: 'science', description: YIELD_META.science.blurb },
+  { id: 'culture', label: 'Culture', group: 'Yields', icon: YIELD_META.culture.glyph, kind: 'yield', yield: 'culture', description: YIELD_META.culture.blurb },
+  { id: 'faith', label: 'Faith', group: 'Yields', icon: YIELD_META.faith.glyph, kind: 'yield', yield: 'faith', description: YIELD_META.faith.blurb },
+  { id: 'population', label: 'Population density', group: 'People', icon: '👥', kind: 'metric', metrics: ['pop_density'], palette: 'magma', log: true, description: 'Residents per km² of land (WorldPop 2020 distribution scaled to official 2023 totals).' },
+  { id: 'income', label: 'Income', group: 'Economy', icon: '💵', kind: 'metric', metrics: ['hh_income_usd', 'gdp_per_capita_usd', 'poverty_rate', 'rwi'], palette: 'viridis', autoLog: true, description: 'Household income, GDP per capita and poverty (current US$ at market exchange rates), and the Relative Wealth Index (Sri Lanka only). Incomes span ~40x across the two countries, so money is shown on a log scale.' },
   { id: 'education', label: 'Education', group: 'People', icon: '🎓', kind: 'metric', metrics: ['pct_bachelors', 'pct_secondary', 'literacy_rate', 'schools'], palette: 'blues', log: false, description: 'Educational attainment of adults and schools.' },
   { id: 'religion', label: 'Religion', group: 'People', icon: '🪔', kind: 'dominant', dominant: { prefix: 'rel_', suffix: '_pct', exclude: ['rel_unclaimed_pct'], aggregates: { rel_christian_pct: ['rel_evangelical_pct', 'rel_catholic_pct', 'rel_mainline_pct', 'rel_black_protestant_pct', 'rel_orthodox_pct', 'rel_lds_pct'] } }, metrics: ['religious_diversity'], description: 'Largest religious tradition (shade = its share). Sri Lanka: Census; US: 2020 U.S. Religion Census adherents.' },
   { id: 'ethnicity', label: 'Ethnicity', group: 'People', icon: '🧑‍🤝‍🧑', kind: 'dominant', dominant: { prefix: 'eth_', suffix: '_pct' }, metrics: ['ethnic_diversity'], description: 'Largest ethnic group (shade = its share). Sri Lanka: Census; US: ACS race & Hispanic origin.' },
   { id: 'workforce', label: 'Workforce', group: 'People', icon: '👷', kind: 'dominant', dominant: { prefix: 'cit_', suffix: '_pct', byLQ: true }, description: 'Most over-represented citizen class (highest location quotient vs the national mix).' },
   { id: 'disasters', label: 'Disasters', group: 'Environment', icon: '🌪️', kind: 'metric', metrics: ['hazard_index', 'cyclone_tracks', 'quakes_m5', 'tsunami_runups', 'nri_risk_score', 'nri_eal_usd', 'disaster_deaths_per_100k', 'flood_events', 'landslide_events'], palette: 'hazard', log: false, description: 'Tropical cyclones (IBTrACS), earthquakes (USGS), tsunami run-ups (NOAA) and national loss databases.' },
-  { id: 'energy', label: 'Energy', group: 'Infrastructure', icon: '⚡', kind: 'metric', metrics: ['power_capacity_mw', 'generation_gwh', 'renewable_capacity_mw'], palette: 'inferno', log: true, description: 'Installed generating capacity and generation per km².', pointLayers: ['power_plants'] },
-  { id: 'trade', label: 'Trade', group: 'Infrastructure', icon: '⚓', kind: 'metric', metrics: ['port_cargo_t', 'airport_pax', 'emp_transport', 'emp_trade'], palette: 'blues', log: true, description: 'Port cargo, airport passengers and trade/transport employment per km².', pointLayers: ['ports', 'airports'] },
+  { id: 'energy', label: 'Energy', group: 'Infrastructure', icon: '⚡', kind: 'metric', metrics: ['power_capacity_mw', 'generation_gwh', 'renewable_capacity_mw'], palette: 'inferno', log: true, description: 'Installed generating capacity and generation per km² of tile.', pointLayers: ['power_plants'] },
+  { id: 'trade', label: 'Trade', group: 'Infrastructure', icon: '⚓', kind: 'metric', metrics: ['port_cargo_t', 'airport_pax', 'emp_transport', 'emp_trade'], palette: 'blues', log: true, description: 'Port cargo, US airport enplanements (FAA boardings; Sri Lanka publishes no airport-level passenger statistics) and trade/transport employment, per km² of tile.', pointLayers: ['ports', 'airports'] },
   { id: 'landcover', label: 'Land cover', group: 'Environment', icon: '🌳', kind: 'dominant', dominant: { prefix: 'lc_' }, metrics: ['lc_tree', 'lc_crop', 'lc_built', 'protected_pct'], description: 'Dominant ESA WorldCover 2021 class.' },
   { id: 'elevation', label: 'Elevation', group: 'Environment', icon: '🏔️', kind: 'metric', metrics: ['elev_mean_m', 'relief_m', 'slope_mean_deg', 'temp_mean_c', 'precip_mm'], palette: 'terrain', log: false, description: 'Copernicus DEM GLO-90 elevation and relief; WorldClim climate.' },
-  { id: 'custom', label: 'Any metric', group: 'Economy', icon: '📊', kind: 'metric', metrics: [], palette: 'viridis', log: false, description: 'Any metric chosen in the Explorer.' },
+  { id: 'custom', label: 'Any metric', group: 'Economy', icon: '📊', kind: 'metric', metrics: [], palette: 'viridis', autoLog: true, description: 'Any metric chosen in the Explorer.' },
 ]
 
 export const LENS_BY_ID = new Map(LENSES.map((l) => [l.id, l]))
 
-/** Metric keys that are colored as densities (extensive metrics are divided by tile area). */
+// ---------------------------------------------------------------------------------------------
+// Basis & units. Extensive metrics (sums: people, US$, MW…) are coloured per km² of TILE area
+// (d.hexArea, the same basis yields use; tiles are ~36 km² in Sri Lanka and ~253 km² in the US).
+// Areas (km²) become a share of the tile. Intensive metrics (rates, medians, indices) are shown as is;
+// pop_density is per km² of LAND (water excluded) and is labelled so.
+// ---------------------------------------------------------------------------------------------
+
+export type LensBasis = 'raw' | 'density' | 'share'
+
+const AREA_UNIT = /^\s*km(2|²)\s*$/i
+const MONEY = /^\s*(usd|us\$)/i
+const PCT_UNITS = new Set(['%', 'percent', 'pct'])
+const SHARE_UNITS = new Set(['share', 'fraction', '0-1'])
+const COUNT_UNITS = new Set(['count', ''])
+const PEOPLE_UNITS = new Set(['persons', 'people'])
+const LAND_DENSITY_UNITS = new Set(['persons/km2', 'people/km2', 'persons/km²', 'people/km²'])
+/** Bounded or signed units that are never put on a log ramp automatically. */
+const LINEAR_UNITS = new Set([...PCT_UNITS, ...SHARE_UNITS, 'index', 'score', 'magnitude', 'deg', 'degc', 'm', 'kt'])
+
+/** How a metric is coloured on the map (same rule as the Tile inspector's hasDensity). */
+export function lensBasis(m: Pick<Metric, 'kind' | 'unit'>): LensBasis {
+  if (m.kind !== 'extensive') return 'raw'
+  return AREA_UNIT.test(m.unit) ? 'share' : 'density'
+}
+
+/** Metric keys that are coloured as densities (extensive metrics divided by tile area; areas excluded). */
 export function isDensity(d: CountryData, key: string) {
   const m = d.metricByKey.get(key)
-  return !!m && m.kind === 'extensive' && key !== 'pop'
+  return !!m && lensBasis(m) === 'density'
+}
+
+const prettyUnit = (u: string) =>
+  u.replace(/km2/g, 'km²').replace(/^degC$/i, '°C').replace(/^deg$/i, '°').replace(/\/year$/i, '/yr')
+
+/** Unit caption shown once under a legend (ticks carry bare numbers, $ and % only). */
+export function lensUnitCaption(unit: string, basis: LensBasis): string {
+  const u = unit.trim(), lu = u.toLowerCase()
+  if (basis === 'share') return '% of tile area'
+  if (basis === 'density') {
+    if (MONEY.test(u)) return `US$${prettyUnit(u.replace(MONEY, ''))} per km² of tile`
+    if (PEOPLE_UNITS.has(lu)) return 'people per km² of tile'
+    if (COUNT_UNITS.has(lu)) return 'per km² of tile'
+    return `${prettyUnit(u)} per km² of tile`
+  }
+  if (LAND_DENSITY_UNITS.has(lu)) return 'people per km² of land'
+  if (MONEY.test(u)) return `US$${prettyUnit(u.replace(MONEY, ''))}`
+  if (PCT_UNITS.has(lu) || SHARE_UNITS.has(lu)) return '%'
+  if (PEOPLE_UNITS.has(lu)) return 'people'
+  return prettyUnit(u)
+}
+
+const money = (v: number) => (Math.abs(v) >= 1000 ? fmtUsd(v) : `$${fmtNumber(v)}`)
+
+/** Short value for legend ticks: keeps $, % and degrees, drops other units (see lensUnitCaption). */
+export function fmtLensTick(v: number, unit: string, basis: LensBasis): string {
+  if (!Number.isFinite(v)) return '–'
+  if (basis === 'share') return `${fmtNumber(v)}%`
+  const lu = unit.trim().toLowerCase()
+  if (MONEY.test(lu)) return money(v)
+  if (PCT_UNITS.has(lu)) return `${fmtNumber(v)}%`
+  if (SHARE_UNITS.has(lu)) return `${fmtNumber(v * 100)}%`
+  if (lu === 'degc') return `${fmtNumber(v)}°C`
+  if (lu === 'deg') return `${fmtNumber(v)}°`
+  return fmtNumber(v)
+}
+
+/**
+ * Full value with unit and basis, e.g. "1,234 people per km² of tile", "$2.9k/yr", "12% of tile area".
+ * `v` is the lens value (lensValues / lensValue), i.e. already divided by tile area for densities.
+ */
+export function fmtLensValue(v: number, unit: string, basis: LensBasis): string {
+  if (!Number.isFinite(v)) return '–'
+  const u = unit.trim(), lu = u.toLowerCase()
+  if (basis === 'share') return `${fmtNumber(v)}% of tile area`
+  if (MONEY.test(u)) {
+    const rest = prettyUnit(u.replace(MONEY, ''))
+    return basis === 'density' ? `${money(v)}${rest} per km² of tile` : `${money(v)}${rest}`
+  }
+  const tick = fmtLensTick(v, unit, basis)
+  if (basis === 'density') return `${tick} ${lensUnitCaption(unit, basis)}`
+  if (LAND_DENSITY_UNITS.has(lu)) return `${tick} people per km² of land`
+  if (PCT_UNITS.has(lu) || SHARE_UNITS.has(lu) || lu === 'degc' || lu === 'deg' || COUNT_UNITS.has(lu) || PEOPLE_UNITS.has(lu) || lu === 'index') return tick
+  return `${tick} ${prettyUnit(u)}`
 }
 
 const CAT_COLORS: Record<string, RGB> = {
@@ -59,6 +142,13 @@ const CAT_COLORS: Record<string, RGB> = {
   rel_mainline_pct: [120, 180, 240], rel_black_protestant_pct: [0, 160, 160], rel_lds_pct: [230, 200, 60],
   rel_jewish_pct: [200, 220, 255], rel_orthodox_pct: [160, 110, 80], rel_other_pct: [150, 150, 150],
   rel_unclaimed_pct: [70, 70, 70],
+  // ethnic groups: fixed per category, so 'Other' reads the same in both maps and no group of one
+  // country borrows another country's colour by list position
+  eth_sinhalese_pct: [242, 169, 0], eth_sl_tamil_pct: [229, 57, 53], eth_indian_tamil_pct: [214, 120, 200],
+  eth_moor_pct: [76, 175, 80],
+  eth_white_nh_pct: [91, 141, 239], eth_black_pct: [171, 71, 188], eth_hispanic_pct: [0, 172, 193],
+  eth_asian_pct: [236, 64, 122], eth_native_pct: [176, 128, 64],
+  eth_other_pct: [150, 150, 150],
   lc_tree: [0, 100, 0], lc_shrub: [255, 187, 34], lc_grass: [255, 255, 76], lc_crop: [240, 150, 255],
   lc_built: [250, 0, 0], lc_bare: [180, 180, 180], lc_snow: [240, 240, 240], lc_water: [0, 100, 200],
   lc_wetland: [0, 150, 160], lc_mangrove: [0, 207, 117], lc_moss: [250, 230, 160],
@@ -82,10 +172,32 @@ export function terrainRGB(d: CountryData, idx: IndexJson, i: number): RGB {
   return c
 }
 
+/** Vintage + sources of the data behind a legend, per country. */
+export interface Provenance { country: CountryId; vintage: string; sources: string[] }
+
+/** Which countries a continuous legend's colour domain was built from. */
+export interface ScaleInfo {
+  /** Shared scale was requested (pool of more than one country) */
+  shared: boolean
+  /** countries whose values form the domain */
+  pooled: CountryId[]
+  /** requested countries whose statistics are still loading (excluded for now) */
+  pending: CountryId[]
+  /** requested countries that do not publish this metric */
+  missing: CountryId[]
+}
+
 export type Legend =
-  | { kind: 'categorical'; title: string; items: { label: string; rgb: RGB; count?: number }[] }
-  | { kind: 'continuous'; title: string; palette: RGB[]; domain: [number, number]; log: boolean; unit: string; density: boolean }
+  | { kind: 'categorical'; title: string; items: { label: string; rgb: RGB; count?: number }[]; prov?: Provenance[] }
+  | {
+    kind: 'continuous'; title: string; hint: string; palette: RGB[]; domain: [number, number]; log: boolean
+    unit: string; basis: LensBasis; density: boolean; country: CountryId; scale: ScaleInfo; prov: Provenance[]
+  }
   | { kind: 'yield'; title: string; yieldKey: YieldKey; cap: number }
+  /** the chosen metric is not published for this country: the map is dimmed, never another metric */
+  | { kind: 'nodata'; title: string; detail: string; country: CountryId }
+  /** the metric matrix (metrics.bin) of this country has not arrived yet */
+  | { kind: 'loading'; title: string; country: CountryId }
 
 export interface LensResult {
   colors: Uint8Array
@@ -96,6 +208,42 @@ export interface LensResult {
 export function lensMetricKeys(lens: LensDef, d: CountryData[]): string[] {
   if (!lens.metrics) return []
   return lens.metrics.filter((k) => d.some((c) => c.metricByKey.has(k)))
+}
+
+/** Countries (in COUNTRIES order) whose data publish a metric key. */
+export function metricCoverage(key: string, countries: CountryData[]): CountryId[] {
+  return COUNTRIES.filter((id) => countries.some((c) => c.id === id && c.metricByKey.has(key)))
+}
+
+/** Label of a metric from whichever country publishes it. */
+export function metricLabel(key: string, countries: CountryData[]): string {
+  for (const c of countries) { const m = c.metricByKey.get(key); if (m) return m.label }
+  return key
+}
+
+/** ' (LK only)' / ' (US only)' for single-country metrics when both countries are loaded, else ''. */
+export function coverageTag(key: string, countries: CountryData[]): string {
+  if (new Set(countries.map((c) => c.id)).size < 2) return ''
+  const cov = metricCoverage(key, countries)
+  return cov.length === 1 ? ` (${cov[0] === 'lka' ? 'LK' : 'US'} only)` : ''
+}
+
+/** Menu options of a metric or dominant lens: every candidate key with its label and coverage tag. */
+export function lensMetricOptions(lens: LensDef, countries: CountryData[]) {
+  const keys = lens.id === 'custom'
+    ? [...new Set(countries.flatMap((c) => c.meta.metrics.map((m) => m.key)))]
+    : lensMetricKeys(lens, countries)
+  return keys.map((key) => ({ key, label: metricLabel(key, countries), coverage: metricCoverage(key, countries), tag: coverageTag(key, countries) }))
+}
+
+/**
+ * The metric a metric lens shows for country d: the chosen key (null when d does not publish it —
+ * the map then shows "no data", never a different metric), else the lens default, which is the first
+ * candidate published by any of `all` (the same default the lens menu shows).
+ */
+export function lensMetricKey(lens: LensDef, metricKey: string | null | undefined, d: CountryData, all: CountryData[] = [d]): string | null {
+  const k = metricKey || lensMetricKeys(lens, all.length ? all : [d])[0]
+  return k && d.metricByKey.has(k) ? k : null
 }
 
 function dominantKeys(lens: LensDef, d: CountryData) {
@@ -115,18 +263,138 @@ function dominantKeys(lens: LensDef, d: CountryData) {
   return keys.filter((k) => !drop.has(k))
 }
 
-/** Values used for colouring a metric lens (densities for extensive metrics). */
+/** Values used for colouring a metric lens: per km² of tile for extensive metrics, % of tile for areas. */
 export function lensValues(d: CountryData, key: string): Float32Array | null {
-  const col = column(d, key)
-  if (!col) return null
-  if (!isDensity(d, key)) return col
+  const m = d.metricByKey.get(key)
+  const col = m ? column(d, key) : null
+  if (!m || !col) return null
+  const basis = lensBasis(m)
+  if (basis === 'raw') return col
+  const k = basis === 'share' ? 100 : 1
   const out = new Float32Array(d.n)
-  for (let i = 0; i < d.n; i++) out[i] = col[i] / d.hexArea[i]
+  for (let i = 0; i < d.n; i++) out[i] = (col[i] / d.hexArea[i]) * k
   return out
 }
 
+/** One tile's lens value (same basis as lensValues), NaN when missing. */
+export function lensValue(d: CountryData, key: string, i: number): number {
+  const m = d.metricByKey.get(key)
+  const col = m ? column(d, key) : null
+  if (!m || !col) return NaN
+  const basis = lensBasis(m)
+  const v = col[i]
+  return basis === 'raw' ? v : (v / d.hexArea[i]) * (basis === 'share' ? 100 : 1)
+}
+
+// ---------------------------------------------------------------------------------------------
+// Colour domain: computed once per (lens, metric, pool of CountryData objects) and shared by both
+// panes and the Explorer's lens colouring. A new CountryData object (e.g. when metrics.bin lands)
+// gets a new id, so the cache refreshes by itself.
+// ---------------------------------------------------------------------------------------------
+
+interface DomainInfo { domain: [number, number]; log: boolean; pooled: CountryId[]; pending: CountryId[]; missing: CountryId[] }
+
+const objIds = new WeakMap<object, number>()
+let objSeq = 0
+const objId = (o: object) => {
+  let v = objIds.get(o)
+  if (v == null) { v = ++objSeq; objIds.set(o, v) }
+  return v
+}
+const domainCache = new Map<string, DomainInfo>()
+const DOMAIN_CACHE_MAX = 48
+const byCountryOrder = (a: CountryId, b: CountryId) => COUNTRIES.indexOf(a) - COUNTRIES.indexOf(b)
+
+/** Should a skewed positive metric go on a log ramp? (only for lenses with autoLog) */
+function autoLog(sorted: Float64Array, unit: string): boolean {
+  if (LINEAR_UNITS.has(unit.trim().toLowerCase()) || !sorted.length || sorted[0] < 0) return false
+  let lo = 0, hi = sorted.length
+  while (lo < hi) { const mid = (lo + hi) >> 1; if (sorted[mid] > 0) hi = mid; else lo = mid + 1 }
+  const pos = sorted.subarray(lo)
+  if (pos.length < 10) return false
+  return sortedQuantile(pos, 0.98) / sortedQuantile(pos, 0.02) >= 20
+}
+
+function lensDomain(lens: LensDef, key: string, pool: CountryData[], pendingIds: CountryId[]): DomainInfo {
+  const ck = `${lens.id}|${key}|${pool.map((c) => `${c.id}:${objId(c)}`).join(',')}|${pendingIds.join(',')}`
+  const hit = domainCache.get(ck)
+  if (hit) return hit
+  const pooled: CountryId[] = [], pending = [...pendingIds], missing: CountryId[] = []
+  const parts: { c: CountryData; v: Float32Array; m: Metric }[] = []
+  let total = 0
+  for (const c of pool) {
+    const m = c.metricByKey.get(key)
+    if (!m) { missing.push(c.id); continue }
+    if (!c.matrixReady) { pending.push(c.id); continue }
+    parts.push({ c, v: lensValues(c, key)!, m })
+    total += c.n
+  }
+  // land tiles only (sea rings carry zeros for most metrics), except coastal-sea metrics
+  const buf = new Float64Array(total)
+  let k = 0
+  for (const { c, v, m } of parts) {
+    const coast = m.weight === 'coast', ring = c.hexes.ring
+    const k0 = k
+    for (let i = 0; i < c.n; i++) {
+      const x = v[i]
+      if (Number.isFinite(x) && (coast || ring[i] === 0)) buf[k++] = x
+    }
+    if (k > k0) pooled.push(c.id)
+    else missing.push(c.id)
+  }
+  const sorted = buf.subarray(0, k).sort()
+  const m0 = parts[0]?.m
+  const basis = m0 ? lensBasis(m0) : 'raw'
+  const log = basis === 'density' || lens.log === true || (!!lens.autoLog && basis === 'raw' && !!m0 && autoLog(sorted, m0.unit))
+  let vals: Float64Array = sorted
+  if (log) {
+    let lo = 0, hi = sorted.length
+    while (lo < hi) { const mid = (lo + hi) >> 1; if (sorted[mid] > 0) hi = mid; else lo = mid + 1 }
+    vals = sorted.subarray(lo)
+  }
+  const info: DomainInfo = {
+    domain: sortedDomain(vals, log), log,
+    pooled: pooled.sort(byCountryOrder), pending: [...new Set(pending)].sort(byCountryOrder), missing: missing.sort(byCountryOrder),
+  }
+  if (domainCache.size >= DOMAIN_CACHE_MAX) domainCache.delete(domainCache.keys().next().value!)
+  domainCache.set(ck, info)
+  return info
+}
+
+function lensTitle(m: Metric, basis: LensBasis): { title: string; hint: string } {
+  if (basis === 'density') {
+    return {
+      title: `${m.label} per km² of tile`,
+      hint: 'Divided by each tile’s total area (km² of tile), the basis the yields use. Tiles are ~36 km² in Sri Lanka and ~253 km² in the US.',
+    }
+  }
+  if (basis === 'share') return { title: `${m.label} (% of tile area)`, hint: 'Share of each tile’s total area.' }
+  if (LAND_DENSITY_UNITS.has(m.unit.trim().toLowerCase())) {
+    return { title: m.label, hint: 'Residents per km² of land in the tile (water excluded).' }
+  }
+  return { title: m.label, hint: m.description || m.label }
+}
+
+const provOf = (c: CountryData, keys: string[]): Provenance => {
+  const ms = keys.map((k) => c.metricByKey.get(k)).filter(Boolean) as Metric[]
+  return {
+    country: c.id,
+    vintage: [...new Set(ms.map((m) => m.vintage).filter(Boolean))].join(' / '),
+    sources: [...new Set(ms.flatMap((m) => m.sources))],
+  }
+}
+
+export interface LensContext {
+  /** Shared scale requested (defaults to pool.length > 1) */
+  shared?: boolean
+  /** countries expected in the shared pool whose data has not loaded at all yet */
+  pending?: CountryId[]
+  /** every loaded country (labels and the default metric); defaults to the pool */
+  all?: CountryData[]
+}
+
 export function computeLens(
-  lens: LensDef, metricKey: string | null, d: CountryData, idx: IndexJson, pool: CountryData[],
+  lens: LensDef, metricKey: string | null, d: CountryData, idx: IndexJson, pool: CountryData[], ctx: LensContext = {},
 ): LensResult {
   const n = d.n
   const colors = new Uint8Array(n * 4)
@@ -137,7 +405,9 @@ export function computeLens(
   }
   const terrainAll = () => { for (let i = 0; i < n; i++) set(i, terrainRGB(d, idx, i)) }
   const dimTerrain = (i: number) => set(i, shade(terrainRGB(d, idx, i), 0.32))
+  const dimAll = () => { for (let i = 0; i < n; i++) dimTerrain(i) }
   if (elev) for (let i = 0; i < n; i++) elevation[i] = Math.max(0, elev[i] || 0)
+  const name = COUNTRY_META[d.id].name
 
   if (lens.kind === 'terrain') {
     terrainAll()
@@ -178,6 +448,14 @@ export function computeLens(
 
   if (lens.kind === 'dominant') {
     const keys = dominantKeys(lens, d)
+    if (!keys.length) {
+      dimAll()
+      return { colors, elevation, legend: { kind: 'nodata', title: lens.label, detail: `Not published for ${name}`, country: d.id } }
+    }
+    if (!d.matrixReady) {
+      dimAll()
+      return { colors, elevation, legend: { kind: 'loading', title: lens.label, country: d.id } }
+    }
     const cols = keys.map((k) => column(d, k)!)
     let nat: number[] | null = null
     if (lens.dominant?.byLQ) {
@@ -206,43 +484,64 @@ export function computeLens(
     }
     const label = (k: string) => {
       if (k.startsWith('cit_')) return `${CITIZEN_META[k.replace(/_pct$/, '')]?.icon ?? ''} ${CITIZEN_META[k.replace(/_pct$/, '')]?.label ?? k}`
-      return (d.metricByKey.get(k)?.label ?? k).replace(/\s*\(share\)|\s*share|\s*\(%\)/i, '')
+      return (d.metricByKey.get(k)?.label ?? k).replace(/\s*\((share|%)( of [^)]*)?\)|\s*share/i, '')
     }
     return {
       colors, elevation,
-      legend: { kind: 'categorical', title: lens.label, items: keys.map((k, j) => ({ label: label(k), rgb: catColor(k, j), count: counts[j] })).filter((x) => x.count) },
+      legend: {
+        kind: 'categorical', title: lens.label,
+        items: keys.map((k, j) => ({ label: label(k), rgb: catColor(k, j), count: counts[j] })).filter((x) => x.count),
+        prov: [provOf(d, keys)],
+      },
     }
   }
 
-  // metric lens
-  const key = metricKey && d.metricByKey.has(metricKey) ? metricKey : lensMetricKeys(lens, [d])[0]
-  const vals = key ? lensValues(d, key) : null
-  if (!key || !vals) {
-    for (let i = 0; i < n; i++) dimTerrain(i)
-    return { colors, elevation, legend: { kind: 'categorical', title: `${lens.label}: no data for this country`, items: [] } }
+  // ---- metric lens
+  const all = ctx.all?.length ? ctx.all : pool
+  const wanted = metricKey || lensMetricKeys(lens, all.length ? all : [d])[0] || null
+  const key = lensMetricKey(lens, metricKey, d, all)
+  if (!key) {
+    // never fall back to another metric: that would put two different metrics under one legend
+    dimAll()
+    const cov = wanted ? metricCoverage(wanted, all) : []
+    const only = cov.length ? ` — ${cov.map((c) => COUNTRY_META[c].name).join(' and ')} only` : ''
+    return {
+      colors, elevation,
+      legend: { kind: 'nodata', title: wanted ? metricLabel(wanted, all) : lens.label, detail: `Not published for ${name}${only}`, country: d.id },
+    }
   }
   const m = d.metricByKey.get(key)!
-  const log = lens.log ?? false
-  const useLog = log || (m.kind === 'extensive')
-  const arrays = pool.map((c) => lensValues(c, key)).filter(Boolean) as Float32Array[]
-  const landOnly = (c: CountryData, a: Float32Array) => {
-    const out = new Float32Array(c.n)
-    for (let i = 0; i < c.n; i++) out[i] = c.hexes.ring[i] === 0 || m.weight === 'coast' ? a[i] : NaN
-    return out
+  if (!d.matrixReady) {
+    dimAll()
+    return { colors, elevation, legend: { kind: 'loading', title: m.label, country: d.id } }
   }
-  const domain = robustDomain(arrays.map((a, j) => landOnly(pool[j], a)), useLog)
+  const shared = ctx.shared ?? pool.length > 1
+  const domPool = shared ? [d, ...pool.filter((c) => c.id !== d.id)] : [d]
+  const info = lensDomain(lens, key, domPool, shared ? (ctx.pending ?? []).filter((c) => c !== d.id) : [])
+  if (!info.pooled.includes(d.id)) {
+    dimAll()
+    return { colors, elevation, legend: { kind: 'nodata', title: m.label, detail: `No values for ${name}`, country: d.id } }
+  }
+  const { domain, log } = info
+  const vals = lensValues(d, key)!
   const pal = PALETTES[lens.palette ?? 'viridis']
   for (let i = 0; i < n; i++) {
     const v = vals[i]
     if (!Number.isFinite(v)) { set(i, shade(terrainRGB(d, idx, i), 0.22)); continue }
-    if (useLog && v <= 0) { dimTerrain(i); continue }
+    if (log && v <= 0) { dimTerrain(i); continue }
     if (d.hexes.ring[i] > 0 && m.weight !== 'coast' && v === 0) { dimTerrain(i); continue }
-    const t = scaleT(v, domain, useLog)
+    const t = scaleT(v, domain, log)
     set(i, ramp(pal, t))
     elevation[i] = Math.max(0, Math.min(1, t)) * 60000
   }
+  const basis = lensBasis(m)
+  const { title, hint } = lensTitle(m, basis)
+  const prov = [provOf(d, [key]), ...domPool.filter((c) => c.id !== d.id && info.pooled.includes(c.id)).map((c) => provOf(c, [key]))]
   return {
     colors, elevation,
-    legend: { kind: 'continuous', title: m.label, palette: pal, domain, log: useLog, unit: m.unit, density: isDensity(d, key) },
+    legend: {
+      kind: 'continuous', title, hint, palette: pal, domain, log, unit: m.unit, basis, density: basis === 'density', country: d.id,
+      scale: { shared, pooled: info.pooled, pending: info.pending, missing: info.missing }, prov,
+    },
   }
 }
