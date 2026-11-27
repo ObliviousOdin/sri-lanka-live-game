@@ -33,7 +33,7 @@
 .advisors-empty { color: var(--muted); font-size: 12.5px; font-style: italic; }
 
 /* figures */
-.advisors-fig { font-weight: 650; font-variant-numeric: tabular-nums; color: var(--text); white-space: nowrap; }
+.advisors-fig { font-weight: 650; font-variant-numeric: tabular-nums; color: var(--text); white-space: normal; overflow-wrap: anywhere; }
 .advisors-fig.lka { color: var(--lka); }
 .advisors-fig.usa { color: #86aaf5; }
 
