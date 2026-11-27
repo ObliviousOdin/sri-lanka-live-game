@@ -3,7 +3,8 @@ import { memo, useMemo, useState } from 'react'
 import { SourceChip, SourceChips } from '../components/SourceChip'
 import { YieldIcon } from '../components/YieldIcon'
 import { useStore } from '../store'
-import type { Metric } from '../types'
+import type { CountryId, Metric } from '../types'
+import { countryVintage } from './explorerData'
 import { CATEGORY_META, categoryRank, prettyUnit } from './tilePanelStats'
 
 export interface RankInfo { pct: number | null; text: string; title: string }
@@ -16,6 +17,8 @@ export interface MetricRowData {
   raw: number
   valueText: string
   densityText?: string
+  /** tooltip for densityText (which area it is divided by) */
+  densityTitle?: string
   /** lazy: percentile / rank is only computed for rows that are actually rendered */
   rank: () => RankInfo | null
 }
@@ -23,7 +26,7 @@ export interface MetricRowData {
 // group open state survives selection changes and tab switches
 const openGroups = new Map<string, boolean>([['population', true], ['economy', true]])
 
-export function MetricGroups({ rows, scopeLabel }: { rows: MetricRowData[]; scopeLabel: string }) {
+export function MetricGroups({ rows, scopeLabel, country }: { rows: MetricRowData[]; scopeLabel: string; country: CountryId }) {
   const [q, setQ] = useState('')
   const [hideMissing, setHideMissing] = useState(true)
   const [, force] = useState(0)
@@ -83,7 +86,7 @@ export function MetricGroups({ rows, scopeLabel }: { rows: MetricRowData[]; scop
             </button>
             {open && (
               <div role="list">
-                {rs.map((r) => <MetricRow key={r.key} r={r} scopeLabel={scopeLabel} />)}
+                {rs.map((r) => <MetricRow key={r.key} r={r} scopeLabel={scopeLabel} country={country} />)}
               </div>
             )}
           </section>
@@ -93,13 +96,15 @@ export function MetricGroups({ rows, scopeLabel }: { rows: MetricRowData[]; scop
   )
 }
 
-const MetricRow = memo(function MetricRow({ r, scopeLabel }: { r: MetricRowData; scopeLabel: string }) {
+const MetricRow = memo(function MetricRow({ r, scopeLabel, country }: { r: MetricRowData; scopeLabel: string; country: CountryId }) {
   const [open, setOpen] = useState(false)
   const rank = useMemo(() => (Number.isFinite(r.raw) ? r.rank() : null), [r])
   const m = r.metric
   const lensActive = useStore((s) => s.lensId === 'custom' && s.lensMetric.custom === r.key)
   const hover = m ? [m.description, m.method && `Method: ${m.method}`].filter(Boolean).join('\n') : r.key
   const missing = !Number.isFinite(r.raw)
+  // a metric's vintage can name both countries ("USA 2024; Sri Lanka 2024"): show this row's country only
+  const vintage = m?.vintage ? countryVintage(m.vintage, country) : ''
   return (
     <div role="listitem" className={`tilepanel-mrow ${missing ? 'is-missing' : ''} ${open ? 'is-open' : ''}`}>
       <div className="tilepanel-mrow-main">
@@ -115,8 +120,8 @@ const MetricRow = memo(function MetricRow({ r, scopeLabel }: { r: MetricRowData;
         </span>
       </div>
       <div className="tilepanel-msub">
-        {r.densityText && <span className="tilepanel-dens">{r.densityText}</span>}
-        {m?.vintage && <span>{m.vintage}</span>}
+        {r.densityText && <span className="tilepanel-dens" title={r.densityTitle}>{r.densityText}</span>}
+        {vintage && <span title="Data vintage">{vintage}</span>}
         {m && m.sources.length > 0 && <RowSources ids={m.sources} />}
         {m && !m.sources.length && m.domain === 'derived' && <span>derived</span>}
       </div>

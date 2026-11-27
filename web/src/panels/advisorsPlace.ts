@@ -291,7 +291,16 @@ function military(ctx: PlaceCtx): Comment[] {
           : [`No mapped military installations here (${nm(home)} has `, fig(nCount(ms.tot), home), ').'],
     })
   }
-  out.push(rankComment(ctx, 'soldiers', '💂', mm(d, 'cit_soldiers_pct', { label: 'Soldiers (share of workers)' }), mm(other, 'cit_soldiers_pct', { label: 'Soldiers (share of workers)' }), { minor: true }))
+  // Not compared across countries: Sri Lanka's LFS covers households only (soldiers in barracks are
+  // missing: 41K vs the World Bank's 317K personnel), while the ACS counts the armed forces incl. group quarters.
+  const solLabel = home === 'lka' ? 'Soldiers living in households (share of workers)' : 'Soldiers (share of workers)'
+  out.push(rankComment(ctx, 'soldiers', '💂', mm(d, 'cit_soldiers_pct', { label: solLabel }), null, {
+    minor: true,
+    vlabel: home === 'lka' ? 'soldiers living in households' : 'soldiers (share of workers)',
+    suffix: () => home === 'lka'
+      ? '; not compared with the US: the Labour Force Survey covers households only, so soldiers in barracks are missing'
+      : '; not compared with Sri Lanka, whose Labour Force Survey misses soldiers living in barracks',
+  }))
   out.push(rankComment(ctx, 'slope', '⛰️', mm(d, 'slope_mean_deg', { label: 'Defensive ground — mean slope', ratio: true }), mm(other, 'slope_mean_deg', { ratio: true }), {
     suffix: (r) => (r.p >= 75 ? ' (rough terrain favours defenders)' : r.p <= 25 ? ' (open ground, hard to hold)' : ''),
     vlabel: 'ruggedness — mean slope',
@@ -308,7 +317,16 @@ function military(ctx: PlaceCtx): Comment[] {
     srcs.push(...(d.metricByKey.get(key)?.sources ?? []))
   }
   add('port_cargo_t', tonnes, 'port cargo ')
-  add('airport_pax', count, 'air passengers ')
+  // FAA counts boardings (enplanements), about half of all passengers
+  add('airport_pax', count, 'airport enplanements (passenger boardings) ')
+  if (!d.metricByKey.has('airport_pax')) {
+    const ap = shareOfNation(place, 'airports')
+    if (ap && ap.v >= 0.5) {
+      if (assets.length) assets.push('; ')
+      assets.push(fig(nCount(ap.v), home), ` major airport${Math.round(ap.v) === 1 ? '' : 's'} (${nm(home, true)} publishes no open airport-level passenger statistics)`)
+      srcs.push(...(d.metricByKey.get('airports')?.sources ?? []))
+    }
+  }
   add('power_capacity_mw', (v) => `${count(v)} MW`, 'power plants ')
   if (assets.length) out.push({ id: 'assets', icon: '⚓', segs: ['Strategic assets: ', ...assets, '.'], sources: srcs })
   return out.filter(Boolean) as Comment[]

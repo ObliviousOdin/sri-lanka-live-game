@@ -161,7 +161,7 @@ export const Explorer = memo(function Explorer({ app }: { app: AppData }) {
           <>
             <span className="explorer-lab" id="ex-norm">Totals</span>
             <Seg labelledBy="ex-norm" value={norm} onChange={(v) => setEx({ norm: v })}
-              items={[{ v: 'total', label: 'Total' }, { v: 'density', label: 'Per km²' }, { v: 'capita', label: 'Per capita' }]} />
+              items={[{ v: 'total', label: 'Total' }, { v: 'density', label: 'Per km² of land', title: 'Divided by each unit’s land area' }, { v: 'capita', label: 'Per capita' }]} />
           </>
         )}
         <span className="explorer-lab" id="ex-colour">Colour</span>
@@ -236,8 +236,8 @@ export const Explorer = memo(function Explorer({ app }: { app: AppData }) {
           </div>
 
           <div className="explorer-defs">
-            <MetricDef axis="X" info={xInfo} ds={ds} onMap={() => useStore.getState().setLens('custom', xInfo.key)} />
-            <MetricDef axis="Y" info={yInfo} ds={ds} onMap={() => useStore.getState().setLens('custom', yInfo.key)} />
+            <MetricDef axis="X" info={xInfo} ds={ds} level={level} onMap={() => useStore.getState().setLens('custom', xInfo.key)} />
+            <MetricDef axis="Y" info={yInfo} ds={ds} level={level} onMap={() => useStore.getState().setLens('custom', yInfo.key)} />
           </div>
 
           <ExplorerTable plot={plot} level={level} xInfo={xInfo} yInfo={yInfo} brush={brush} targets={targets}
@@ -348,7 +348,7 @@ function Tip({ plot, p, level, xInfo, yInfo, idx }: {
 // Definitions & provenance
 // ---------------------------------------------------------------------------------------------
 
-function MetricDef({ axis, info, ds, onMap }: { axis: 'X' | 'Y'; info: AxisInfo; ds: CountryData[]; onMap: () => void }) {
+function MetricDef({ axis, info, ds, level, onMap }: { axis: 'X' | 'Y'; info: AxisInfo; ds: CountryData[]; level: ExLevel; onMap: () => void }) {
   const per = ds.flatMap((d) => {
     const m = d.metricByKey.get(info.key)
     return m ? [{ c: d.id, m, pv: provenance(d, info.key) }] : []
@@ -359,7 +359,10 @@ function MetricDef({ axis, info, ds, onMap }: { axis: 'X' | 'Y'; info: AxisInfo;
   const sameVintage = per.every((x) => x.pv.vintage === per[0].pv.vintage)
   const vintages = sameVintage ? [per[0]?.pv.vintage || 'n/a'] : per.map((x) => `${COUNTRY_META[x.c].short} ${x.pv.vintage || 'n/a'}`)
   const via = [...new Set(per.flatMap((x) => x.pv.via))]
-  const tfNote = info.tf === 'density' ? 'Shown per km² (value ÷ area).' : info.tf === 'capita' ? 'Shown per resident (value ÷ population).' : ''
+  const tfNote = info.tf === 'density'
+    ? (level === 'hex' ? 'Shown per km² of tile (value ÷ H3 tile area, including any water — the basis of yields and map lenses).' : 'Shown per km² of land (value ÷ the unit’s land area).')
+    : info.tf === 'capita' ? 'Shown per resident (value ÷ population).'
+      : m.kind === 'intensive' && m.weight === 'land' && /\/km2$/.test(m.unit) ? 'Measured per km² of land (excluding water), not per km² of tile.' : ''
   return (
     <section className="card explorer-def" aria-label={`${axis} metric definition`}>
       <div className="explorer-def-head">

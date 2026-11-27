@@ -9,7 +9,7 @@ interface FeatureCandidate { keys: string[]; log: boolean; label?: string }
 
 /** Twin features, in display priority. The first key of each group that exists in both countries is used. */
 const CANDIDATES: FeatureCandidate[] = [
-  { keys: ['pop_density'], log: true, label: 'Population density' },
+  { keys: ['pop_density'], log: true, label: 'Population density (people per km² of land)' },
   { keys: ['gdp_per_capita_usd', 'gdp_pc_usd', 'hh_income_usd'], log: true },
   { keys: ['pct_bachelors'], log: false, label: "Bachelor's degree or higher" },
   { keys: ['lc_tree'], log: false, label: 'Tree cover' },
@@ -183,6 +183,7 @@ export function findTwins(model: TwinModel, country: CountryId, index: number, t
       if (a === a && b === b) { const dd = a - b; s += dd * dd; used++ }
     }
     if (used < minUsed) continue
+    // root-mean-square z-score gap over the shared indicators, raised 15% per indicator missing on the rival side
     const dist = Math.sqrt(s / used) * (1 + 0.15 * (kq - used))
     if (bestD.length === top && dist >= bestD[top - 1]) continue
     let p = bestD.length
@@ -206,7 +207,7 @@ export function findTwins(model: TwinModel, country: CountryId, index: number, t
 
 export const fmtFeature = (f: TwinFeature, v: number) => fmtMetric(f.unit, v)
 
-/** Qualitative closeness for a mean |Δz|. */
+/** Qualitative closeness for the (penalised) root-mean-square Δz of findTwins. */
 export function closeness(dist: number) {
   if (dist < 0.25) return 'a very close match'
   if (dist < 0.5) return 'a close match'

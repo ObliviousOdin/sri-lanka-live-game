@@ -136,8 +136,13 @@ DISTRICT_ORDER = ["city_center", "spaceport", "harbor", "aerodrome", "campus", "
 DISTRICT_RULES = {
     "city_center": "Centre tile of a City View metro (largest-population tile near the city's coordinates).",
     "harbor": "Seaport with ≥ 1 million tonnes of annual cargo, or one of the country's 3 busiest ports.",
-    "aerodrome": "Airport with ≥ 1 million annual passengers, or the country's busiest airport.",
-    "spaceport": "Orbital launch site.",
+    "aerodrome": "Airport with ≥ 1 million annual passenger boardings (US: FAA enplanements, about half of all "
+                 "arriving + departing passengers), or the country's busiest airport by boardings. Sri Lanka has no "
+                 "open airport-level passenger statistics, so there every large airport with scheduled service "
+                 "(OurAirports classification) qualifies.",
+    "spaceport": "Launch site that has hosted an orbital or orbital-class launch (Cape Canaveral, Kennedy, Vandenberg, "
+                 "Wallops / Mid-Atlantic Regional Spaceport, Pacific Spaceport Complex – Alaska, Starbase). "
+                 "Other FAA-listed spaceports (runway, suborbital or reentry-only sites) do not qualify.",
     "campus": "≥ 2,000 research works in 5 years from institutions in the tile (OpenAlex), "
               "or STEM workforce location quotient ≥ 1.8 with ≥ 300 people/km².",
     "commercial_hub": "Finance, real-estate & professional-services employment LQ ≥ 1.15 and either Gold ≥ 7 "
@@ -160,6 +165,30 @@ DISTRICT_RULES = {
 }
 
 
+# Sites that have hosted at least one orbital (or orbital-class) launch, by Wikidata item; the FAA
+# 'Spaceports by State' list also carries runway spaceports (Mojave, Houston, Midland ...), suborbital
+# sites (Spaceport America, Launch Site One) and sites that never launched (Spaceport Camden).
+ORBITAL_LAUNCH_SITES = {
+    "Q334465": "Cape Canaveral Space Force Station",
+    "Q48821": "Kennedy Space Center",
+    "Q461492": "Vandenberg Space Force Base",
+    "Q182348": "Wallops Flight Facility",
+    "Q2660820": "Mid-Atlantic Regional Spaceport",
+    "Q283842": "Pacific Spaceport Complex – Alaska",
+    "Q16950811": "Starbase (Boca Chica)",
+}
+# FAA-listed pads inside an orbital range that have no Wikidata item of their own (matched by name)
+ORBITAL_LAUNCH_PADS = {"Space Florida Launch Complex 46"}
+
+
+def orbital_mask(df: pd.DataFrame | None) -> pd.Series:
+    """True for spaceport rows that are orbital launch sites (ORBITAL_LAUNCH_SITES / ORBITAL_LAUNCH_PADS)."""
+    if df is None or not len(df):
+        return pd.Series(dtype=bool)
+    qid = df["wikidata"].astype(str).str.strip() if "wikidata" in df.columns else pd.Series("", index=df.index)
+    return qid.isin(set(ORBITAL_LAUNCH_SITES)) | df["name"].astype(str).isin(ORBITAL_LAUNCH_PADS)
+
+
 def lq(H: pd.DataFrame, num: list[str], den: str = "employed") -> np.ndarray:
     """Location quotient of employment in `num` industries vs the national share."""
     if den not in H.columns or not all(k in H.columns for k in num):
@@ -175,8 +204,10 @@ def load_points(country: str) -> dict[str, pd.DataFrame]:
     out = {}
     for f in sorted((INTERIM / country).glob("*/points_*.csv")):
         name = f.stem[len("points_"):]
-        df = pd.read_csv(f, dtype={"h3": str})
+        df = pd.read_csv(f, dtype={"h3": str, "wikidata": str})
         df["domain"] = f.parent.name
+        if name == "spaceports":
+            df["orbital"] = orbital_mask(df).to_numpy(bool) if len(df) else np.zeros(0, bool)
         out[name] = df
     return out
 
@@ -269,16 +300,26 @@ def build_tiles(country: str) -> tuple[pd.DataFrame, dict]:
         top_ports = set(ports.sort_values(pcol, ascending=False).dropna(subset=["h3"]).h3.head(3))
     airports = pts.get("airports")
     acol = first_col(airports, "airport_pax", "passengers")
-    pax = point_sum(airports, acol, idx) if acol else pd.Series(0.0, index=idx)
+    pax_v = pd.to_numeric(airports[acol], errors="coerce") if acol else None
+    has_pax = pax_v is not None and bool(pax_v.notna().any())
+    pax = point_sum(airports, acol, idx) if has_pax else pd.Series(0.0, index=idx)
     top_air = set()
-    if airports is not None and acol:
-        top_air = set(airports.sort_values(acol, ascending=False).dropna(subset=["h3"]).h3.head(1))
+    if has_pax:
+        top_air = set(airports.assign(_v=pax_v).dropna(subset=["_v", "h3"]).sort_values("_v", ascending=False).h3.head(1))
+    elif airports is not None and len(airports):
+        # no airport-level passenger statistics (Sri Lanka): every large airport with scheduled service
+        big = airports["kind"].astype(str).eq("large_airport")
+        if "scheduled_service" in airports.columns:
+            big &= airports["scheduled_service"].astype(str).str.lower().eq("yes")
+        top_air = set(airports.loc[big, "h3"].dropna())
     fuel_col = first_col(plants, "primary_fuel", "kind")
     hydro = point_sum(plants, "capacity_mw", idx,
                       where=(lambda p: p[fuel_col].astype(str).str.lower().str.contains("hydro")) if fuel_col else None)
     other_cap = cap - hydro
     mil = point_count(pts.get("military"), idx)
-    space = point_count(pts.get("spaceports"), idx)
+    sp = pts.get("spaceports")
+    space = point_count(sp, idx, where=(lambda p: p["orbital"].astype(bool))) if sp is not None and len(sp) \
+        else pd.Series(0.0, index=idx)
     ez = point_count(pts.get("industrial_zones"), idx)
     cultural_whs = point_count(heritage, idx, where=(lambda p: ~p["kind"].astype(str).str.lower().eq("natural"))) \
         if heritage is not None and "kind" in heritage.columns else whs
@@ -340,51 +381,108 @@ def build_tiles(country: str) -> tuple[pd.DataFrame, dict]:
 # Wonders
 # ---------------------------------------------------------------------------------------------
 WONDER_RULES = [
-    # (category, points table, value column(s), N lka, N usa, rule text, unit)
+    # (category, points table, value column(s), N lka, N usa, rule text, default unit, value metric key).
+    # The unit is taken from the value metric when the domain publishes one ({unit} in the rule text).
     ("Great University", "universities", ("research_works_5y", "works_5y"), 5, 10,
-     "Top research universities by research articles & reviews published 2021–2025 (OpenAlex).", "works"),
+     "Top research universities by research articles & reviews published 2021–2025 (OpenAlex).", "works",
+     "research_works_5y"),
     ("Great Port", "ports", ("port_cargo_t", "cargo_tonnes"), 3, 10,
-     "Busiest seaports by annual cargo volume.", "tonnes"),
+     "Busiest seaports by annual cargo volume (IMF PortWatch import + export tonnes).", "tonnes", "port_cargo_t"),
     ("Great Power Station", "power_plants", ("capacity_mw",), 5, 10,
-     "Largest power stations by installed capacity.", "MW"),
+     "Largest power stations by installed capacity.", "MW", "power_capacity_mw"),
     ("Natural Wonder", "parks", ("park_visitors", "visitors"), 5, 10,
-     "Most visited national parks (annual visitors).", "visitors"),
+     "Most visited national parks (annual visits).", "visits/yr", "park_visitors"),
     ("Great Airport", "airports", ("airport_pax", "passengers"), 1, 10,
-     "Busiest airports by annual passengers.", "passengers"),
+     "Busiest airports by annual passenger boardings ({unit}: each boarding passenger is counted once, "
+     "so about half of all arriving + departing passengers).", "enplanements", "airport_pax"),
     ("World Heritage", "heritage", (None,), 99, 99,
-     "All UNESCO World Heritage Sites inscribed in the country.", ""),
+     "All UNESCO World Heritage Sites inscribed in the country.", "", "heritage_sites"),
     ("Holy Wonder", "holy_sites", ("sitelinks",), 3, 5,
-     "Most widely documented religious sites (number of Wikipedia language editions).", "Wikipedia editions"),
+     "Most widely documented religious sites (number of Wikipedia language editions).", "Wikipedia editions", None),
 ]
+# Sources cited by every wonder of a category (the dataset that produced its value first), plus
+# row-level provenance columns.  Only ids present in the country's source registry are kept.
+WONDER_SOURCES = {
+    "Great University": ["openalex"],
+    "Great Port": ["imf_portwatch"],
+    "Great Power Station": [],                     # per row: capacity_source, location_source
+    "Natural Wonder": ["nps_irma_stats", "sltda_year_in_review_2025"],
+    "Great Airport": ["faa_enplanements_cy2025", "ourairports"],
+    "World Heritage": ["unesco_whc_via_wikidata", "wikidata"],
+    "Holy Wonder": ["wikidata"],
+}
+# shown instead of "none qualify" when a country publishes no values for a category's ranking metric
+WONDER_NO_DATA = {
+    "Great Airport": "No open airport-level passenger statistics for {country}: no airport can be ranked.",
+}
 
 
-def build_wonders(country: str, pts: dict, tiles: pd.DataFrame, sources_by_domain: dict) -> list[dict]:
-    out = []
-    for cat, table, cols, n_l, n_u, rule, unit in WONDER_RULES:
+def _row_sources(cat: str, r: pd.Series, known: set[str]) -> list[str]:
+    out = list(WONDER_SOURCES.get(cat, []))
+    if cat == "Great Power Station":
+        for c in ("capacity_source", "location_source"):
+            v = r.get(c)
+            if isinstance(v, str):
+                out += [s.strip() for s in v.split("|")]
+    if cat == "Great University":
+        if str(r.get("coord_source", "")).startswith("wikidata"):
+            out.append("wikidata")
+        if pd.notna(r.get("rd_usd")) and float(r.get("rd_usd") or 0) > 0:
+            out.append("nsf_herd_fy2024")
+    if cat == "Natural Wonder":
+        out.append("wikidata")
+        if str(r.get("area_source", "")).upper() == "WDPA":
+            out.append("unep_wdpca")
+    return [s for s in dict.fromkeys(out) if s in known]
+
+
+def build_wonders(country: str, pts: dict, tiles: pd.DataFrame, metric_by_key: dict,
+                  known_sources: set[str]) -> tuple[list[dict], list[dict]]:
+    """Ranked wonders, plus one status row per category (ranked / no published values / no candidates)."""
+    out, cats = [], []
+    cname = COUNTRIES[country]["name"]
+    for cat, table, cols, n_l, n_u, rule, unit, mkey in WONDER_RULES:
+        m = metric_by_key.get(mkey) or {}
+        if any(cols):                                  # ranked by a value: its unit comes from the metric
+            unit = m.get("unit") or unit
+        rule = rule.format(unit=unit)
+        n = n_l if country == "lka" else n_u
         df = pts.get(table)
-        if df is None or len(df) == 0:
-            continue
-        vc = next((c for c in cols if c and c in df.columns), None)
-        d = df.dropna(subset=["h3"]).copy()
-        if vc:
+        cand = 0 if df is None else int(len(df))
+        vc = next((c for c in cols if c and df is not None and c in df.columns), None)
+        d = pd.DataFrame() if df is None else df.dropna(subset=["h3"]).copy()
+        if vc and len(d):
             d[vc] = pd.to_numeric(d[vc], errors="coerce")
             d = d.dropna(subset=[vc]).sort_values(vc, ascending=False)
-        n = n_l if country == "lka" else n_u
+        with_value = int(len(d))
+        status, note = "ranked", None
+        if cand == 0:
+            status = "no_candidates"
+        elif with_value == 0:
+            status = "no_data"
+            note = WONDER_NO_DATA.get(cat, "No published figures for this ranking in {country}.").format(country=cname)
+        cat_sources = [s for s in dict.fromkeys(WONDER_SOURCES.get(cat, []) + m.get("sources", [])) if s in known_sources]
+        cats.append({"category": cat, "rule": rule, "unit": unit, "metric": mkey, "metric_vintage": m.get("vintage"),
+                     "cap": n if n < 99 else None, "candidates": cand, "with_value": with_value,
+                     "ranked": min(n, with_value), "status": status, "note": note, "sources": cat_sources})
         d = d.head(n)
         for rank, (_, r) in enumerate(d.iterrows(), start=1):
             w = {
                 "category": cat, "rank": rank, "name": str(r["name"]), "lat": float(r["lat"]), "lon": float(r["lon"]),
                 "h3": r["h3"], "kind": str(r.get("kind", "")), "rule": rule,
                 "value": (float(r[vc]) if vc else None), "unit": unit,
-                "domain": r.get("domain"), "sources": sources_by_domain.get(r.get("domain"), []),
-                "cap": n if n < 99 else None, "candidates": int(len(df)),
+                "domain": r.get("domain"), "sources": _row_sources(cat, r, known_sources) or cat_sources,
+                "cap": n if n < 99 else None, "candidates": cand,
             }
-            for extra in ("visitors_year", "year", "rd_usd", "primary_fuel", "wikidata", "iata", "inscribed"):
+            for extra in ("visitors_year", "year", "pax_year", "data_year", "rd_usd", "primary_fuel", "wikidata",
+                          "iata", "inscribed"):
                 if extra in r.index and pd.notna(r[extra]):
                     v = r[extra]
                     w[extra] = v.item() if hasattr(v, "item") else v
+            if "year" not in w and ("pax_year" in w or "data_year" in w):
+                w["year"] = int(w.get("pax_year") or w.get("data_year"))   # vintage of the ranked value
             out.append(w)
-    return out
+    return out, cats
 
 
 # ---------------------------------------------------------------------------------------------
@@ -432,14 +530,41 @@ def build_cities(country: str, tiles: pd.DataFrame, H: pd.DataFrame, wonders: li
     lq_keys = [k for k in H.columns if k.startswith("emp_")]
     nat_emp = H[lq_keys].sum() if lq_keys else None
     nat_tot = H["employed"].sum() if "employed" in H.columns else None
+    tpop = lambda c: float(H.at[c, "pop"]) if c in H.index else 0.0  # noqa: E731
+
+    # pass 1: centre = most populous tile within 1 ring of the city's coordinates (not another city's centre)
+    placed, centres = [], set()
     for m in metros:
         c0 = h3.latlng_to_cell(float(m["lat"]), float(m["lon"]), res)
-        # centre = most populous tile within 1 ring of the city's coordinates
-        near = [c for c in h3.grid_disk(c0, 1) if c in grid]
+        near = [c for c in h3.grid_disk(c0, 1) if c in grid and c not in centres]
         if not near:
             continue
-        centre = max(near, key=lambda c: H.at[c, "pop"] if c in H.index else 0)
-        ring_cells = [c for c in h3.grid_disk(centre, rad) if c in grid]
+        centre = max(near, key=tpop)
+        centres.add(centre)
+        placed.append((m, centre, [c for c in h3.grid_disk(centre, rad) if c in grid]))
+
+    # pass 2: where rings overlap, each tile belongs to the nearest city centre only (grid steps, then
+    # great-circle distance, then the larger official population), so no person, job, yield, district
+    # or wonder is counted in two cities.
+    best: dict[str, tuple] = {}
+    for ci, (m, centre, ring_cells) in enumerate(placed):
+        clat, clon = h3.cell_to_latlng(centre)
+        for c in ring_cells:
+            la, lo = h3.cell_to_latlng(c)
+            key = (h3.grid_distance(centre, c), h3.great_circle_distance((la, lo), (clat, clon), unit="km"),
+                   -float(m.get("population") or 0), ci)
+            if c not in best or key < best[c]:
+                best[c] = key
+    owner = {c: v[-1] for c, v in best.items()}
+
+    for ci, (m, centre, full_ring) in enumerate(placed):
+        ring_cells = [c for c in full_ring if owner.get(c) == ci]
+        ceded: dict[int, list[str]] = {}          # tiles of this ring that belong to a nearer city
+        for c in full_ring:
+            if owner.get(c) != ci:
+                ceded.setdefault(owner[c], []).append(c)
+        overlap = [{"id": str(placed[j][0].get("id")), "name": placed[j][0].get("name"), "tiles": len(cs),
+                    "pop": float(sum(tpop(c) for c in cs))} for j, cs in sorted(ceded.items())]
         sub = H.loc[ring_cells]
         t = tiles.loc[ring_cells]
         pop = float(sub["pop"].sum())
@@ -467,6 +592,7 @@ def build_cities(country: str, tiles: pd.DataFrame, H: pd.DataFrame, wonders: li
         out.append({
             "id": str(m.get("id")), "name": m.get("name"), "lat": float(m["lat"]), "lon": float(m["lon"]),
             "centre": centre, "radius": rad, "tiles": tile_rows,
+            "ring_tiles": len(full_ring), "overlap": overlap,
             "pop": pop, "gdp_usd": gdp, "gdp_per_capita": (gdp / pop if gdp and pop else None),
             "official_pop": m.get("population"), "official_pop_year": m.get("population_year"),
             "official_gdp_usd": m.get("gdp_usd"), "official_gdp_year": m.get("gdp_year"),
@@ -479,6 +605,8 @@ def build_cities(country: str, tiles: pd.DataFrame, H: pd.DataFrame, wonders: li
             "districts": sorted({r["district"] for r in tile_rows if r["district"]}),
         })
         tiles.at[centre, "district"] = "city_center"
+        rest = [x for x in str(tiles.at[centre, "districts_all"] or "").split(",") if x and x != "city_center"]
+        tiles.at[centre, "districts_all"] = ",".join(["city_center"] + rest)
     return out
 
 
@@ -487,16 +615,14 @@ def build(country: str) -> dict:
     out = INTERIM / country / "civ"
     out.mkdir(parents=True, exist_ok=True)
     rmetrics = json.loads((INTERIM / country / "reconciled" / "metrics.json").read_text())
-    by_domain: dict[str, list[str]] = {}
-    for m in rmetrics:
-        by_domain.setdefault(m["domain"], [])
-        for s in m.get("sources", []):
-            if s not in by_domain[m["domain"]]:
-                by_domain[m["domain"]].append(s)
-    wonders = build_wonders(country, ctx["pts"], tiles, by_domain)
+    metric_by_key = {m["key"]: m for m in rmetrics}
+    # the registry the web app's sources.json is built from, so every cited id resolves to a chip
+    known = {s["id"] for s in json.loads((INTERIM / country / "reconciled" / "sources.json").read_text())}
+    wonders, wonder_cats = build_wonders(country, ctx["pts"], tiles, metric_by_key, known)
     cities = build_cities(country, tiles, ctx["H"], wonders)
     tiles.to_parquet(out / "tiles.parquet")
     (out / "wonders.json").write_text(json.dumps(wonders, indent=1, default=str))
+    (out / "wonder_categories.json").write_text(json.dumps(wonder_cats, indent=1, default=str))
     (out / "cities.json").write_text(json.dumps(cities, indent=1, default=str))
     summary = {
         "terrain": tiles.terrain.value_counts().to_dict(),

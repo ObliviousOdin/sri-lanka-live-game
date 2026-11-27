@@ -74,9 +74,9 @@ A tile receives every district whose rule it meets; the first in this priority o
 | District | Rule |
 |---|---|
 | City Center | centre tile of a City View metro (most populous tile at the city's coordinates) |
-| Spaceport | an orbital launch site |
+| Spaceport | a launch site that has hosted an orbital or orbital-class launch: Cape Canaveral (incl. Launch Complex 46), Kennedy, Vandenberg, Wallops / Mid-Atlantic Regional Spaceport, Pacific Spaceport Complex – Alaska, Starbase. Other sites on the FAA spaceport list (runway, suborbital or reentry-only) stay on the map as points but do not qualify |
 | Harbor | a seaport with ≥ 1 million t/yr of cargo, or one of the country's 3 busiest ports |
-| Aerodrome | an airport with ≥ 1 million passengers/yr, or the country's busiest airport |
+| Aerodrome | an airport with ≥ 1 million passenger boardings/yr (US: FAA enplanements, about half of all arriving + departing passengers), or the country's busiest airport by boardings. Sri Lanka has no open airport-level passenger statistics, so there every OurAirports *large airport* with scheduled service qualifies |
 | Campus | ≥ 2,000 research works in 5 years (OpenAlex), or STEM workforce LQ ≥ 1.8 at ≥ 300 people/km² |
 | Commercial Hub | finance + real estate + professional services employment LQ ≥ 1.15, and Gold ≥ 7 or GDP density in the country's top 1% of tiles |
 | Industrial Zone | Production ≥ 5 and manufacturing LQ ≥ 1.5, or an export-processing zone / industrial park |
@@ -96,15 +96,17 @@ LQ = location quotient: the tile's share of employment in an industry divided by
 
 ## 5. Wonders
 
-Ranked from published figures; the rank is recomputed on every build.
+Ranked from published figures; the rank is recomputed on every build. Each wonder cites the
+datasets that produced its value and location (for example IMF PortWatch for a port, EIA-860 or
+CEB / WRI for a power station, Wikidata sitelinks for a holy site), not every source of its domain.
 
 | Wonder | Rule | Sri Lanka | US |
 |---|---|---|---|
 | Great University | most scholarly works in the last five complete years (OpenAlex) | top 5 | top 10 |
 | Great Port | annual cargo volume | top 3 | top 10 |
 | Great Power Station | installed capacity | top 5 | top 10 |
-| Natural Wonder | annual visitors to national parks | top 5 | top 10 |
-| Great Airport | annual passengers | top 1 | top 10 |
+| Natural Wonder | annual visits to national parks (NPS recreation visits; SLTDA / DWC visitor counts) | top 5 | top 10 |
+| Great Airport | annual passenger boardings (FAA enplanements: each boarding passenger counted once, about half of total passengers) | none: no open airport-level passenger statistics | top 10 |
 | World Heritage | every UNESCO World Heritage Site in the country | all | all |
 | Holy Wonder | number of Wikipedia language editions describing the site | top 3 | top 5 |
 
@@ -125,6 +127,12 @@ groups) and B23025 (armed forces). Sri Lanka: Labour Force Survey (ISCO-08 major
 | Administrators | 11, 13 | 1, 24 |
 | Artists | 27 | 26 (creative) |
 | Soldiers | armed forces (B23025) | 0 |
+
+A City View city is the metro's centre tile plus 3 rings of tiles around it. Where two rings
+overlap (Colombo / Negombo, Los Angeles / Riverside) each shared tile belongs only to the nearer
+centre (grid steps, then distance, then the larger official population), so no resident, job,
+yield, district or wonder is counted in two cities; the city records how many of its ring tiles went
+to which neighbour. Ring totals are therefore not official city or metro figures.
 
 A city's **size** is `round(population^0.4 / 20)`; its citizen icons split that size across classes
 by the largest-remainder method. Where Sri Lankan tables are only published by province, the

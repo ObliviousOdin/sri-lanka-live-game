@@ -18,7 +18,7 @@ from .fetch import manifest
 POINT_LAYERS = {
     "power_plants": ("capacity_mw", 1500, ["primary_fuel", "capacity_mw", "generation_gwh", "commissioning_year", "owner"]),
     "ports": ("port_cargo_t", 400, ["port_cargo_t", "cargo_tonnes", "teu", "port_calls", "year"]),
-    "airports": ("airport_pax", 400, ["iata", "airport_pax", "passengers", "year"]),
+    "airports": ("airport_pax", 400, ["iata", "airport_pax", "passengers", "pax_year", "year"]),
     "universities": ("research_works_5y", 400, ["research_works_5y", "works_5y", "cited_by_count", "rank", "rd_usd", "city"]),
     "institutions": ("research_works_5y", 600, ["research_works_5y", "works_5y", "kind"]),
     "heritage": ("sitelinks", 100, ["kind", "inscribed", "year", "sitelinks", "wikidata"]),
@@ -26,7 +26,7 @@ POINT_LAYERS = {
     "museums": ("sitelinks", 600, ["sitelinks", "wikidata"]),
     "holy_sites": ("sitelinks", 150, ["sitelinks", "wikidata"]),
     "military": (None, 1500, ["branch", "operator", "wikidata"]),
-    "spaceports": (None, 50, ["wikidata"]),
+    "spaceports": (None, 50, ["wikidata", "orbital", "launch_type", "faa_license", "state"]),
     "industrial_zones": (None, 100, ["area_ha"]),
 }
 
@@ -87,15 +87,24 @@ def export_country(country: str) -> dict:
     R["land_km2"] = core["land_km2"]
     R["pop_density"] = np.where(core.land_km2 > 0.5, core["pop"] / core.land_km2.clip(lower=1e-9), np.nan)
     if "gdp_usd" in R:
+        # one GDP-per-capita metric only: the economy domain's gdp_pc_usd (unit GDP ÷ unit population,
+        # blended onto tiles) equals tile GDP ÷ tile population because GDP is allocated by population,
+        # so it is exported once, under the key the app uses, with the domain's provenance and caveats.
         R["gdp_per_capita_usd"] = np.where(R["pop"] > 50, R["gdp_usd"] / R["pop"].clip(lower=1), np.nan)
         g = next((m for m in metrics if m["key"] == "gdp_usd"), {})
         pm = next((m for m in metrics if m["key"] == "pop"), {})
-        derived.append({"key": "gdp_per_capita_usd", "label": "GDP per capita", "unit": "USD", "category": "economy",
-                        "kind": "intensive", "weight": "pop", "better": "higher",
-                        "sources": list(dict.fromkeys(g.get("sources", []) + pm.get("sources", []))),
-                        "description": "GDP allocated to the tile divided by its population.",
-                        "method": "gdp_usd / pop (tiles with ≥ 50 residents). GDP: " + g.get("method", ""),
-                        "domain": "derived", "vintage": g.get("vintage", "")})
+        gpc = next((m for m in metrics if m["key"] == "gdp_pc_usd"), None)
+        base = {"label": "GDP per capita", "unit": "USD/person", "category": "economy", "kind": "intensive",
+                "weight": "pop", "better": "higher", "domain": "derived", "vintage": g.get("vintage", ""),
+                "sources": list(dict.fromkeys(g.get("sources", []) + pm.get("sources", []))),
+                "description": "GDP per resident at current prices.", "method": "GDP: " + g.get("method", "")}
+        if gpc:
+            base = {**base, **{k: v for k, v in gpc.items() if k not in ("key", "col", "stats", "table")}}
+        derived.append({**base, "key": "gdp_per_capita_usd",
+                        "method": "Tiles: gdp_usd ÷ residents (tiles with ≥ 50 residents; equal to the "
+                                  "population-weighted value of the units the tile overlaps). Admin units: unit GDP ÷ "
+                                  "unit population. " + base.get("method", "")})
+        metrics = [m for m in metrics if m["key"] != "gdp_pc_usd"]
     if "employed" in R:
         for k in [c for c in R.columns if c.startswith("cit_")]:
             R[k + "_pct"] = np.where(R["employed"] > 0, 100 * R[k] / R["employed"], np.nan)
@@ -196,7 +205,8 @@ def export_country(country: str) -> dict:
             for c in extra:
                 if c in r.index and pd.notna(r[c]):
                     v = r[c]
-                    row[c] = _round(float(v)) if isinstance(v, (int, float, np.number)) else str(v)
+                    row[c] = bool(v) if isinstance(v, (bool, np.bool_)) else \
+                        _round(float(v)) if isinstance(v, (int, float, np.number)) else str(v)
             rows.append(row)
         points_out[name] = {"domain": df["domain"].iloc[0], "rows": rows, "total": int(len(df))}
     dump(out / "points.json", points_out)
@@ -204,6 +214,8 @@ def export_country(country: str) -> dict:
     # wonders & cities
     for f in ("wonders", "cities"):
         dump(out / f"{f}.json", json.loads((INTERIM / country / "civ" / f"{f}.json").read_text()))
+    wc = INTERIM / country / "civ" / "wonder_categories.json"
+    wonder_categories = json.loads(wc.read_text()) if wc.exists() else []
 
     # meta
     lon0, lat0, lon1, lat1 = cfg["bbox"]
@@ -220,6 +232,9 @@ def export_country(country: str) -> dict:
         "yield_totals": {y: int(tiles[f"y_{y}"].sum()) for y in YIELDS},
         "terrain_counts": tiles.terrain.value_counts().to_dict(),
         "district_counts": tiles.district.value_counts().to_dict(),
+        # per wonder category: rule, unit, cap, candidates, status ('ranked' | 'no_data' | 'no_candidates')
+        # and a note to show instead of "none qualify" when the country publishes no ranking values
+        "wonder_categories": wonder_categories,
     }
     dump(out / "meta.json", meta)
     return {"metrics": len(metrics), "hexes": len(core), "points": {k: len(v["rows"]) for k, v in points_out.items()}}

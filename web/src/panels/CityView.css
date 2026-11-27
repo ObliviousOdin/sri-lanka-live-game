@@ -152,3 +152,10 @@ table.data.cityview-sister td.lead { color: var(--brass2); font-weight: 700; }
   .cityview-banner-name h2 { font-size: 19px; }
   .cityview-bar { grid-template-columns: minmax(84px, 33%) minmax(0, 1fr) 66px; }
 }
+
+/* official-figure provenance under the banner */
+.cityview-src { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; }
+.cityview-srclab { font-size: 10px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin-right: 2px; }
+.cityview-official { margin-top: 8px; padding-top: 6px; border-top: 1px dashed var(--line); }
+.cityview-official p { margin: 0 0 4px; font-size: 11.5px; color: var(--muted); }
+.cityview-official p b { color: var(--text); font-weight: 600; }

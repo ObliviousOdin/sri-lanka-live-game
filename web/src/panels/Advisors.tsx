@@ -6,19 +6,20 @@ import { cellToLatLng } from 'h3-js'
 import { COUNTRY_META } from '../civ'
 import { SourceChips } from '../components/SourceChip'
 import { YieldIcon } from '../components/YieldIcon'
-import { adminUnitOfHex } from '../data/load'
+import { loadAdminGeo } from '../data/load'
 import { useNational, useSources, type AppData } from '../data/useData'
 import { useStore } from '../store'
 import type { CountryData, CountryId, NationalIndicator, Selection, YieldKey } from '../types'
 import {
-  ADJ, ADVISORS, type AdvisorId, type Comment, counterpartLevel, fig, levelNoun, nm, ok, otherOf, type Place,
-  resolvePlace, sameSelection, type Seg, SHORT,
+  ADJ, ADVISORS, type AdvisorId, citiesByPop, cityUnit, type Comment, counterpartLevel, fig, levelNoun, nm, ok, otherOf, type Place,
+  resolvePlace, sameSelection, type Seg, SHORT, unitName,
 } from './advisorsCore'
 import {
-  advisorRows, densityVerdict, fmtRow, indexRows, type NatCtx, nationalComments, rowVal, sparkRows, specFor,
+  advisorRows, densityVerdict, fmtRow, indexRows, isTourismRow, type NatCtx, nationalComments, PANDEMIC_YEARS, rowVal, sparkRows, specFor,
 } from './advisorsNational'
 import { placeComments, twinName } from './advisorsPlace'
 import { closeness, findTwins, fmtFeature, twinModel, type TwinResult } from './advisorsTwin'
+import { CITY_ZOOM, flyToCountry } from './cityViewNav'
 import './Advisors.css'
 
 type Countries = AppData['countries']
@@ -51,23 +52,42 @@ function targetLonLat(d: CountryData, t: Target): [number, number] | null {
   return u ? [u.lon, u.lat] : null
 }
 
-/** Switch to split view, select the target and fly its map there. */
+/**
+ * Select the target and fly its map there. flyToCountry reveals that map first: side by side on
+ * desktop, the single-country layout on phones (where the lower map of a split view sits under the
+ * bottom sheet), and offsets the centre for the sheet.
+ */
 function goTo(countries: Countries, t: Target) {
   const d = countries[t.country]
   if (!d) return null
-  const st = useStore.getState()
   const sel = targetSelection(d, t)
-  const mustMount = st.mode !== 'split' && st.mode !== t.country
-  st.set({ mode: 'split' })
-  st.select(sel)
+  useStore.getState().select(sel)
   const ll = targetLonLat(d, t)
-  if (ll) {
-    const fly = () => useStore.getState().fly(t.country, ll[0], ll[1], ZOOM[t.country][t.level])
-    // a map pane that is only now being mounted needs a moment to measure itself before it can fly
-    if (mustMount) window.setTimeout(fly, 450)
-    else fly()
-  }
+  if (ll) flyToCountry(t.country, ll[0], ll[1], ZOOM[t.country][t.level])
   return sel
+}
+
+// ---------------------------------------------------------------------------------------------
+// Admin boundaries (to find the district / county that contains a city's coordinates)
+// ---------------------------------------------------------------------------------------------
+type GeoState = { geo: GeoJSON.FeatureCollection | null; failed: boolean }
+const geoDone = new Map<string, GeoState>()
+const NO_GEO: GeoState = { geo: null, failed: false }
+
+/** admin_<level>.geojson of a country (null country: nothing). `undefined` while loading. */
+function useAdminGeo(country: CountryId | null, level = 'adm2'): GeoState | undefined {
+  const k = country ? `${country}/${level}` : ''
+  const [, bump] = useState(0)
+  useEffect(() => {
+    if (!country || geoDone.has(k)) return
+    let alive = true
+    loadAdminGeo(country, level)
+      .then((geo) => { geoDone.set(k, { geo, failed: false }) })
+      .catch(() => { geoDone.set(k, { geo: null, failed: true }) })
+      .finally(() => { if (alive) bump((n) => n + 1) })
+    return () => { alive = false }
+  }, [country, level, k])
+  return country ? geoDone.get(k) : NO_GEO
 }
 
 function computeTwin(place: Place, countries: Countries): TwinResult & { waiting?: boolean } {
@@ -92,9 +112,15 @@ export function Advisors({ app }: { app: AppData }) {
   const [jump, setJump] = useState<{ from: Selection; to: Selection } | null>(null)
   const idx = app.index
   const d = selection ? app.countries[selection.country] : undefined
-  const place = useMemo(() => (selection && d && idx ? resolvePlace(selection, d, idx) : null), [selection, d, idx])
+  // a city is ranked as the district / county whose boundary contains its coordinates
+  const cityGeo = useAdminGeo(selection?.kind === 'city' && d?.admin.adm2 ? selection.country : null)
+  const place = useMemo(
+    () => (selection && d && idx && cityGeo ? resolvePlace(selection, d, idx, cityGeo.geo) : null),
+    [selection, d, idx, cityGeo],
+  )
 
   if (selection && !d) return <div className="loading">Loading {COUNTRY_META[selection.country].name}…</div>
+  if (selection && !cityGeo) return <div className="loading">Finding the {d?.meta.admin_levels.adm2?.label.toLowerCase() ?? 'district'} that contains the city…</div>
   if (selection && !place) {
     return (
       <div className="advisors">
@@ -117,7 +143,7 @@ export function Advisors({ app }: { app: AppData }) {
           const bd = app.countries[back.country]
           const bp = bd && idx ? resolvePlace(back, bd, idx) : null
           useStore.getState().select(back)
-          if (bp) useStore.getState().fly(bp.country, bp.lon, bp.lat, ZOOM[bp.country][bp.level])
+          if (bp) flyToCountry(bp.country, bp.lon, bp.lat, bp.city ? CITY_ZOOM[bp.country] : ZOOM[bp.country][bp.level])
           setJump(null)
         }}
       />
@@ -180,24 +206,38 @@ function NationalCouncil({ app, rows, home, setHome }: { app: AppData; rows: Nat
 
 function FamousTwins({ app }: { app: AppData }) {
   const { lka, usa } = app.countries
+  const gl = useAdminGeo(lka?.admin.adm2 ? 'lka' : null), gu = useAdminGeo(usa?.admin.adm2 ? 'usa' : null)
   const res = useMemo(() => {
-    if (!lka || !usa || !lka.admin.adm2 || !usa.admin.adm2) return null
+    if (!lka || !usa || !lka.admin.adm2 || !usa.admin.adm2 || !gl || !gu) return null
     const model = twinModel(lka, usa, 'adm2', 'adm2')
-    if (typeof model === 'string') return { reason: model, rows: [] }
+    if (typeof model === 'string') return { reason: model, rows: [], approx: false }
     const rows: { city: string; from: Target; to: Target; dist: number }[] = []
-    const add = (d: CountryData, n: number) => {
-      for (const c of d.cities.slice(0, n)) {
-        const ci = d.hexIndex.get(c.centre)
-        const u = ci != null ? adminUnitOfHex(d, 'adm2', ci) : null
-        if (!u) continue
+    let approx = false
+    const add = (d: CountryData, geo: GeoJSON.FeatureCollection | null, n: number) => {
+      const seen = new Set<number>()
+      // the most populous City View metros (same order as the City View list), one row per unit
+      for (const c of citiesByPop(d)) {
+        if (seen.size >= n) break
+        const u = cityUnit(d, 'adm2', c, geo)
+        if (!u || seen.has(u.index)) continue
+        seen.add(u.index)
+        if (!u.exact) approx = true
         const r = findTwins(model, d.id, u.index, 1)
         if (r.ok) rows.push({ city: c.name, from: { country: d.id, level: 'adm2', index: u.index }, to: { country: r.country, level: 'adm2', index: r.matches[0].index }, dist: r.matches[0].dist })
       }
     }
-    add(lka, 6)
-    add(usa, 4)
-    return { reason: '', rows, feats: model.feats }
-  }, [lka, usa])
+    add(lka, gl.geo, 6)
+    add(usa, gu.geo, 4)
+    return { reason: '', rows, feats: model.feats, approx }
+  }, [lka, usa, gl, gu])
+  if (lka?.admin.adm2 && usa?.admin.adm2 && (!gl || !gu)) {
+    return (
+      <section className="card advisors-twins" aria-labelledby="adv-twins-h">
+        <h3 id="adv-twins-h"><span aria-hidden>🌊</span> Twins across the ocean</h3>
+        <p className="advisors-empty">Finding the district or county that contains each city…</p>
+      </section>
+    )
+  }
   if (!res) return null
   if (!res.rows.length && !res.reason) return null
   return (
@@ -223,7 +263,7 @@ function FamousTwins({ app }: { app: AppData }) {
             })}
           </ul>
           <p className="advisors-small" title={`Indicators: ${res.feats!.map((f) => f.label).join(', ')}`}>
-            The district or county containing each City View centre, matched on {res.feats!.length} shared indicators (z-scores pooled across both countries). Δ = mean difference in standard deviations.
+            The district or county whose boundary contains each of the largest City View metros{res.approx ? ' (boundaries unavailable for some: the unit dominating the centre tile is used)' : ''}, matched on {res.feats!.length} shared indicators (z-scores pooled across both countries). Δ = root-mean-square difference of those z-scores, in standard deviations, raised 15% for each indicator missing on one side.
           </p>
         </>
       )}
@@ -265,7 +305,13 @@ function PlaceCouncil({ app, place, back, onJump, onBack }: { app: AppData; plac
           </div>
           <h2>{place.title}</h2>
           {place.subtitle && <p>{place.subtitle}</p>}
-          {place.city && <p className="advisors-small">Ranked as the {levelNoun(place.d, 'adm2', 1)} containing the city centre.</p>}
+          {place.city && (
+            <p className="advisors-small">
+              {place.cityUnitExact
+                ? <>Figures below are for {unitName(place.d, 'adm2', place.d.admin.adm2.units[place.index])}, the {levelNoun(place.d, 'adm2', 1)} that contains the city centre, not the whole City View metro.</>
+                : <>Figures below are for {unitName(place.d, 'adm2', place.d.admin.adm2.units[place.index])}, the {levelNoun(place.d, 'adm2', 1)} that dominates the city’s centre tile (boundary file unavailable), not the whole City View metro.</>}
+            </p>
+          )}
         </div>
         <button className="advisors-close" onClick={() => useStore.getState().select(null)} aria-label="Clear selection and return to the national view" title="National view (Esc)">✕</button>
       </header>
@@ -317,7 +363,7 @@ function TwinCard({ app, place, twin, onJump }: { app: AppData; place: Place; tw
         <button className="btn primary" onClick={() => onJump(target)}>Show twin</button>
       </div>
       <p className="advisors-twin-score">
-        Closest of {twin.pool.toLocaleString('en-US')} {ADJ[twin.country]} {levelNoun(od, twin.level, twin.pool)} — {closeness(best.dist)}: on average {best.dist.toFixed(2)} SD apart across {best.used} indicators.
+        Closest of {twin.pool.toLocaleString('en-US')} {ADJ[twin.country]} {levelNoun(od, twin.level, twin.pool)} — {closeness(best.dist)}: a root-mean-square gap of {best.dist.toFixed(2)} SD across {best.used} indicators{twin.queryFeatures > best.used ? ` (raised ${15 * (twin.queryFeatures - best.used)}% because ${twin.queryFeatures - best.used} indicator${twin.queryFeatures - best.used === 1 ? ' is' : 's are'} missing there)` : ''}.
       </p>
       <table className="data advisors-twin-table">
         <caption className="advisors-sr">Closest-matching indicators</caption>
@@ -541,13 +587,14 @@ function Sparkline({ row }: { row: NationalIndicator }) {
       const lo = Math.min(la, lb), hi = Math.max(ha, hb)
       pa = path(A, lo, hi); pb = path(B, lo, hi)
     }
-    const caption = mode === 'shared' ? 'same scale' : mode === 'index' ? `indexed, ${base} = 100` : 'each on its own scale'
+    const caption = (mode === 'shared' ? 'same scale' : mode === 'index' ? `indexed, ${base} = 100` : 'each on its own scale')
+      + (isTourismRow(row) && PANDEMIC_YEARS.has(Math.max(L[L.length - 1][0], U[U.length - 1][0])) ? ` · ends in ${Math.max(L[L.length - 1][0], U[U.length - 1][0])}, a pandemic year` : '')
     const growth = mode === 'index' ? { l: A[A.length - 1][1], u: B[B.length - 1][1] } : null
     return { pa, pb, y0, y1, lastL, lastU, yl: L[L.length - 1][0], yu: U[U.length - 1][0], caption, growth }
   }, [row, spec])
   if (!model) return null
   const label = spec?.short ?? row.label
-  const aria = `${label}, ${model.y0}–${model.y1}: Sri Lanka latest ${fmtRow(row, model.lastL)} (${model.yl}), United States latest ${fmtRow(row, model.lastU)} (${model.yu}); ${model.caption}.`
+  const aria = `${label}, ${model.y0}–${model.y1}: Sri Lanka latest ${fmtRow(row, model.lastL, 'lka')} (${model.yl}), United States latest ${fmtRow(row, model.lastU, 'usa')} (${model.yu}); ${model.caption}.`
   return (
     <figure className="advisors-spark">
       <figcaption><span title={row.label}>{label}</span><small>{model.caption}</small></figcaption>
@@ -561,8 +608,8 @@ function Sparkline({ row }: { row: NationalIndicator }) {
         <span>{model.y1}</span>
       </div>
       <div className="advisors-spark-legend">
-        <span className="lka" title={`Sri Lanka, ${model.yl}${model.growth ? ` — index ${Math.round(model.growth.l)}` : ''}`}><i />LK {fmtRow(row, model.lastL)}</span>
-        <span className="usa" title={`United States, ${model.yu}${model.growth ? ` — index ${Math.round(model.growth.u)}` : ''}`}><i />US {fmtRow(row, model.lastU)}</span>
+        <span className="lka" title={`Sri Lanka, ${model.yl}${model.growth ? ` — index ${Math.round(model.growth.l)}` : ''}`}><i />LK {fmtRow(row, model.lastL, 'lka')}</span>
+        <span className="usa" title={`United States, ${model.yu}${model.growth ? ` — index ${Math.round(model.growth.u)}` : ''}`}><i />US {fmtRow(row, model.lastU, 'usa')}</span>
       </div>
     </figure>
   )
@@ -582,16 +629,27 @@ function Ledger({ rows, home }: { rows: NationalIndicator[]; home: CountryId }) 
           <tbody>
             {rows.map((r) => (
               <tr key={r.code}>
-                <td title={`${r.label} · ${r.code}`}>{specFor(r)?.short ?? r.label}</td>
+                <td title={`${r.label} · ${r.code}`}>
+                  {specFor(r)?.short ?? r.label}
+                  {r.unit && <small className="advisors-ledger-unit">{r.unit}</small>}
+                </td>
                 {order.map((c) => {
                   const v = rowVal(r, c)
-                  return <td key={c} className="num">{v ? <>{fmtRow(r, v.v)}<small> {v.y}</small></> : '–'}</td>
+                  const pandemic = isTourismRow(r) && v?.y != null && PANDEMIC_YEARS.has(v.y)
+                  return (
+                    <td key={c} className="num">
+                      {v ? <>{fmtRow(r, v.v, c)}<small title={pandemic ? 'COVID-19 pandemic year: international travel collapsed, not a typical year' : undefined}> {v.y}{pandemic ? '*' : ''}</small></> : '–'}
+                    </td>
+                  )
                 })}
               </tr>
             ))}
           </tbody>
         </table>
       </div>
+      {rows.some((r) => isTourismRow(r) && [rowVal(r, 'lka')?.y, rowVal(r, 'usa')?.y].some((y) => y != null && PANDEMIC_YEARS.has(y))) && (
+        <p className="advisors-small">* COVID-19 pandemic year: international travel collapsed, so the value is not typical.</p>
+      )}
       <Sources ids={rows.map((r) => r.source)} />
     </details>
   )

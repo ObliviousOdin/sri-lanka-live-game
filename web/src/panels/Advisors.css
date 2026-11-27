@@ -140,3 +140,4 @@
   .advisors-cbody > p { font-size: 13px; }
   .advisors-avatar { width: 34px; height: 34px; font-size: 17px; }
 }
+.advisors-ledger-unit { display: block; color: var(--muted); font-size: 9.5px; line-height: 1.2; }

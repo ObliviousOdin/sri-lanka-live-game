@@ -144,3 +144,9 @@
   .tilepanel-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .tilepanel-mrow-main { grid-template-columns: minmax(0, 1fr) auto 54px; gap: 6px; }
 }
+
+/* ---- civilization summary: provenance under each headline number */
+.tilepanel-civstats dd.tilepanel-civnote { display: flex; flex-wrap: wrap; align-items: center; gap: 2px 6px; font-size: 10.5px; color: var(--muted); margin-top: 1px; }
+.tilepanel-civsrc { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 3px; min-width: 0; }
+.tilepanel-civsrc .chip { font-size: 10px; line-height: 15px; padding: 0 5px; max-width: 120px; overflow: hidden; text-overflow: ellipsis; }
+.tilepanel-ytable td b { font-weight: 700; color: var(--text); }

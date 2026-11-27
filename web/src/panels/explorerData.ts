@@ -125,7 +125,10 @@ export interface AxisInfo {
   tf: 'raw' | 'density' | 'capita'
 }
 
-/** Tiles: extensive → per km² of tile. Admin: extensive → total / per km² of land / per resident. */
+/**
+ * Tiles: extensive → per km² of TILE (H3 cell area incl. water, the yield basis). Admin: extensive →
+ * total / per km² of LAND / per resident. pop_density is itself per km² of land and says so.
+ */
 export function axisInfo(m: Metric, level: ExLevel, norm: Norm): AxisInfo {
   let tf: AxisInfo['tf'] = 'raw'
   if (m.kind === 'extensive') {
@@ -135,14 +138,16 @@ export function axisInfo(m: Metric, level: ExLevel, norm: Norm): AxisInfo {
   }
   const base = { key: m.key, metric: m, tf }
   const u = m.unit
+  const area = level === 'hex' ? 'tile' : 'land'
   if (tf === 'density') {
-    if (u === 'km2') return { ...base, label: `${m.label} (share of ${level === 'hex' ? 'tile' : 'land'})`, unit: 'share' }
-    return { ...base, label: `${m.label} per km²`, unit: `${u}/km2` }
+    if (u === 'km2') return { ...base, label: `${m.label} (share of ${area})`, unit: 'share' }
+    return { ...base, label: `${m.label} per km² of ${area}`, unit: `${u}/km2` }
   }
   if (tf === 'capita') {
     if (u === 'persons') return { ...base, label: `${m.label} (share of residents)`, unit: 'share' }
     return { ...base, label: `${m.label} per capita`, unit: `${u}/person` }
   }
+  if (m.kind === 'intensive' && m.weight === 'land' && /\/km2$/.test(u)) return { ...base, label: `${m.label} (per km² of land)`, unit: u }
   return { ...base, label: m.label, unit: u }
 }
 

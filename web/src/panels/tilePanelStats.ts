@@ -1,7 +1,7 @@
 // Pure helpers for the Tile inspector: percentile caches, point lookups and the yield derivation.
 // Everything here is memoised per CountryData / AdminTable object (WeakMap), so a pipeline
 // re-export (new objects) naturally invalidates the caches.
-import type { AdminTable, CountryData, IndexJson, Metric, PointRow, YieldKey } from '../types'
+import { YIELDS, type AdminTable, type CountryData, type IndexJson, type Metric, type PointRow, type Wonder, type YieldKey } from '../types'
 import { fmtNumber, fmtUnit, fmtUsd } from '../format'
 
 // ---------------------------------------------------------------------------------------------
@@ -54,15 +54,31 @@ export function fmtVal(v: number | null | undefined, unit: string) {
   return prettyUnit(fmtUnit(v, unit))
 }
 
-/** Density "x /km²" for an extensive metric value. */
-export function fmtDensity(v: number, unit: string) {
+/**
+ * Density of an extensive metric value. Without `basis`: "x/km²" (compact, used in the yield
+ * breakdown). With a basis: "x per km² of tile" (H3 cell area, incl. water — the yield basis) or
+ * "x per km² of land" (admin units). Never mix the two silently.
+ */
+export function fmtDensity(v: number, unit: string, basis?: 'tile' | 'land') {
   if (!Number.isFinite(v)) return '–'
-  if (isMoneyUnit(unit)) return `${fmtUsd(v)}/km²`
   const u = unit.trim().toLowerCase()
-  return `${fmtNumber(v)}${COUNTISH.has(u) ? '' : ' ' + prettyUnit(unit)}/km²`
+  const core = isMoneyUnit(unit) ? fmtUsd(v) : `${fmtNumber(v)}${COUNTISH.has(u) ? '' : ' ' + prettyUnit(unit)}`
+  return basis ? `${core} per km² of ${basis}` : `${core}/km²`
 }
 
 export const hasDensity = (m: Pick<Metric, 'kind' | 'unit'>) => m.kind === 'extensive' && !isAreaUnit(m.unit)
+
+/** Intensive metrics that are themselves densities per km² of LAND (pop_density = pop ÷ land_km2). */
+export const isLandDensity = (m: Pick<Metric, 'kind' | 'unit' | 'weight'>) =>
+  m.kind === 'intensive' && /\/\s*km(2|²)\s*$/i.test(m.unit) && m.weight === 'land'
+
+/** "10.7K people/km²" for a per-km²-of-land metric (the caller adds the "of land" note). */
+export function fmtLandDensity(v: number, unit: string) {
+  if (!Number.isFinite(v)) return '–'
+  const what = unit.replace(/\/\s*km(2|²)\s*$/i, '').trim().toLowerCase()
+  const noun = what === 'persons' || what === 'people' ? ' people' : what === '' || what === 'count' ? '' : ` ${prettyUnit(what)}`
+  return `${fmtNumber(v)}${noun}/km²`
+}
 
 /** English plural of an admin-level label (County → Counties, DS Division → DS Divisions). */
 export function plural(label: string, n = 2) {
@@ -128,9 +144,31 @@ export function hexSorted(d: CountryData, m: Metric): Float32Array {
   return s
 }
 
-export function hexPercentile(d: CountryData, m: Metric, i: number): { pct: number | null; n: number } {
+export interface HexRank {
+  pct: number | null
+  n: number
+  /** tiles ranked strictly below this value / at or below it (tie block = hi - lo) */
+  lo: number
+  hi: number
+}
+
+export function hexPercentile(d: CountryData, m: Metric, i: number): HexRank {
   const s = hexSorted(d, m)
-  return { pct: percentileOf(s, hexBasis(d, m, i)), n: s.length }
+  const v = hexBasis(d, m, i)
+  if (!Number.isFinite(v) || !s.length) return { pct: null, n: s.length, lo: 0, hi: 0 }
+  return { pct: percentileOf(s, v), n: s.length, lo: lowerBound(s, v), hi: upperBound(s, v) }
+}
+
+/**
+ * A mid-rank percentile is misleading when a large block of tiles shares the value (98% of tiles
+ * have 0 World Heritage Sites → "P49"). Returns how to show such ties instead, or null for a
+ * normal percentile.
+ */
+export function tieInfo(r: HexRank): { atMin: boolean; share: number; loPct: number; hiPct: number } | null {
+  if (r.pct == null || !r.n) return null
+  const share = (r.hi - r.lo) / r.n
+  if (share <= 0.2) return null
+  return { atMin: r.lo === 0, share, loPct: (r.lo / r.n) * 100, hiPct: (r.hi / r.n) * 100 }
 }
 
 const adminSortedCache = new WeakMap<AdminTable, Map<string, Float64Array>>()
@@ -204,7 +242,7 @@ export function pointsInHex(d: CountryData, h3: string): TilePoint[] {
 export const POINT_LAYER_META: Record<string, { label: string; icon: string; value?: string[]; unit?: string }> = {
   power_plants: { label: 'Power station', icon: '⚡', value: ['capacity_mw'], unit: 'MW' },
   ports: { label: 'Port', icon: '⚓', value: ['port_cargo_t', 'cargo_tonnes'], unit: 't cargo' },
-  airports: { label: 'Airport', icon: '✈️', value: ['airport_pax', 'passengers'], unit: 'passengers' },
+  airports: { label: 'Airport', icon: '✈️', value: ['airport_pax', 'passengers'], unit: 'enplanements (boardings)' },
   universities: { label: 'University', icon: '🎓', value: ['works_5y'], unit: 'works (5 y)' },
   institutions: { label: 'Research institution', icon: '🔬', value: ['works_5y'], unit: 'works (5 y)' },
   heritage: { label: 'World Heritage', icon: '🏛️' },
@@ -214,6 +252,58 @@ export const POINT_LAYER_META: Record<string, { label: string; icon: string; val
   military: { label: 'Military site', icon: '🛡️' },
   spaceports: { label: 'Spaceport', icon: '🚀' },
   industrial_zones: { label: 'Industrial zone', icon: '🏭' },
+}
+
+/** Display unit of a wonder value: FAA airport counts are enplanements (boardings), not passengers. */
+export function wonderUnit(w: Pick<Wonder, 'category' | 'unit'>): string {
+  if (w.category === 'Great Airport' && /passeng|enplan/i.test(w.unit ?? '')) return 'enplanements'
+  return w.unit
+}
+
+// ---------------------------------------------------------------------------------------------
+// Civilization summary: mean yield per land tile (comparable across the two grids)
+// ---------------------------------------------------------------------------------------------
+const landMeanCache = new WeakMap<CountryData, { mean: Record<YieldKey, number>; n: number }>()
+
+/**
+ * Mean yield per land tile. Each tile gets a yield from its density whatever its size, so a sum of
+ * yields counts tiles (Sri Lanka 36 km² tiles vs US 253 km²) — only the mean compares countries.
+ */
+export function landYieldMeans(d: CountryData): { mean: Record<YieldKey, number>; n: number } {
+  let r = landMeanCache.get(d)
+  if (!r) {
+    const ring = d.hexes.ring
+    let n = 0
+    for (let i = 0; i < d.n; i++) if (ring[i] === 0) n++
+    const mean = Object.fromEntries(YIELDS.map((y) => {
+      const a = d.hexes.yields?.[y]
+      let s = 0
+      if (a) for (let i = 0; i < d.n; i++) if (ring[i] === 0) s += a[i] ?? 0
+      return [y, n ? s / n : NaN]
+    })) as Record<YieldKey, number>
+    r = { mean, n }
+    landMeanCache.set(d, r)
+  }
+  return r
+}
+
+// ---------------------------------------------------------------------------------------------
+// Holy sites: the Faith bonus counts every listed site, the Holy Site district only the top N
+// ---------------------------------------------------------------------------------------------
+/** civ.py: holy_top = the 10 (LKA) / 25 (US) listed holy sites with the most Wikipedia editions. */
+export const HOLY_DISTRICT_TOP: Record<string, number> = { lka: 10, usa: 25 }
+
+const holyRankCache = new WeakMap<CountryData, Map<string, number>>()
+/** Rank (1 = most Wikipedia editions) of each listed holy site, by point id. */
+export function holySiteRanks(d: CountryData): Map<string, number> {
+  let m = holyRankCache.get(d)
+  if (!m) {
+    const rows = (d.points?.holy_sites?.rows ?? []).filter((r) => r.h3)
+    const sl = (r: PointRow) => { const v = Number(r.sitelinks); return Number.isFinite(v) ? v : -1 }
+    m = new Map([...rows].sort((a, b) => sl(b) - sl(a)).map((r, k) => [r.id, k + 1]))
+    holyRankCache.set(d, m)
+  }
+  return m
 }
 
 export function pointValue(p: TilePoint): number {
@@ -369,11 +459,22 @@ export function explainYields(d: CountryData, idx: IndexJson, i: number): YieldE
       (v) => (v >= PARK_VIS_MIN ? 1 : 0), `≥ ${fmtNumber(PARK_VIS_MIN)} visitors +1`),
   ])
 
-  // Faith (+ notable holy sites)
+  // Faith (+ listed holy sites). The bonus counts every exported site; the Holy Site district
+  // only the country's top N by Wikipedia editions — say both so the two cards agree.
+  const holyLayer = d.points?.holy_sites
+  const holyN = holyLayer?.total ?? holyLayer?.rows.length ?? 0
+  const topN = HOLY_DISTRICT_TOP[d.id] ?? 10
+  const ranks = holySiteRanks(d)
+  const here = pts.filter((p) => p.layer === 'holy_sites').map((p) => ({ name: p.row.name, rank: ranks.get(p.row.id) }))
+  const holyRule = [
+    `+${HOLY_PTS} for any of the ${fmtNumber(holyN)} listed holy sites (Wikidata, ranked by Wikipedia language editions)`,
+    `the Holy Site district needs one of the top ${topN}`,
+    ...here.filter((h) => h.rank != null).map((h) => `${h.name} ranks #${h.rank} of ${fmtNumber(holyN)}${h.rank! <= topN ? ' (qualifies for the district)' : ''}`),
+  ].join(' · ')
   finish('faith', [
     basePart('faith'),
-    bonusPart('Notable holy sites', tileAmount(null, ['holy_sites'], 'count'), 'sites',
-      (v) => (v >= 1 ? HOLY_PTS : 0), `any notable religious site +${HOLY_PTS}`),
+    bonusPart('Listed holy sites', tileAmount(null, ['holy_sites'], 'count'), 'sites',
+      (v) => (v >= 1 ? HOLY_PTS : 0), holyRule),
   ])
   return out
 }

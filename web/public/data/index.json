@@ -1,5 +1,5 @@
 {
- "built_at": "2026-11-26T23:36:08+00:00",
+ "built_at": "2026-11-27T00:17:58+00:00",
  "countries": [
   {
    "id": "lka",
@@ -143,7 +143,7 @@
   {
    "code": "spaceport",
    "label": "Spaceport",
-   "rule": "Orbital launch site."
+   "rule": "Launch site that has hosted an orbital or orbital-class launch (Cape Canaveral, Kennedy, Vandenberg, Wallops / Mid-Atlantic Regional Spaceport, Pacific Spaceport Complex \u2013 Alaska, Starbase). Other FAA-listed spaceports (runway, suborbital or reentry-only sites) do not qualify."
   },
   {
    "code": "harbor",
@@ -153,7 +153,7 @@
   {
    "code": "aerodrome",
    "label": "Aerodrome",
-   "rule": "Airport with \u2265 1 million annual passengers, or the country's busiest airport."
+   "rule": "Airport with \u2265 1 million annual passenger boardings (US: FAA enplanements, about half of all arriving + departing passengers), or the country's busiest airport by boardings. Sri Lanka has no open airport-level passenger statistics, so there every large airport with scheduled service (OurAirports classification) qualifies."
   },
   {
    "code": "campus",

@@ -404,6 +404,8 @@ export interface Place {
   lon: number
   lat: number
   city?: City
+  /** city places: true when the unit is the polygon containing the city point (false: centre-tile fallback) */
+  cityUnitExact?: boolean
   wonder?: string
 }
 
@@ -414,7 +416,91 @@ export function hexTrail(d: CountryData, i: number) {
   return [u2 && unitName(d, 'adm2', u2.unit), u1 && unitName(d, 'adm1', u1.unit)].filter(Boolean).join(' · ')
 }
 
-export function resolvePlace(sel: Selection, d: CountryData, idx: IndexJson): Place | null {
+// ---------------------------------------------------------------------------------------------
+// Point-in-polygon: the admin unit whose boundary actually contains a point
+// ---------------------------------------------------------------------------------------------
+type Ring = number[][]
+interface GeoIdx { unit: Int32Array; box: Float64Array; geoms: (Ring[][] | null)[] }
+const geoIdxCache = new WeakMap<GeoJSON.FeatureCollection, WeakMap<object, GeoIdx>>()
+
+function ringHas(r: Ring, x: number, y: number) {
+  let inside = false
+  for (let i = 0, j = r.length - 1; i < r.length; j = i++) {
+    const xi = r[i][0], yi = r[i][1], xj = r[j][0], yj = r[j][1]
+    if ((yi > y) !== (yj > y) && x < ((xj - xi) * (y - yi)) / (yj - yi) + xi) inside = !inside
+  }
+  return inside
+}
+const polysHave = (polys: Ring[][], x: number, y: number) =>
+  polys.some((p) => p.length > 0 && ringHas(p[0], x, y) && !p.slice(1).some((h) => ringHas(h, x, y)))
+
+function geoIndex(d: CountryData, level: string, geo: GeoJSON.FeatureCollection): GeoIdx {
+  const t = d.admin[level]
+  let inner = geoIdxCache.get(geo)
+  if (!inner) { inner = new WeakMap(); geoIdxCache.set(geo, inner) }
+  const key = (t ?? d) as object
+  let gi = inner.get(key)
+  if (gi) return gi
+  const byId = new Map((t?.units ?? []).map((u, i) => [String(u.id), i]))
+  const n = geo.features.length
+  gi = { unit: new Int32Array(n).fill(-1), box: new Float64Array(n * 4), geoms: [] }
+  geo.features.forEach((f, k) => {
+    const g = f.geometry
+    const polys = g?.type === 'Polygon' ? [g.coordinates as Ring[]] : g?.type === 'MultiPolygon' ? (g.coordinates as Ring[][]) : null
+    gi!.geoms.push(polys)
+    gi!.unit[k] = byId.get(String((f.properties as { id?: unknown } | null)?.id ?? '')) ?? -1
+    let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity
+    for (const p of polys ?? []) for (const [x, y] of p[0] ?? []) { if (x < x0) x0 = x; if (x > x1) x1 = x; if (y < y0) y0 = y; if (y > y1) y1 = y }
+    gi!.box.set([x0, y0, x1, y1], k * 4)
+  })
+  inner.set(key, gi)
+  return gi
+}
+
+/**
+ * Index of the `level` unit whose polygon (admin_<level>.geojson) contains (lon, lat), or null.
+ * Where simplified outlines overlap, a unit listed in `prefer` (e.g. a city's admin_ids) wins.
+ */
+export function unitContaining(d: CountryData, level: string, geo: GeoJSON.FeatureCollection, lon: number, lat: number, prefer?: string[] | null): number | null {
+  if (!ok(lon) || !ok(lat) || !d.admin[level]) return null
+  const gi = geoIndex(d, level, geo)
+  const hits: number[] = []
+  for (let k = 0; k < gi.geoms.length; k++) {
+    const b = k * 4
+    if (gi.unit[k] < 0 || lon < gi.box[b] || lon > gi.box[b + 2] || lat < gi.box[b + 1] || lat > gi.box[b + 3]) continue
+    if (polysHave(gi.geoms[k]!, lon, lat)) hits.push(gi.unit[k])
+  }
+  if (!hits.length) return null
+  if (hits.length > 1 && prefer?.length) {
+    const units = d.admin[level].units
+    const p = hits.find((u) => prefer.includes(String(units[u].id)))
+    if (p != null) return p
+  }
+  return hits[0]
+}
+
+/** The admin unit of a City View metro: the polygon containing the city's coordinates (fallback: the centre tile's dominant unit). */
+export function cityUnit(d: CountryData, level: string, c: City, geo?: GeoJSON.FeatureCollection | null): { index: number; exact: boolean } | null {
+  const ui = geo ? unitContaining(d, level, geo, c.lon, c.lat, c.admin_ids) : null
+  if (ui != null) return { index: ui, exact: true }
+  const ci = d.hexIndex.get(c.centre)
+  const u = ci != null ? adminUnitOfHex(d, level, ci) : null
+  return u ? { index: u.index, exact: false } : null
+}
+
+/** City View metros, most populous first (same order as the City View list). */
+const citySortCache = new WeakMap<CountryData, City[]>()
+export function citiesByPop(d: CountryData): City[] {
+  let s = citySortCache.get(d)
+  if (!s) { s = [...d.cities].sort((a, b) => (b.pop || 0) - (a.pop || 0)); citySortCache.set(d, s) }
+  return s
+}
+
+/**
+ * Resolve a selection to a place. `cityGeo` (admin_adm2.geojson of the selection's country) is used
+ * to rank a city as the district / county that actually contains its coordinates.
+ */
+export function resolvePlace(sel: Selection, d: CountryData, idx: IndexJson, cityGeo?: GeoJSON.FeatureCollection | null): Place | null {
   const hexPlace = (h3: string, wonder?: string): Place | null => {
     const i = d.hexIndex.get(h3)
     if (i == null) return null
@@ -452,12 +538,13 @@ export function resolvePlace(sel: Selection, d: CountryData, idx: IndexJson): Pl
   if (sel.kind === 'city') {
     const c = d.cities.find((x) => x.id === sel.id)
     if (!c) return null
-    const ci = d.hexIndex.get(c.centre)
-    const u = ci != null ? adminUnitOfHex(d, 'adm2', ci) : null
-    if (!u) return null
+    const cu = cityUnit(d, 'adm2', c, cityGeo)
+    const u = cu ? d.admin.adm2?.units[cu.index] : undefined
+    if (!cu || !u) return null
+    const prov = d.id === 'lka' ? unitById(d, 'adm1').get(u.parent) : undefined
     return {
-      d, country: d.id, level: 'adm2', index: u.index, kind: 'City', city: c,
-      title: c.name, subtitle: hexTrail(d, ci!),
+      d, country: d.id, level: 'adm2', index: cu.index, kind: 'City', city: c, cityUnitExact: cu.exact,
+      title: c.name, subtitle: [unitName(d, 'adm2', u), prov && unitName(d, 'adm1', prov)].filter(Boolean).join(' · '),
       lon: c.lon, lat: c.lat,
     }
   }

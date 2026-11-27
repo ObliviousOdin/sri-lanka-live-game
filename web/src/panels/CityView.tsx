@@ -5,11 +5,12 @@ import { mix, rgbCss, shade } from '../color'
 import { SourceChips } from '../components/SourceChip'
 import { YieldIcon, YieldRow } from '../components/YieldIcon'
 import { column } from '../data/load'
-import type { AppData } from '../data/useData'
+import { useNational, type AppData } from '../data/useData'
 import { fmtArea, fmtNumber, fmtPct, fmtUsd } from '../format'
 import { WONDER_ICON } from '../map/MapPane'
 import { useStore } from '../store'
-import { COUNTRIES, YIELDS, type City, type CityTile, type CountryData, type CountryId, type IndexJson, type Selection, type Wonder, type YieldKey } from '../types'
+import { COUNTRIES, YIELDS, type City, type CityTile, type CountryData, type CountryId, type IndexJson, type NationalIndicator, type Selection, type Wonder, type YieldKey } from '../types'
+import { countryVintage } from './explorerData'
 import { HEX_R, hexPoints, layoutRing } from './cityViewLayout'
 import { openCity } from './cityViewNav'
 import './CityView.css'
@@ -140,6 +141,66 @@ function metricSources(d: CountryData, keys: string[]): string[] {
   return out
 }
 
+/** Optional provenance fields a newer cities.json may carry (pipeline: domains/national.py metros_*). */
+interface CityProvenance {
+  population_scope?: string | null
+  population_note?: string | null
+  official_pop_scope?: string | null
+  official_pop_note?: string | null
+  official_pop_sources?: string[] | null
+  official_gdp_sources?: string[] | null
+}
+
+export interface OfficialPop {
+  /** row label, e.g. "Metro area (Census MSA, 2025)" */
+  label: string
+  /** list badge prefix, e.g. "metro" / "city proper" */
+  short: string
+  /** what the number covers (tooltip) */
+  scope: string
+  note: string | null
+  sources: string[]
+}
+
+/**
+ * The "official" population differs in kind between the countries: US cities carry Census MSA
+ * (metro) estimates; Sri Lankan cities only a Wikidata P1082 statement for the city proper
+ * (municipal / urban council area, various years), which for Colombo is the UN WUP projection.
+ */
+function officialPop(d: CountryData, city: City, national: NationalIndicator[]): OfficialPop | null {
+  if (!city.official_pop) return null
+  const x = city as City & CityProvenance
+  const yr = city.official_pop_year
+  const exportedScope = x.official_pop_scope ?? x.population_scope ?? null
+  if (d.id === 'usa') {
+    return {
+      label: `Metro area (Census MSA${yr ? `, ${yr}` : ''})`,
+      short: 'metro',
+      scope: exportedScope ?? 'Metropolitan Statistical Area population, Census Bureau population estimates (OMB 2023 delineation).',
+      note: x.official_pop_note ?? x.population_note ?? null,
+      sources: x.official_pop_sources ?? ['census_pep_cbsa_2025', 'census_delineation_2023'],
+    }
+  }
+  let note = x.official_pop_note ?? x.population_note ?? null
+  const sources = x.official_pop_sources ? [...x.official_pop_sources] : ['wikidata']
+  if (!note && yr != null) {
+    // Wikidata often repeats the UN World Urbanization Prospects projection for the largest city
+    const s = national.find((r) => r.code === 'EN.URB.LCTY')?.LKA?.series
+    const un = s?.find(([y]) => y === yr)?.[1]
+    if (un && Math.abs(city.official_pop - un) <= 0.005 * un) {
+      note = `Equals the UN World Urbanization Prospects 2018 projection for ${yr} (World Bank EN.URB.LCTY), not a census count.`
+      if (!sources.includes('worldbank_wdi')) sources.push('worldbank_wdi')
+    }
+  }
+  return {
+    label: `City proper (Wikidata${yr ? `, ${yr}` : ''})`,
+    short: 'city proper',
+    scope: exportedScope ?? 'Population statement on the city’s Wikidata item (P1082): the municipal / urban council area, not a metro area; years differ by city. Not comparable with US metro figures — compare the tile-ring populations instead.',
+    note,
+    sources,
+  }
+}
+
 interface Resolved { d: CountryData; city: City; hex: string | null }
 
 function resolveCity(app: AppData, sel: Selection | null): Resolved | null {
@@ -205,6 +266,7 @@ export function CityView({ app }: { app: AppData }) {
 
 function CityList({ app }: { app: AppData }) {
   const [filter, setFilter] = useState<'all' | CountryId>('all')
+  const national = useNational()
   const { lka, usa } = app.countries
   const rows = useMemo(() => {
     const out: { d: CountryData; c: City; rank: number; n: number }[] = []
@@ -226,6 +288,8 @@ function CityList({ app }: { app: AppData }) {
       <p className="cityview-lede">
         Each metro is a Civ city: its most populous tile plus a ring of radius {radius} ({nTiles} tiles).
         City size grows with population<sup>0.4</sup> ÷ 20, so a city 10× larger is about 2.5× the size.
+        The big number is the tile-ring population; the small one is the official figure — a US metro area, but only the
+        city proper for Sri Lanka.
       </p>
       <div className="cityview-seg" role="group" aria-label="Filter cities by country">
         {(['all', 'lka', 'usa'] as const).map((f) => (
@@ -239,7 +303,9 @@ function CityList({ app }: { app: AppData }) {
         <p className="muted cityview-note">No cities yet — the City View payload is still being built.</p>
       )}
       <ul className="cityview-list">
-        {shown.map(({ d, c, rank, n }) => (
+        {shown.map(({ d, c, rank, n }) => {
+          const off = officialPop(d, c, national)
+          return (
           <li key={`${d.id}:${c.id}`}>
             <button className="cityview-li" onClick={() => openCity(d.id, c)} aria-label={`${c.name}, ${COUNTRY_META[d.id].name}: size ${c.size}, ${fmtNumber(c.pop)} people`}>
               <SizeBadge size={c.size} country={d.id} />
@@ -252,11 +318,12 @@ function CityList({ app }: { app: AppData }) {
               </span>
               <span className="cityview-li-pop">
                 <b>{fmtNumber(c.pop)}</b>
-                <small>{c.official_pop ? `official ${fmtNumber(c.official_pop)}` : 'tile-ring pop.'}</small>
+                <small title={off ? `${off.label}: ${off.scope}` : undefined}>{off ? `${off.short} ${fmtNumber(c.official_pop)}` : 'tile-ring pop.'}</small>
               </span>
             </button>
           </li>
-        ))}
+          )
+        })}
       </ul>
     </>
   )
@@ -316,9 +383,13 @@ function CityBanner({ d, city }: { d: CountryData; city: City }) {
     if (!Number.isFinite(km2)) { try { km2 = cellArea(t.h3, 'km2') } catch { km2 = 0 } }
     return a + km2
   }, 0), [d, city])
+  const national = useNational()
+  const off = officialPop(d, city, national)
   const srcKeys = ['pop', 'gdp_usd']
   const src = metricSources(d, srcKeys)
-  const vint = (k: string) => d.metricByKey.get(k)?.vintage
+  // metric vintages can name both countries ("USA 2024; Sri Lanka 2024"): show this city's part only
+  const vint = (k: string) => { const v = d.metricByKey.get(k)?.vintage; return v ? countryVintage(v, d.id) : '' }
+  const gdpSrc = (city as City & CityProvenance).official_gdp_sources ?? ['bea_cagdp1']
   return (
     <section className="card cityview-banner" aria-label={`${city.name} overview`}>
       <div className="cityview-banner-head">
@@ -339,10 +410,10 @@ function CityBanner({ d, city }: { d: CountryData; city: City }) {
         <span>{fmtNumber(city.pop)}</span>
         <span className="k">Ring</span>
         <span>{city.tiles.length} tiles · {fmtArea(area)}</span>
-        {city.official_pop ? (
+        {off ? (
           <>
-            <span className="k">Official metro population{city.official_pop_year ? ` (${city.official_pop_year})` : ''}</span>
-            <span>{fmtNumber(city.official_pop)}</span>
+            <span className="k" title={off.scope}>{off.label}</span>
+            <span title={off.scope}>{fmtNumber(city.official_pop)}</span>
           </>
         ) : null}
         <span className="k">GDP · tile ring{vint('gdp_usd') ? ` (${vint('gdp_usd')})` : ''}</span>
@@ -351,12 +422,18 @@ function CityBanner({ d, city }: { d: CountryData; city: City }) {
         <span>{city.gdp_per_capita != null ? fmtUsd(city.gdp_per_capita) : <span className="muted">–</span>}</span>
         {city.official_gdp_usd ? (
           <>
-            <span className="k">Official metro GDP{city.official_gdp_year ? ` (${city.official_gdp_year})` : ''}</span>
+            <span className="k" title="Sum of BEA county GDP over the metro area's member counties">Metro GDP (BEA{city.official_gdp_year ? `, ${city.official_gdp_year}` : ''})</span>
             <span>{fmtUsd(city.official_gdp_usd)}</span>
           </>
         ) : null}
       </div>
-      {src.length > 0 && <div className="cityview-src"><SourceChips ids={src} /></div>}
+      {src.length > 0 && <div className="cityview-src"><span className="cityview-srclab">Tile ring</span><SourceChips ids={src} /></div>}
+      {off && (
+        <div className="cityview-official">
+          <p><b>{off.label}:</b> {off.scope}{off.note ? ` ${off.note}` : ''}</p>
+          <div className="cityview-src"><span className="cityview-srclab">Official</span><SourceChips ids={[...off.sources, ...(city.official_gdp_usd ? gdpSrc : [])]} /></div>
+        </div>
+      )}
     </section>
   )
 }
@@ -640,8 +717,8 @@ function CityDistricts({ d, city, idx }: { d: CountryData; city: City; idx: Inde
 
   return (
     <section className="card" aria-label="Districts and wonders">
-      <h3>Districts</h3>
-      {codes.length === 0 ? <p className="muted cityview-note">No districts in this ring yet.</p> : (
+      <h3 title="Civ specialist districts (Campus, Harbor, Neighborhood…), not administrative districts">Specialist districts</h3>
+      {codes.length === 0 ? <p className="muted cityview-note">No specialist districts in this ring yet.</p> : (
         <ul className="cityview-dists">
           {codes.map((c) => (
             <li key={c}>

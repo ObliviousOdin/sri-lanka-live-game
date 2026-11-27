@@ -5,15 +5,16 @@ import { COUNTRY_META, DISTRICT_META, TERRAIN_META, YIELD_META, terrainLabel } f
 import { rgbCss } from '../color'
 import { SourceChips } from '../components/SourceChip'
 import { YieldIcon, YieldRow } from '../components/YieldIcon'
-import { adminUnitOfHex, hexesOfAdmin } from '../data/load'
-import type { AppData } from '../data/useData'
+import { adminUnitOfHex, hexesOfAdmin, value } from '../data/load'
+import { useNational, type AppData } from '../data/useData'
 import { useStore, type PickLevel } from '../store'
-import { COUNTRIES, YIELDS, type CountryData, type CountryId, type IndexJson, type Selection, type YieldKey } from '../types'
-import { fmtInt, fmtNumber, fmtUsd } from '../format'
+import { COUNTRIES, YIELDS, type CountryData, type CountryId, type IndexJson, type Metric, type NationalIndicator, type Selection, type YieldKey } from '../types'
+import { fmtInt, fmtNumber, fmtPct, fmtUsd } from '../format'
+import { countryVintage } from './explorerData'
 import { MetricGroups, type MetricRowData } from './TilePanelMetrics'
 import {
-  adminParents, adminRank, explainYields, fmtDensity, fmtVal, hasDensity, hexPercentile,
-  plural, POINT_LAYER_META, pointsInHex, pointValue, type YieldExplain,
+  adminParents, adminRank, explainYields, fmtDensity, fmtLandDensity, fmtVal, hasDensity, hexPercentile, isLandDensity,
+  landYieldMeans, plural, POINT_LAYER_META, pointsInHex, pointValue, tieInfo, wonderUnit, type YieldExplain,
 } from './tilePanelStats'
 import './TilePanel.css'
 
@@ -83,22 +84,24 @@ function HexInspector({ d, idx, i }: { d: CountryData; idx: IndexJson; i: number
   const wonders = useMemo(() => d.wonders.filter((w) => w.h3 === h3), [d, h3])
   const crumbs = useMemo(() => Object.keys(d.meta.admin_levels).map((lvl) => ({ lvl, u: adminUnitOfHex(d, lvl, i) })).filter((c) => c.u), [d, i])
   const terrainRgb = TERRAIN_META[t]?.rgb ?? [120, 120, 120]
-  const scope = `Percentiles rank this ${ring > 0 ? 'sea ' : ''}tile against ${d.meta.name}'s ${fmtInt(d.meta.land_hex_count)} land tiles (extensive metrics per km², like the map lens).`
+  const scope = `Percentiles rank this ${ring > 0 ? 'sea ' : ''}tile against ${d.meta.name}'s ${fmtInt(d.meta.land_hex_count)} land tiles (totals such as population or GDP per km² of tile, like the map lens; population density is per km² of land).`
+  const tileKm2 = d.hexArea[i]
+  const landKm2 = value(d, 'land_km2', i)
 
   const rows = useMemo<MetricRowData[]>(() => d.meta.metrics.map((m) => {
     const raw = d.matrix[m.col * d.n + i]
+    const landDens = isLandDensity(m)
+    const landTxt = Number.isFinite(landKm2) ? `${fmtNumber(landKm2)} km² of land in this ${fmtNumber(tileKm2)} km² tile` : 'land area of the tile'
     return {
       key: m.key, metric: m, label: m.label, category: m.category || 'other', raw,
-      valueText: fmtVal(raw, m.unit),
-      densityText: hasDensity(m) && Number.isFinite(raw) ? fmtDensity(raw / d.hexArea[i], m.unit) : undefined,
-      rank: () => {
-        const { pct, n } = hexPercentile(d, m, i)
-        if (pct == null) return null
-        const p = Math.min(99, Math.floor(pct))
-        return { pct, text: `P${p}`, title: `${ordinal(p)} percentile of ${fmtInt(n)} ${d.meta.name} land tiles${hasDensity(m) ? ' (per km²)' : ''}` }
-      },
+      valueText: landDens ? fmtLandDensity(raw, m.unit) : fmtVal(raw, m.unit),
+      densityText: hasDensity(m) && Number.isFinite(raw) ? fmtDensity(raw / tileKm2, m.unit, 'tile')
+        : landDens && Number.isFinite(raw) ? 'per km² of land' : undefined,
+      densityTitle: hasDensity(m) ? `Value ÷ tile area (${fmtNumber(tileKm2)} km², including any water) — the basis of yields and the map lenses`
+        : landDens ? `Divided by land only (${landTxt}), so it differs from population per km² of tile on coasts and lakes` : undefined,
+      rank: () => hexRankInfo(d, m, i),
     }
-  }), [d, i])
+  }), [d, i, tileKm2, landKm2])
 
   return (
     <div className="tilepanel">
@@ -144,7 +147,7 @@ function HexInspector({ d, idx, i }: { d: CountryData; idx: IndexJson; i: number
             <div className="tilepanel-dname">
               <span aria-hidden className="tilepanel-dicon">{DISTRICT_META[dist.code]?.icon}</span>
               <strong>{dist.label || DISTRICT_META[dist.code]?.label}</strong>
-              <span className="muted">district</span>
+              <span className="muted">specialist district</span>
             </div>
             <p className="tilepanel-rule">{dist.rule}</p>
           </>
@@ -173,7 +176,7 @@ function HexInspector({ d, idx, i }: { d: CountryData; idx: IndexJson; i: number
                 <button className="tilepanel-link" onClick={() => useStore.getState().select({ country, kind: 'wonder', id: w.name }, 'wonders')}>
                   🏯 {w.name}
                 </button>
-                <span className="muted"> · {w.category} #{w.rank}{w.value != null ? ` · ${fmtNumber(w.value)} ${w.unit}` : ''}</span>
+                <span className="muted"> · {w.category} #{w.rank}{w.value != null ? ` · ${fmtNumber(w.value)} ${wonderUnit(w)}` : ''}</span>
               </li>
             ))}
             {facilities.slice(0, 12).map((p) => {
@@ -192,9 +195,26 @@ function HexInspector({ d, idx, i }: { d: CountryData; idx: IndexJson; i: number
       )}
 
       <h3 className="section-title">All metrics</h3>
-      <MetricGroups rows={rows} scopeLabel={scope} />
+      <MetricGroups rows={rows} scopeLabel={scope} country={country} />
     </div>
   )
+}
+
+/** Percentile cell of a tile row; big tie blocks (e.g. the ~98% of tiles with 0 airports) are not shown as a mid-rank. */
+function hexRankInfo(d: CountryData, m: Metric, i: number) {
+  const r = hexPercentile(d, m, i)
+  if (r.pct == null) return null
+  const per = hasDensity(m) ? ' (per km² of tile)' : ''
+  const pool = `${fmtInt(r.n)} ${d.meta.name} land tiles`
+  const tie = tieInfo(r)
+  if (tie) {
+    const sh = fmtPct(tie.share * 100, 0)
+    if (tie.atMin) return { pct: null, text: 'lowest', title: `Tied for the lowest value${per} with ${sh} of ${pool}, so no percentile is shown` }
+    const a = Math.floor(tie.loPct), b = Math.min(99, Math.floor(tie.hiPct))
+    return { pct: null, text: `P${a}–${b}`, title: `Same value${per} as ${sh} of ${pool}: between the ${ordinal(a)} and ${ordinal(b)} percentile` }
+  }
+  const p = Math.min(99, Math.floor(r.pct))
+  return { pct: r.pct, text: `P${p}`, title: `${ordinal(p)} percentile of ${pool}${per}` }
 }
 
 // open by default on desktop, collapsed in the phone bottom sheet; remembers the user's last toggle
@@ -206,7 +226,7 @@ function YieldBreakdown({ explain, idx }: { explain: YieldExplain[]; idx: IndexJ
     <details className="card tilepanel-why" open={open} onToggle={(e) => { whyOpen = (e.currentTarget as HTMLDetailsElement).open }}>
       <summary><h3>Why these yields</h3></summary>
       <p className="tilepanel-formula">
-        Yield = ⌊2·log<sub>10</sub>(density ÷ base)⌋ + 1 when density ≥ base — one point per ×3.16 — capped at {idx.yield_scale.cap}, plus facility bonuses. The same scale is used in both countries.
+        Yield = ⌊2·log<sub>10</sub>(density ÷ base)⌋ + 1 when density ≥ base — one point per ×3.16 — capped at {idx.yield_scale.cap}, plus facility bonuses. Density = value ÷ tile area (km², including any water). The same scale is used in both countries.
       </p>
       {explain.map((e) => (
         <div key={e.key} className="tilepanel-ybox">
@@ -283,10 +303,12 @@ function AdminInspector({ d, idx, level, ui }: { d: CountryData; idx: IndexJson;
     const raw = table.metrics[key][ui] ?? NaN
     const unitStr = m?.unit ?? ''
     const dens = m && hasDensity(m) && landKm2 && landKm2 > 0 && Number.isFinite(raw) ? raw / landKm2 : NaN
+    const landDens = !!m && isLandDensity(m)
     return {
       key, metric: m, label: m?.label ?? key, category: m?.category || 'other', raw,
-      valueText: fmtVal(raw, unitStr),
-      densityText: Number.isFinite(dens) ? fmtDensity(dens, unitStr) : undefined,
+      valueText: landDens ? fmtLandDensity(raw, unitStr) : fmtVal(raw, unitStr),
+      densityText: Number.isFinite(dens) ? fmtDensity(dens, unitStr, 'land') : landDens && Number.isFinite(raw) ? 'per km² of land' : undefined,
+      densityTitle: Number.isFinite(dens) || landDens ? `Divided by the ${levelLabel.toLowerCase()}'s land area (${fmtNumber(landKm2)} km²)` : undefined,
       rank: () => {
         const r = adminRank(table, key, ui)
         if (!r) return null
@@ -345,7 +367,7 @@ function AdminInspector({ d, idx, level, ui }: { d: CountryData; idx: IndexJson;
         </div>
         {agg.districts.length > 0 && (
           <div className="tilepanel-dall">
-            <span className="muted">Districts:</span>
+            <span className="muted" title="Civ specialist districts (Neighborhood, Campus, Harbor…) of the tiles counted here — not administrative districts">Specialist districts:</span>
             {agg.districts.map(([c, n]) => (
               <span key={c} className="chip" title={idx.districts.find((x) => x.code === c)?.rule}>{DISTRICT_META[c]?.icon} {DISTRICT_META[c]?.label ?? c} × {n}</span>
             ))}
@@ -370,7 +392,7 @@ function AdminInspector({ d, idx, level, ui }: { d: CountryData; idx: IndexJson;
       )}
 
       <h3 className="section-title">All {levelLabel.toLowerCase()} metrics</h3>
-      <MetricGroups rows={rows} scopeLabel={scope} />
+      <MetricGroups rows={rows} scopeLabel={scope} country={country} />
     </div>
   )
 }
@@ -420,12 +442,14 @@ const PICKS: { v: PickLevel; label: string }[] = [
 
 function Overview({ app, idx }: { app: AppData; idx: IndexJson }) {
   const pickLevel = useStore((s) => s.pickLevel)
+  const national = useNational()
+  const tiles = COUNTRIES.map((c) => app.countries[c]).filter(Boolean) as CountryData[]
   return (
     <div className="tilepanel">
       <div className="card tilepanel-howto">
         <h3>Inspect a tile</h3>
         <ul>
-          <li><b>Click any hex</b> on either map to see its terrain, district, yields — and exactly which statistics produced them — plus every metric with its percentile in the country.</li>
+          <li><b>Click any hex</b> on either map to see its terrain, specialist district, yields — and exactly which statistics produced them — plus every metric with its percentile in the country.</li>
           <li>Change <b>Click:</b> in the top bar (or here) to select whole provinces / states, districts / counties or DS divisions instead.</li>
           <li><b>Lenses</b> above the maps recolour both countries; “Shared scale” puts them on one colour ramp. Esc clears the selection.</li>
         </ul>
@@ -438,19 +462,35 @@ function Overview({ app, idx }: { app: AppData; idx: IndexJson }) {
       </div>
       <h3 className="section-title">Civilization summary</h3>
       <div className="tilepanel-civgrid">
-        {COUNTRIES.map((c) => <CivSummary key={c} id={c} d={app.countries[c]} idx={idx} />)}
+        {COUNTRIES.map((c) => <CivSummary key={c} id={c} d={app.countries[c]} idx={idx} national={national} />)}
       </div>
       <p className="muted tilepanel-small">
-        Yields are computed per tile from per-km² densities on a shared log scale, so totals grow with both land area and intensity.
-        Data built {(idx.built_at ?? '').slice(0, 16).replace('T', ' ')} UTC. <SourceChips ids={['worldpop_2020', 'uber_h3']} />
+        Each tile’s yield comes from its density (per km² of tile) on one shared log scale, whatever the tile’s size, so a yield is an
+        intensity index: compare the two civs with the <b>mean per land tile</b>.
+        {tiles.length > 0 && <> Sums count tiles ({tiles.map((d) => `${COUNTRY_META[d.id].name} ${fmtInt(d.meta.land_hex_count)} land tiles of ~${fmtNumber(d.meta.avg_hex_km2)} km²`).join(', ')}), so they are not comparable per km² or per person — use the real totals (population, GDP) for that.</>}
+        {' '}Population and GDP are the sums of the map’s tiles; the Advisors quote the World Bank’s latest national figures.
+        {' '}Data built {(idx.built_at ?? '').slice(0, 16).replace('T', ' ')} UTC. <SourceChips ids={['worldpop_2020', 'uber_h3']} />
       </p>
     </div>
   )
 }
 
-function CivSummary({ id, d, idx }: { id: CountryId; d?: CountryData; idx: IndexJson }) {
+/** Up to two compact chips, the rest in a "+n" tooltip (keeps half-width cards readable). */
+function FewSources({ ids }: { ids: string[] }) {
+  const u = [...new Set(ids)]
+  if (!u.length) return null
+  return (
+    <span className="tilepanel-civsrc">
+      <SourceChips ids={u.slice(0, 2)} />
+      {u.length > 2 && <span className="muted" title={u.slice(2).join(', ')}>+{u.length - 2}</span>}
+    </span>
+  )
+}
+
+function CivSummary({ id, d, idx, national }: { id: CountryId; d?: CountryData; idx: IndexJson; national: NationalIndicator[] }) {
   const cm = COUNTRY_META[id]
-  if (!d) {
+  const means = useMemo(() => (d ? landYieldMeans(d) : null), [d])
+  if (!d || !means) {
     return (
       <section className={`card tilepanel-civ ${id}`} aria-label={`${cm.name} summary`}>
         <h3><span className="tilepanel-dot" style={{ background: cm.accent }} />{cm.name}</h3>
@@ -467,29 +507,59 @@ function CivSummary({ id, d, idx }: { id: CountryId; d?: CountryData; idx: Index
   const terr = Object.entries(m.terrain_counts ?? {}).sort((a, b) => b[1] - a[1])
   const terrTotal = terr.reduce((s, [, n]) => s + n, 0) || 1
   const dists = Object.entries(m.district_counts ?? {}).filter(([k]) => k).sort((a, b) => b[1] - a[1]).slice(0, 8)
-  const per = (v: number, denom: number) => (denom > 0 ? v / denom : NaN)
+  const mk = (k: string) => d.metricByKey.get(k)
+  const vin = (k: string) => { const v = mk(k)?.vintage; return v ? countryVintage(v, id) : '' }
+  const wb = (code: string) => {
+    const s = national.find((r) => r.code === code)?.[id === 'lka' ? 'LKA' : 'USA']
+    return s && s.value != null && s.year != null ? s : null
+  }
+  const wbPop = wb('SP.POP.TOTL'), wbGdp = wb('NY.GDP.MKTP.CD')
+  const popV = vin('pop'), gdpV = vin('gdp_usd'), landV = vin('land_km2')
   return (
     <section className={`card tilepanel-civ ${id}`} aria-label={`${cm.name} summary`}>
       <h3><span className="tilepanel-dot" style={{ background: cm.accent }} />{cm.name}</h3>
       <dl className="tilepanel-civstats">
-        <div><dt>Population</dt><dd>{fmtNumber(pop)}</dd></div>
-        <div><dt>Land area</dt><dd>{fmtNumber(land)} km²</dd></div>
-        <div><dt>GDP</dt><dd>{gdp != null ? fmtUsd(gdp) : <span className="muted">pending</span>}</dd></div>
+        <div>
+          <dt>Population{popV ? ` (${popV} est.)` : ''}</dt>
+          <dd title="Sum of the map's tiles: WorldPop 2020 rescaled to official 2023 estimates">{fmtNumber(pop)}</dd>
+          <dd className="tilepanel-civnote">
+            <FewSources ids={mk('pop')?.sources ?? []} />
+            {wbPop && <span title="World Bank WDI SP.POP.TOTL, as quoted by the Advisors">WB {wbPop.year}: {fmtNumber(wbPop.value)}</span>}
+          </dd>
+        </div>
+        <div>
+          <dt>Land area{landV ? ` (${landV})` : ''}</dt>
+          <dd>{fmtNumber(land)} km²</dd>
+          <dd className="tilepanel-civnote"><FewSources ids={mk('land_km2')?.sources ?? []} /></dd>
+        </div>
+        <div>
+          <dt>GDP{gdpV ? ` (${gdpV})` : ''}</dt>
+          <dd title="Sum of the map's tiles (current US$)">{gdp != null ? fmtUsd(gdp) : <span className="muted">pending</span>}</dd>
+          <dd className="tilepanel-civnote">
+            <FewSources ids={mk('gdp_usd')?.sources ?? []} />
+            {wbGdp && <span title="World Bank WDI NY.GDP.MKTP.CD (current US$), as quoted by the Advisors">WB {wbGdp.year}: {fmtUsd(wbGdp.value)}</span>}
+          </dd>
+        </div>
         <div><dt>Tiles</dt><dd>{fmtInt(m.land_hex_count)} land · {fmtInt(sea)} sea</dd></div>
         <div><dt>Grid</dt><dd>H3 r{m.h3_res} · {fmtNumber(m.avg_hex_km2)} km² · ~{fmtNumber(edge * 2)} km across</dd></div>
       </dl>
       <table className="tilepanel-ytable">
-        <caption className="tilepanel-sr">Yield totals for {cm.name}</caption>
-        <thead><tr><th scope="col"><span className="tilepanel-sr">Yield</span></th><th scope="col">Total</th><th scope="col" title="per 1,000 km² of land">/1k km²</th><th scope="col" title="per million residents">/1M ppl</th></tr></thead>
+        <caption className="tilepanel-sr">Yields for {cm.name}: mean per land tile and sum over all tiles</caption>
+        <thead>
+          <tr>
+            <th scope="col"><span className="tilepanel-sr">Yield</span></th>
+            <th scope="col" title={`Mean yield of ${cm.name}'s ${fmtInt(means.n)} land tiles — comparable between the two civs`}>Mean / land tile</th>
+            <th scope="col" title="Sum over all tiles (land and sea). Grows with the number of tiles, so it does not compare the two grids">Σ tiles</th>
+          </tr>
+        </thead>
         <tbody>
           {YIELDS.map((y) => {
             const v = m.yield_totals?.[y] ?? 0
             return (
               <tr key={y} className={v ? '' : 'is-zero'}>
                 <th scope="row"><YieldIcon y={y} size={13} /></th>
-                <td>{fmtNumber(v)}</td>
-                <td>{fmtNumber(per(v, land / 1000))}</td>
-                <td>{fmtNumber(per(v, pop / 1e6))}</td>
+                <td><b>{fmtNumber(means.mean[y])}</b></td>
+                <td className="muted">{fmtNumber(v)}</td>
               </tr>
             )
           })}
@@ -508,7 +578,7 @@ function CivSummary({ id, d, idx }: { id: CountryId; d?: CountryData; idx: Index
           </li>
         ))}
       </ul>
-      <div className="tilepanel-minihead">Districts</div>
+      <div className="tilepanel-minihead">Specialist districts</div>
       {dists.length ? (
         <ul className="tilepanel-mini">
           {dists.map(([k, n]) => (
