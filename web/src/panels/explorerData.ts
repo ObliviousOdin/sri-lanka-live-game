@@ -5,9 +5,10 @@ import { cellToLatLng } from 'h3-js'
 import { adminUnitOfHex, column, hexesOfAdmin } from '../data/load'
 import { YIELD_META } from '../civ'
 import { fmtPct } from '../format'
-import type { AdminUnit, CountryData, CountryId, Metric, Selection } from '../types'
+import { YIELDS, type AdminUnit, type CountryData, type CountryId, type IndexJson, type Metric, type Selection, type YieldKey } from '../types'
 
-export type ExLevel = 'hex' | 'adm1' | 'adm2'
+/** Rows of the Explorer: tiles, or an admin level (adm3 = Sri Lankan DS divisions). */
+export type ExLevel = 'hex' | 'adm1' | 'adm2' | 'adm3'
 export type Norm = 'total' | 'density' | 'capita'
 export type ColorBy = 'country' | 'lens'
 
@@ -15,6 +16,7 @@ export type ColorBy = 'country' | 'lens'
 // feed a yield use that yield's text glyph (YIELD_META.glyph, the stand-in for the YieldIcon SVG),
 // since <optgroup> labels are plain text.
 export const CATEGORY_META: Record<string, { label: string; icon: string; civ?: string }> = {
+  yields: { label: 'Game yields', icon: '★', civ: 'per-tile intensity' },
   population: { label: 'Population', icon: '👥', civ: 'Citizens' },
   economy: { label: 'Economy', icon: YIELD_META.gold.glyph, civ: 'Gold' },
   income: { label: 'Income & poverty', icon: '💵', civ: 'Gold' },
@@ -43,6 +45,98 @@ export const Y_PREFS = ['gdp_per_capita_usd', 'hh_income_usd', 'gdp_usd', 'rwi',
 const LEVEL_RANK: Record<string, number> = { hex: 9, adm1: 1, adm2: 2, adm3: 3 }
 
 // ---------------------------------------------------------------------------------------------
+// Game yields as plottable metrics (hexes.json `yields`). A yield is a per-tile intensity index on
+// one log scale, so an admin unit takes the MEAN yield of its land tiles (never the sum: Sri Lankan
+// tiles are 36 km², US tiles 253 km²).
+// ---------------------------------------------------------------------------------------------
+const YIELD_PREFIX = 'yield_'
+export const yieldKey = (y: YieldKey) => `${YIELD_PREFIX}${y}`
+/** The yield a synthetic Explorer key stands for (`yield_gold` → 'gold'), else null. */
+export function yieldOfKey(k: string | null | undefined): YieldKey | null {
+  if (!k || !k.startsWith(YIELD_PREFIX)) return null
+  const y = k.slice(YIELD_PREFIX.length)
+  return (YIELDS as readonly string[]).includes(y) ? (y as YieldKey) : null
+}
+
+/** Metrics a yield is computed from besides its base (civ.py bonuses). */
+const YIELD_BONUS_INPUTS: Record<YieldKey, string[]> = {
+  gold: [], production: ['power_capacity_mw'], food: [], science: ['research_works_5y'],
+  culture: ['heritage_sites', 'museums', 'park_visitors'], faith: [],
+}
+
+/** Yield bases of index.json `yield_scale` (Food: land and sea). */
+function yieldBases(y: YieldKey, idx?: IndexJson | null) {
+  const ys = idx?.yield_scale
+  return [ys?.bases[y], y === 'food' ? ys?.bases.food_sea : undefined].filter(Boolean) as { metric: string; base: number; unit: string }[]
+}
+/** Published metrics a yield is scored from (its base metric(s) in index.json + bonus inputs). */
+function yieldInputs(d: CountryData, y: YieldKey, idx?: IndexJson | null): string[] {
+  return [...new Set([...yieldBases(y, idx).map((b) => b.metric), ...YIELD_BONUS_INPUTS[y]])].filter((k) => d.metricByKey.has(k))
+}
+
+const yieldMetricCache = new WeakMap<CountryData, Map<YieldKey, Metric>>()
+/** Synthetic Metric for a yield, with the provenance of the statistics it is scored from. */
+function yieldMetric(d: CountryData, y: YieldKey, idx?: IndexJson | null): Metric | null {
+  if (!d.hexes.yields?.[y]) return null
+  let byY = yieldMetricCache.get(d)
+  if (!byY) { byY = new Map(); yieldMetricCache.set(d, byY) }
+  const hit = byY.get(y)
+  if (hit) return hit
+  const ys = idx?.yield_scale
+  const bases = yieldBases(y, idx)
+  const inputs = yieldInputs(d, y, idx)
+  const ms = inputs.map((k) => d.metricByKey.get(k)!)
+  const label = YIELD_META[y].label
+  const scale = bases.length
+    ? bases.map((b) => `${b.unit}, 1 point at ${fmtNum(b.base)}`).join('; ')
+    : YIELD_META[y].blurb
+  const m: Metric = {
+    key: yieldKey(y), label: `${label} yield`, unit: 'points', category: 'yields', kind: 'intensive', weight: 'tile',
+    table: 'hexes', sources: [...new Set(ms.flatMap((x) => x.sources))], vintage: ms[0]?.vintage ?? '',
+    description: `${label} yield of each tile on the shared log scale used for both countries (${scale}; one more point per ×3.16${ys ? `, capped at ${ys.cap} before bonuses` : ''}).`,
+    method: `Tiles: the yield computed by the pipeline (civmap/civ.py) from ${inputs.join(', ') || 'its statistics'}. Admin units: mean yield of the land tiles whose dominant unit it is. Yields are per-tile intensity indices, so compare means, never sums.`,
+    better: 'higher', domain: 'yields', countries: [d.id], col: -1, stats: { n: d.meta.land_hex_count },
+  }
+  if (idx) byY.set(y, m) // without index.json the description lacks the scale: rebuild once it is there
+  return m
+}
+
+/** A metric of this country: a published one, or a game yield (`yield_<key>`). */
+export function exMetric(d: CountryData, key: string, idx?: IndexJson | null): Metric | undefined {
+  const y = yieldOfKey(key)
+  return y ? yieldMetric(d, y, idx) ?? undefined : d.metricByKey.get(key)
+}
+
+const yieldValCache = new WeakMap<CountryData, Map<string, Float32Array>>()
+/** Yield per row: the tile's yield, or an admin unit's mean over its land tiles (NaN: no tile). */
+function yieldValues(d: CountryData, level: ExLevel, y: YieldKey): Float32Array | null {
+  const ys = d.hexes.yields?.[y]
+  if (!ys) return null
+  let c = yieldValCache.get(d)
+  if (!c) { c = new Map(); yieldValCache.set(d, c) }
+  const ck = `${level}|${y}`
+  const hit = c.get(ck)
+  if (hit) return hit
+  let out: Float32Array
+  if (level === 'hex') out = Float32Array.from(ys)
+  else {
+    const arr = (d.hexes as unknown as Record<string, number[] | undefined>)[level]
+    const N = d.admin[level]?.units.length ?? 0
+    if (!arr || !N) return null
+    const sum = new Float64Array(N), cnt = new Uint32Array(N)
+    for (let i = 0; i < d.n; i++) {
+      const u = arr[i]
+      if (u < 0 || u >= N || d.hexes.ring[i] !== 0) continue
+      sum[u] += ys[i] ?? 0; cnt[u]++
+    }
+    out = new Float32Array(N)
+    for (let u = 0; u < N; u++) out[u] = cnt[u] ? sum[u] / cnt[u] : NaN
+  }
+  c.set(ck, out)
+  return out
+}
+
+// ---------------------------------------------------------------------------------------------
 // Metric availability & options
 // ---------------------------------------------------------------------------------------------
 
@@ -55,6 +149,8 @@ export function availableKeys(d: CountryData, level: ExLevel): Set<string> {
   let s = byLevel.get(level)
   if (s) return s
   s = new Set()
+  // game yields come with the map (hexes.json), so they can be plotted before metrics.bin arrives
+  for (const y of YIELDS) if (yieldValues(d, level, y)?.some((v) => Number.isFinite(v))) s.add(yieldKey(y))
   if (level === 'hex') {
     for (const m of d.meta.metrics) {
       const col = column(d, m.key)
@@ -78,12 +174,13 @@ export interface MetricOpt { key: string; label: string; category: string; metri
 export interface MetricGroup { category: string; label: string; opts: MetricOpt[] }
 export interface MetricOptions { groups: MetricGroup[]; byKey: Map<string, MetricOpt> }
 
-/** Union of metrics present in the given countries (marking country-only ones), grouped by category. */
-export function metricOptions(ds: CountryData[], level: ExLevel): MetricOptions {
+/** Union of metrics present in the given countries (marking country-only ones), grouped by category; game yields first. */
+export function metricOptions(ds: CountryData[], level: ExLevel, idx?: IndexJson | null): MetricOptions {
   const byKey = new Map<string, MetricOpt>()
   for (const d of ds) {
     const av = availableKeys(d, level)
-    for (const m of d.meta.metrics) {
+    const ym = YIELDS.map((y) => (av.has(yieldKey(y)) ? yieldMetric(d, y, idx) : null)).filter(Boolean) as Metric[]
+    for (const m of [...ym, ...d.meta.metrics]) {
       if (!av.has(m.key)) continue
       const o = byKey.get(m.key)
       if (o) o.countries.push(d.id)
@@ -133,6 +230,9 @@ export interface AxisInfo {
  * total / per km² of LAND / per resident. pop_density is itself per km² of land and says so.
  */
 export function axisInfo(m: Metric, level: ExLevel, norm: Norm): AxisInfo {
+  if (yieldOfKey(m.key)) {
+    return { key: m.key, metric: m, tf: 'raw', unit: m.unit, label: level === 'hex' ? `${m.label} (per tile)` : `${m.label} (mean per land tile)` }
+  }
   let tf: AxisInfo['tf'] = 'raw'
   if (m.kind === 'extensive') {
     if (level === 'hex') tf = 'density'
@@ -156,6 +256,8 @@ export function axisInfo(m: Metric, level: ExLevel, norm: Norm): AxisInfo {
 
 /** Per-row values (row = hex index or admin unit index) for one axis, NaN where missing. */
 export function axisValues(d: CountryData, level: ExLevel, ax: AxisInfo): ArrayLike<number> | null {
+  const y = yieldOfKey(ax.key)
+  if (y) return yieldValues(d, level, y)
   if (level === 'hex') {
     const col = column(d, ax.key)
     if (!col) return null
@@ -410,10 +512,10 @@ export function selectionTargets(p: PlotData, sel: Selection | null, level: ExLe
       const u = hs.length ? adminUnitOfHex(d, level, hs[0]) : null
       return { primary: u ? at(u.index) : -1, secondary: null }
     }
-    // coarser unit (province / state) → all of its districts / counties
+    // coarser unit (province / state, district) → all of its units at this level (children or grandchildren)
     const pid = d.admin[lvl].units[ui].id
     const kids: number[] = []
-    d.admin[level]?.units.forEach((u, j) => { if (u.parent === pid) kids.push(j) })
+    d.admin[level]?.units.forEach((u, j) => { if (ancestorIds(d, level, u).includes(pid)) kids.push(j) })
     return { primary: -1, secondary: many(kids) }
   }
   let hex: number | undefined
@@ -439,21 +541,39 @@ export function selectionTargets(p: PlotData, sel: Selection | null, level: ExLe
 // Names & positions
 // ---------------------------------------------------------------------------------------------
 
-const adm1Cache = new WeakMap<CountryData, Map<string, AdminUnit>>()
-function adm1ById(d: CountryData) {
-  let m = adm1Cache.get(d)
+const unitsCache = new WeakMap<CountryData, Map<string, Map<string, AdminUnit>>>()
+function unitsById(d: CountryData, level: string): Map<string, AdminUnit> {
+  let byLevel = unitsCache.get(d)
+  if (!byLevel) { byLevel = new Map(); unitsCache.set(d, byLevel) }
+  let m = byLevel.get(level)
   if (!m) {
-    m = new Map((d.admin.adm1?.units ?? []).map((u) => [u.id, u]))
-    adm1Cache.set(d, m)
+    m = new Map((d.admin[level]?.units ?? []).map((u) => [u.id, u]))
+    byLevel.set(level, m)
   }
   return m
 }
 
+const PARENT_LEVEL: Record<string, string | undefined> = { adm3: 'adm2', adm2: 'adm1' }
+
+/** Ids of a unit's parent, grandparent… (DS division → district → province). */
+function ancestorIds(d: CountryData, level: string, u: AdminUnit): string[] {
+  const out: string[] = []
+  let lvl = PARENT_LEVEL[level], pid: string | undefined = u.parent
+  while (lvl && pid) {
+    out.push(pid)
+    pid = unitsById(d, lvl).get(pid)?.parent
+    lvl = PARENT_LEVEL[lvl]
+  }
+  return out
+}
+
+/** "Travis, TX", "Colombo, Western" (district, province), "Kolonnawa, Colombo" (DS division, district). */
 export function unitName(d: CountryData, level: string, ui: number): string {
   const u = d.admin[level]?.units[ui]
   if (!u) return `Unit ${ui}`
-  if (level === 'adm1') return u.name
-  const p = adm1ById(d).get(u.parent)
+  const pl = PARENT_LEVEL[level]
+  if (!pl) return u.name
+  const p = unitsById(d, pl).get(u.parent)
   return p ? `${u.name}, ${p.abbr ?? p.name}` : u.name
 }
 
@@ -553,7 +673,16 @@ export function unitCaption(unit: string): string {
 export interface Provenance { sources: string[]; vintage: string; via: string[] }
 
 /** Sources & vintage of a metric; for derived metrics, those of the metric keys named in its method. */
-export function provenance(d: CountryData, key: string): Provenance {
+export function provenance(d: CountryData, key: string, idx?: IndexJson | null): Provenance {
+  const y = yieldOfKey(key)
+  if (y) {
+    const ym = yieldMetric(d, y, idx)
+    if (!ym) return { sources: [], vintage: '', via: [] }
+    // vintage of the base statistic the yield is scored from (the bonus inputs' vintages are on their own metrics)
+    const via = yieldInputs(d, y, idx)
+    const base = via[0] ? d.metricByKey.get(via[0]) : undefined
+    return { sources: ym.sources, vintage: base ? countryVintage(base.vintage, d.id) : '', via }
+  }
   const m = d.metricByKey.get(key)
   if (!m) return { sources: [], vintage: '', via: [] }
   if (m.sources.length && m.vintage) return { sources: m.sources, vintage: countryVintage(m.vintage, d.id), via: [] }

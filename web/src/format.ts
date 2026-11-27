@@ -30,8 +30,9 @@ export function fmtPct(v: number | null | undefined, digits = 1): string {
 }
 
 /**
- * Display form of a unit code: km2 → km², degC → °C, deg → °, persons → people.
- * Count-like and unitless codes ('count', 'index') become empty, so 'count/km2' reads '/km²'.
+ * Display form of a unit code (the one implementation for the map and its legends): km2 → km²,
+ * degC → °C, deg → °, a trailing /year → /yr (as in 'USD/yr'), persons → people. Count-like and
+ * unitless codes ('count', 'index') become empty, so 'count/km2' reads '/km²'.
  */
 export function prettyUnit(unit: string): string {
   return unit
@@ -39,6 +40,7 @@ export function prettyUnit(unit: string): string {
     .replace(/km2\b/g, 'km²')
     .replace(/\bdegC\b/g, '°C')
     .replace(/^deg$/, '°')
+    .replace(/\/year$/i, '/yr')
     .replace(/^persons?\b/, 'people')
     .replace(/^(count|index)\b/, '')
 }
@@ -47,7 +49,7 @@ export function prettyUnit(unit: string): string {
 export function fmtUnit(v: number | null | undefined, unit: string): string {
   if (v == null || !Number.isFinite(v)) return '–'
   const u = unit.trim().toLowerCase()
-  // money: '$2.92k/year', '$1.2M/km²' (no space before the per-unit)
+  // money: '$2.92k/yr', '$1.2M/km²' (no space before the per-unit)
   if (u === 'usd' || u.startsWith('usd') || u.startsWith('us$')) {
     const slash = unit.indexOf('/')
     return fmtUsd(v) + (slash >= 0 ? prettyUnit(unit.slice(slash)) : '')

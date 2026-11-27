@@ -26,7 +26,8 @@ export interface MetricRowData {
 // group open state survives selection changes and tab switches
 const openGroups = new Map<string, boolean>([['population', true], ['economy', true]])
 
-export function MetricGroups({ rows, scopeLabel, country }: { rows: MetricRowData[]; scopeLabel: string; country: CountryId }) {
+/** `loading`: the values come from the tile matrix (metrics.bin), which is still downloading ('loading') or did not load ('failed'). */
+export function MetricGroups({ rows, scopeLabel, country, loading }: { rows: MetricRowData[]; scopeLabel: string; country: CountryId; loading?: 'loading' | 'failed' }) {
   const [q, setQ] = useState('')
   const [hideMissing, setHideMissing] = useState(true)
   const [, force] = useState(0)
@@ -51,6 +52,18 @@ export function MetricGroups({ rows, scopeLabel, country }: { rows: MetricRowDat
   const setAll = (v: boolean) => { groups.forEach(([c]) => openGroups.set(c, v)); force((x) => x + 1) }
   const shown = groups.reduce((s, [, r]) => s + r.length, 0)
 
+  if (loading) {
+    return (
+      <div className="tilepanel-metrics" aria-busy={loading === 'loading'}>
+        <div className="muted tilepanel-empty">
+          {loading === 'failed'
+            ? `The tile statistics did not load, so the ${rows.length} metrics of this tile cannot be shown (terrain, yields and districts above come from the map data).`
+            : `Loading statistics… the ${rows.length} metrics of this tile appear when the tile data has downloaded.`}
+        </div>
+      </div>
+    )
+  }
+
   return (
     <div className="tilepanel-metrics">
       <div className="tilepanel-mtools">
@@ -72,7 +85,11 @@ export function MetricGroups({ rows, scopeLabel, country }: { rows: MetricRowDat
           <button className="tilepanel-link" onClick={() => setAll(false)}>Collapse</button>
         </div>
       </div>
-      {!shown && <div className="muted tilepanel-empty">{rows.length ? 'No metric matches the filter.' : 'No metrics published yet — the data pipeline is still running.'}</div>}
+      {!shown && (
+        <div className="muted tilepanel-empty">
+          {!rows.length ? 'No metrics are published for this place.' : query ? 'No metric matches the filter.' : 'Every metric is missing here; untick “Hide no-data” to list them.'}
+        </div>
+      )}
       {groups.map(([cat, rs]) => {
         const meta = CATEGORY_META[cat] ?? { label: cat, icon: '📊' }
         const open = !!query || !!openGroups.get(cat)

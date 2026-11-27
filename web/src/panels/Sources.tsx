@@ -294,7 +294,7 @@ function PipelineCard({ app, nSources, files, bytes }: { app: AppData; nSources:
         </tbody>
       </table>
       <p className="muted sources-built">
-        {idx ? <>Built {idx.built_at.slice(0, 16).replace('T', ' ')} UTC.</> : null} The pipeline may still be adding data domains; missing metrics appear here as they are published.
+        {idx ? <>Built {idx.built_at.slice(0, 16).replace('T', ' ')} UTC.</> : null} Re-running the pipeline rebuilds every file counted here from the cached downloads.
       </p>
     </details>
   )

@@ -3,9 +3,10 @@
 // loaded values; a comment whose inputs are missing is skipped.
 import type { CountryData, CountryId, IndexJson, NationalIndicator, YieldKey } from '../types'
 import {
-  type AdvisorId, type Comment, count, fig, fmtMetric, ISO, money, natAgg, nm, ok, pct, poss, type Seg,
+  ADJ, type AdvisorId, type Comment, count, fig, fmtMetric, ISO, money, natAgg, nm, ok, pct, poss, type Seg,
   SHORT, times, tonnes,
 } from './advisorsCore'
+import { landYieldMeans } from './tilePanelStats'
 
 /** usd = US$; intl = international $ (PPP); lcu = local currency per US$ / Int$ (exchange rates, PPP factors) */
 type Fmt = 'usd' | 'intl' | 'pct' | 'num' | 'years' | 'lcu'
@@ -362,10 +363,87 @@ function pairComment(ctx: NatCtx, id: string, icon: string, lead: string, va: nu
   return { id, icon, segs, sources, meta, status: statusOf(better, va, vb) }
 }
 
+/** Mean yield per land tile (from hexes.json, land tiles only): the per-tile intensity index. */
 const yieldPerTile = (d: CountryData, y: YieldKey) => {
-  const t = d.meta.yield_totals?.[y]
-  const n = d.meta.land_hex_count
-  return t > 0 && n > 0 ? t / n : NaN
+  const r = landYieldMeans(d)
+  return r.n > 0 ? r.mean[y] : NaN
+}
+
+const landAreaCache = new WeakMap<CountryData, number>()
+/** Total area of the land tiles (H3 cell area incl. water, km²): the basis of the yield densities. */
+function landTileArea(d: CountryData): number {
+  let a = landAreaCache.get(d)
+  if (a === undefined) {
+    a = 0
+    const ring = d.hexes.ring
+    for (let i = 0; i < d.n; i++) if (ring[i] === 0) a += d.hexArea[i]
+    landAreaCache.set(d, a)
+  }
+  return a
+}
+
+const zeroCache = new WeakMap<CountryData, Partial<Record<YieldKey, number>>>()
+/** Share (0-1) of land tiles scoring 0 of a yield. */
+function zeroShare(d: CountryData, y: YieldKey): number {
+  let c = zeroCache.get(d)
+  if (!c) { c = {}; zeroCache.set(d, c) }
+  if (c[y] === undefined) {
+    const a = d.hexes.yields?.[y], ring = d.hexes.ring
+    let n = 0, z = 0
+    if (a) for (let i = 0; i < d.n; i++) if (ring[i] === 0) { n++; if (!(a[i] > 0)) z++ }
+    c[y] = n ? z / n : NaN
+  }
+  return c[y]!
+}
+
+/**
+ * National density of the quantity a yield is scored from: its national total ÷ the land tiles' area
+ * (per km² of tile, the yield basis). GDP uses the unrounded national total from meta.json.
+ */
+function yieldDensity(ctx: NatCtx, d: CountryData, y: YieldKey): { v: number; metric: string; unit: string } | null {
+  const b = ctx.idx?.yield_scale.bases[y]
+  const m = b ? d.metricByKey.get(b.metric) : undefined
+  if (!b || !m || m.kind !== 'extensive') return null
+  const tot = b.metric === 'gdp_usd' && ok(d.meta.totals?.gdp_usd) ? d.meta.totals.gdp_usd! : natAgg(d, b.metric)
+  const area = landTileArea(d)
+  return ok(tot) && area > 0 ? { v: tot / area, metric: b.metric, unit: m.unit } : null
+}
+
+/**
+ * One per-tile yield remark. Yields are per-tile intensity indices on one log scale, so the country
+ * comparison (and the Ahead / Behind badge) follows the national density they are scored from; the
+ * mean yield per land tile is quoted beside it. A mean of a floored log index rewards activity spread
+ * over many tiles (a tile below the base scores 0 however close it is), so when the mean points the
+ * other way the remark says so instead of ranking the countries by it.
+ */
+function yieldTileComment(ctx: NatCtx, y: YieldKey, o: { id: string; icon: string; name: string; what: string; fmt: (v: number) => string; meta: string; bonus?: string }): Comment | null {
+  const d = both(ctx); if (!d) return null
+  const { home, rival } = ctx
+  const ma = yieldPerTile(d[home]!, y), mb = yieldPerTile(d[rival]!, y)
+  const da = yieldDensity(ctx, d[home]!, y), db = yieldDensity(ctx, d[rival]!, y)
+  if (!ok(ma) || !ok(mb)) return null
+  const sources = yieldSources(ctx, y)
+  const meanSegs: Seg[] = [`${SHORT[home]} `, fig(ma.toFixed(2), home), ` vs ${SHORT[rival]} `, fig(mb.toFixed(2), rival)]
+  if (!da || !db || !(da.v > 0 && db.v > 0)) {
+    // no density to compare: quote the means without ranking the countries on them
+    return { id: o.id, icon: o.icon, segs: [`Mean ${o.name} per land tile on the shared scale: `, ...meanSegs, '.'], sources, meta: o.meta }
+  }
+  const k = Math.max(da.v, db.v) / Math.min(da.v, db.v)
+  const segs: Seg[] = [`${o.name} is scored from ${o.what} per km² of tile${o.bonus ? ` (${o.bonus})` : ''}: ${SHORT[home]} `,
+    fig(o.fmt(da.v), home), ` vs ${SHORT[rival]} `, fig(o.fmt(db.v), rival), k >= 1.5 ? ` (${times(k)})` : '', '. ']
+  const densHi = da.v >= db.v ? home : rival
+  const meanHi = ma >= mb ? home : rival
+  const meanGap = Math.abs(ma - mb) / Math.max(ma, mb, 1e-9)
+  if (meanHi !== densHi && meanGap >= 0.03) {
+    // the denser country has the lower mean: many of its tiles fall below the base and score 0
+    const lo = densHi, hi = meanHi
+    const mean = (c: CountryId) => (c === home ? ma : mb)
+    const zLo = zeroShare(d[lo]!, y), zHi = zeroShare(d[hi]!, y)
+    segs.push(`The mean ${o.name} per land tile is still higher in ${nm(hi)} (`, fig(mean(hi).toFixed(2), hi), ' vs ', fig(mean(lo).toFixed(2), lo),
+      `) only because the log scale rewards activity spread over more of the land`)
+    segs.push(ok(zLo) && ok(zHi) ? `: ${pct(zLo * 100)} of ${ADJ[lo]} land tiles score 0 ${o.name}, against ${pct(zHi * 100)} in ${SHORT[hi]}.` : '.')
+  } else segs.push(`Mean ${o.name} per land tile: `, ...meanSegs, '.')
+  return { id: o.id, icon: o.icon, segs, sources, meta: o.meta, status: statusOf('higher', da.v, db.v) }
 }
 
 function yieldSources(ctx: NatCtx, ...ys: string[]) {
@@ -411,12 +489,10 @@ const GENERATORS: Record<string, Gen> = {
       meta: rows.filter(Boolean).map((r) => r!.code).join(', '),
     }
   },
-  gold_tile: (ctx) => {
-    const d = both(ctx); if (!d) return null
-    const c = pairComment(ctx, 'gold_tile', 'y:gold', 'Gold yield per land tile on the shared map scale: ', yieldPerTile(d[ctx.home]!, 'gold'), yieldPerTile(d[ctx.rival]!, 'gold'),
-      (v) => v.toFixed(2), yieldSources(ctx, 'gold'), 'Tile yields from GDP per km² on one log scale for both countries (see Methodology)', 'higher')
-    return c
-  },
+  gold_tile: (ctx) => yieldTileComment(ctx, 'gold', {
+    id: 'gold_tile', icon: 'y:gold', name: 'Gold', what: 'GDP', fmt: (v) => `${money(v)}/km²`,
+    meta: `GDP (current US$, ${mvint(ctx, 'gdp_usd') || 'latest'}) ÷ land-tile area; tile yields on one log scale for both countries (see Methodology)`,
+  }),
   gdp_pipeline: (ctx) => {
     if (ctx.byKey.get('gdp_pc')) return null
     const d = both(ctx); if (!d) return null
@@ -455,20 +531,19 @@ const GENERATORS: Record<string, Gen> = {
     return pairComment(ctx, 'supply', '⚓', 'Supply lines — port cargo handled: ', a, b, tonnes, msrc(ctx, 'port_cargo_t'), mvint(ctx, 'port_cargo_t'), 'higher')
   },
   culture_yield: (ctx) => {
-    const d = both(ctx); if (!d) return null
-    const ca = yieldPerTile(d[ctx.home]!, 'culture'), cb = yieldPerTile(d[ctx.rival]!, 'culture')
-    const fa = yieldPerTile(d[ctx.home]!, 'faith'), fb = yieldPerTile(d[ctx.rival]!, 'faith')
-    if (!ok(ca) && !ok(fa)) return null
+    const c = yieldTileComment(ctx, 'culture', {
+      id: 'culture_yield', icon: 'y:culture', name: 'Culture', what: 'arts, recreation & hospitality workers', bonus: 'plus heritage, museum and park bonuses',
+      fmt: (v) => `${count(v)}/km²`,
+      meta: 'Arts, recreation & hospitality workers ÷ land-tile area; Faith counts places of worship from different sources (OpenStreetMap in Sri Lanka, the U.S. Religion Census in the US), so it is quoted but not ranked (see Methodology)',
+    })
+    const d = both(ctx)
+    if (!c || !d) return c
+    // Faith: quoted, never ranked (the two countries' worship-site counts are not the same kind of count)
     const { home, rival } = ctx
-    const segs: Seg[] = ['Yields per land tile (shared scale): ']
-    if (ok(ca) && ok(cb)) segs.push('Culture ', fig(ca.toFixed(2), home), ' vs ', fig(cb.toFixed(2), rival))
-    if (ok(fa) && ok(fb)) segs.push(ok(ca) && ok(cb) ? '; Faith ' : 'Faith ', fig(fa.toFixed(2), home), ' vs ', fig(fb.toFixed(2), rival))
-    if (segs.length === 1) return null
-    segs.push(` (${SHORT[home]} vs ${SHORT[rival]}).`)
-    return {
-      id: 'culture_yield', icon: 'y:culture', segs, sources: yieldSources(ctx, 'culture', 'faith'), status: statusOf('higher', ca, cb),
-      meta: 'Culture from arts, recreation & hospitality jobs + heritage; Faith from places of worship, counted from different sources (OpenStreetMap in Sri Lanka, the U.S. Religion Census in the US), so compare Faith within a country rather than across (see Methodology)',
-    }
+    const fa = yieldPerTile(d[home]!, 'faith'), fb = yieldPerTile(d[rival]!, 'faith')
+    if (ok(fa) && ok(fb)) c.segs.push(' Mean Faith per land tile: ', `${SHORT[home]} `, fig(fa.toFixed(2), home), ` vs ${SHORT[rival]} `, fig(fb.toFixed(2), rival), ' (not compared: different sources).')
+    c.sources = yieldSources(ctx, 'culture', 'faith')
+    return c
   },
   wonders: (ctx) => {
     const d = both(ctx); if (!d) return null
@@ -518,11 +593,10 @@ const GENERATORS: Record<string, Gen> = {
     }
     return { id: 'heritage', icon: '🏛️', segs, sources: msrc(ctx, ...keys), meta: keys.map((k) => mvint(ctx, k)).filter(Boolean).join(' · ') }
   },
-  science_yield: (ctx) => {
-    const d = both(ctx); if (!d) return null
-    return pairComment(ctx, 'science_yield', 'y:science', 'Science yield per land tile (shared scale): ', yieldPerTile(d[ctx.home]!, 'science'), yieldPerTile(d[ctx.rival]!, 'science'),
-      (v) => v.toFixed(2), yieldSources(ctx, 'science'), 'From STEM workers per km² plus research-output bonuses (see Methodology)', 'higher')
-  },
+  science_yield: (ctx) => yieldTileComment(ctx, 'science', {
+    id: 'science_yield', icon: 'y:science', name: 'Science', what: 'STEM workers', bonus: 'plus research-output bonuses', fmt: (v) => `${count(v)}/km²`,
+    meta: 'STEM workers ÷ land-tile area; tile yields on one log scale plus research-output bonuses (see Methodology)',
+  }),
   research_works: (ctx) => {
     const d = both(ctx); if (!d) return null
     const r = (c: CountryId) => { const w = natAgg(d[c]!, 'research_works_5y'); const p = d[c]!.meta.totals.pop; return w >= 0 && p > 0 ? (w / p) * 1e6 : NaN }

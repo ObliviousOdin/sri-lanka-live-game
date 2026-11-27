@@ -12,9 +12,31 @@ const BASE = `${import.meta.env.BASE_URL}data`
 let dataVersion = ''
 const url = (path: string) => `${BASE}/${path}${dataVersion ? `?v=${encodeURIComponent(dataVersion)}` : ''}`
 
+/**
+ * A data file that could not be used. `missing` = the server does not have it (HTTP 404, or an SPA host
+ * answering with its index.html), i.e. the data has not been built or deployed; anything else
+ * (network error, server error, corrupt or mismatched file) is worth a retry.
+ */
+export class DataError extends Error {
+  readonly missing: boolean
+  constructor(message: string, missing = false) {
+    super(message)
+    this.name = 'DataError'
+    this.missing = missing
+  }
+}
+
+/** Throws a DataError unless `r` is the requested data file. */
+function checkResponse(path: string, r: Response) {
+  if (r.status === 404) throw new DataError(`${path}: HTTP 404`, true)
+  if (!r.ok) throw new DataError(`${path}: HTTP ${r.status}`)
+  // static hosts with an SPA fallback answer a missing file with index.html and HTTP 200
+  if (/text\/html/i.test(r.headers.get('content-type') ?? '')) throw new DataError(`${path}: the server answered with a web page instead of the file`, true)
+}
+
 async function json<T>(path: string, init?: RequestInit): Promise<T> {
   const r = await fetch(url(path), init)
-  if (!r.ok) throw new Error(`${path}: HTTP ${r.status}`)
+  checkResponse(path, r)
   return r.json() as Promise<T>
 }
 
@@ -41,7 +63,7 @@ function setProgress(id: CountryId, p: Partial<MatrixProgress>) {
 async function binary(path: string, onProgress?: (loaded: number, total: number) => void): Promise<ArrayBuffer> {
   // low priority: on HTTP/2 the admin outlines and other small JSON requested meanwhile go first
   const r = await fetch(url(path), { priority: 'low' } as RequestInit)
-  if (!r.ok) throw new Error(`${path}: HTTP ${r.status}`)
+  checkResponse(path, r)
   if (!r.body || !onProgress) return r.arrayBuffer()
   // Content-Length is the encoded size when the server compresses; then the total stays unknown here
   const encoded = !!r.headers.get('content-encoding')
@@ -77,33 +99,47 @@ const countryCache = new Map<CountryId, Promise<CountryData>>()
 const bases = new Map<CountryId, CountryBase>()
 const matrixBuf = new Map<CountryId, Promise<ArrayBuffer>>()
 
-const hasGunzip = typeof DecompressionStream === 'function'
 const isGzip = (b: ArrayBuffer) => {
   const u = new Uint8Array(b, 0, Math.min(2, b.byteLength))
   return u.length === 2 && u[0] === 0x1f && u[1] === 0x8b
 }
-const gunzip = (b: ArrayBuffer) =>
-  new Response(new Blob([b]).stream().pipeThrough(new DecompressionStream('gzip'))).arrayBuffer()
 
 /**
- * metrics.bin.gz (~8.7 MB instead of 23 MB for the US) inflated with DecompressionStream; falls back to
- * the raw metrics.bin when the browser has no DecompressionStream or the .gz is missing / unreadable.
- * Progress counts the bytes on the wire (compressed). `expected` = decompressed byte length from
- * meta.json: a server that already decoded the .gz (Content-Encoding: gzip) hands back raw bytes of
- * exactly that length, which are used as they are; anything else (e.g. an HTML fallback page) is not.
+ * Inflates a gzip file: DecompressionStream where the browser has it (off the main thread), else
+ * fflate (Safari < 16.4, Firefox < 113; a ~4 KB chunk loaded only then, ~0.2 s for the US matrix).
+ */
+async function gunzip(b: ArrayBuffer): Promise<ArrayBuffer> {
+  if (typeof DecompressionStream === 'function') {
+    try {
+      return await new Response(new Blob([b]).stream().pipeThrough(new DecompressionStream('gzip'))).arrayBuffer()
+    } catch { /* retry with fflate below, which also reports what is wrong with the file */ }
+  }
+  const { gunzipSync } = await import('fflate')
+  const out = gunzipSync(new Uint8Array(b))
+  return out.byteOffset === 0 && out.byteLength === out.buffer.byteLength ? (out.buffer as ArrayBuffer) : out.slice().buffer
+}
+
+/**
+ * metrics.bin.gz (~8.7 MB instead of 23 MB for the US), inflated in the browser. The raw metrics.bin
+ * is not deployed (gitignored), so there is no uncompressed fallback: a missing or unreadable .gz is
+ * reported as an error for this country. Progress counts the bytes on the wire (compressed).
+ * `expected` = decompressed byte length from meta.json: a server that already decoded the .gz
+ * (Content-Encoding: gzip) hands back raw bytes of exactly that length, which are used as they are.
  */
 async function matrixBytes(id: CountryId, expected: number): Promise<ArrayBuffer> {
   // total 0 = the server applied its own Content-Encoding, so the stream counts decoded bytes
   const onProgress = (loaded: number, total: number) => setProgress(id, { loaded, total: total || expected })
-  if (hasGunzip) {
-    try {
-      const b = await binary(`${id}/metrics.bin.gz`, onProgress)
-      if (isGzip(b)) return await gunzip(b)
-      if (b.byteLength === expected) return b
-    } catch { /* fall back to the uncompressed file */ }
-    setProgress(id, { loaded: 0, total: expected })
+  const path = `${id}/metrics.bin.gz`
+  const b = await binary(path, onProgress)
+  if (!isGzip(b)) {
+    if (b.byteLength === expected) return b
+    throw new DataError(`${path} is not a gzip file (${b.byteLength} bytes)`)
   }
-  return binary(`${id}/metrics.bin`, onProgress)
+  try {
+    return await gunzip(b)
+  } catch (e) {
+    throw new DataError(`${path} could not be decompressed (${e instanceof Error ? e.message : e}); the download may be incomplete`)
+  }
 }
 
 /** Starts (once) the download of a country's metric matrix (~23 MB for the US, ~8.7 MB gzipped). */
@@ -123,7 +159,7 @@ const matrixLength = (b: Pick<CountryBase, 'n' | 'meta'>) => b.n * b.meta.metric
 function withMatrix(base: CountryBase, buf: ArrayBuffer): CountryData {
   const want = matrixLength(base)
   if (buf.byteLength !== want) {
-    throw new Error(`${base.id}/metrics.bin has ${buf.byteLength} bytes but meta.json describes ${base.n} tiles × ${base.meta.metrics.length} metrics (${want} bytes). The data files come from different exports; reload the page`)
+    throw new DataError(`${base.id}/metrics.bin.gz holds ${buf.byteLength} bytes but meta.json describes ${base.n} tiles × ${base.meta.metrics.length} metrics (${want} bytes): the files come from different exports`)
   }
   const cur = progress.get(base.id)
   // keep the byte counts of the download (compressed), just mark it complete
@@ -149,15 +185,12 @@ const yieldToMain = () => new Promise<void>((r) => {
 })
 
 /**
- * Tile areas in km² (the density basis). Uses hexes.json `area_km2` when the exporter provides it;
- * otherwise h3 cellArea in slices (~41k cells for the US), yielding between slices so the page stays
- * responsive while the US loads.
+ * Tile areas in km² (the density basis; the pipeline's hex_km2 is the same h3 cell area): h3 cellArea
+ * in slices (~41k cells for the US), yielding between slices so the page stays responsive meanwhile.
  */
 async function tileAreas(hexes: HexesJson): Promise<Float32Array> {
   const n = hexes.h3.length
   const out = new Float32Array(n)
-  const given = (hexes as HexesJson & { area_km2?: number[] }).area_km2
-  if (given && given.length === n) { out.set(given); return out }
   const SLICE = 2048
   for (let s = 0; s < n; s += SLICE) {
     const e = Math.min(n, s + SLICE)
@@ -238,13 +271,28 @@ export function loadMatrix(d: CountryData): Promise<CountryData> {
   return p
 }
 
+/**
+ * Forgets a country's failed downloads so that loadCountry / loadMatrix start them again (Retry).
+ * stage 'map': the map data (meta, hexes, admin tables) failed; 'statistics': only metrics.bin.gz.
+ */
+export function resetCountry(id: CountryId, stage: 'map' | 'statistics') {
+  matrixBuf.delete(id)
+  matrixCache.delete(id)
+  progress.delete(id)
+  emitProgress()
+  if (stage === 'map') { countryCache.delete(id); bases.delete(id) }
+}
+
 let indexP: Promise<IndexJson> | null = null
 export const loadIndex = () => (indexP ??= (async () => {
   // always revalidate: it carries the build stamp used to version every other file
   const index = await json<IndexJson>('index.json', { cache: 'no-cache' })
   if (index.built_at) dataVersion = index.built_at
   return index
-})())
+})().catch((e) => {
+  indexP = null // a failure is not cached: the next call (Retry) fetches again
+  throw e
+}))
 
 let sourcesP: Promise<Source[]> | null = null
 export const loadSources = () => (sourcesP ??= loadIndex().catch(() => null).then(() => json<Source[]>('sources.json')))
@@ -290,25 +338,10 @@ export function column(d: CountryData, key: string): Float32Array | null {
   return d.matrix.subarray(m.col * d.n, (m.col + 1) * d.n)
 }
 
-export function hasMetric(d: CountryData, key: string) {
-  return d.metricByKey.has(key)
-}
-
-/** Admin metric value for a unit. */
-export function adminValue(d: CountryData, level: string, unitIndex: number, key: string): number {
-  const v = d.admin[level]?.metrics[key]?.[unitIndex]
-  return v == null ? NaN : v
-}
-
 /** Finest admin level for a country (adm3 for LKA, adm2 for USA). */
 export function finestLevel(d: CountryData): string {
   const lv = Object.keys(d.meta.admin_levels)
   return lv[lv.length - 1]
-}
-
-/** Display level used for "district/county" selection. */
-export function mainLevel(d: CountryData): string {
-  return 'adm2'
 }
 
 export function adminUnitOfHex(d: CountryData, level: string, i: number) {

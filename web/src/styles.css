@@ -137,6 +137,15 @@ h1, h2, h3, h4 { font-family: var(--serif); font-weight: 600; letter-spacing: .0
 }
 .loading, .panel-empty { padding: 24px; color: var(--muted); }
 .error { position: absolute; z-index: 5; top: 10px; left: 50%; transform: translateX(-50%); background: #4a1010; border: 1px solid var(--bad); padding: 8px 12px; border-radius: 8px; max-width: 90%; }
+/* a country whose map data or statistics failed to load: says what failed, offers a retry */
+.cell-error { position: absolute; z-index: 4; left: 50%; top: 50%; transform: translate(-50%, -50%); width: min(420px, calc(100% - 24px)); background: #3a1414f2; border: 1px solid var(--bad); padding: 10px 12px; border-radius: 8px; font-size: 13px; line-height: 1.4; }
+/* only the statistics failed: the map still works, so the notice moves out of its way */
+.cell-error.stage-statistics { top: 72px; transform: translateX(-50%); }
+.error, .cell-error { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; overflow-wrap: anywhere; }
+.error > span, .cell-error > span { flex: 1 1 200px; }
+.retry-btn { flex: none; background: #0b1422; border: 1px solid var(--brass); color: var(--brass2); border-radius: 6px; padding: 3px 10px; font-size: 12.5px; }
+.retry-btn:hover { background: #1a2740; }
+.retry-btn:focus-visible { outline: 2px solid var(--brass2); outline-offset: 1px; }
 
 /* deck tooltip (App.tsx useTooltipFlip keeps it inside the pane) */
 .deck-tip { background: #0b1422f2 !important; color: var(--text) !important; border: 1px solid var(--brass) !important; border-radius: 8px !important; padding: 8px 10px !important; font: 12.5px/1.45 var(--font) !important; max-width: min(300px, calc(100cqw - 16px)); box-shadow: 0 6px 18px #0008; }
@@ -215,6 +224,9 @@ select.input, input.input { background: var(--bg); border: 1px solid var(--line2
   .toggles select { padding: 6px 8px; }
 
   .maps-2 { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 1fr) minmax(0, 1fr); }
+  /* Side by side with the sheet open: both maps share the strip above the sheet (the lower one would
+     otherwise sit entirely under it); single-country maps stay full height and fit above the sheet */
+  .app.panel-open .maps-2 { padding-bottom: 46vh; }
   .lensbar { flex-wrap: wrap; row-gap: 5px; padding: 5px 8px; }
   .lensbar.has-metric .lens-metric { flex: 1 1 100%; max-width: none; }
   .lens-label { position: absolute; width: 1px; height: 1px; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }

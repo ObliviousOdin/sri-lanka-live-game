@@ -1,7 +1,7 @@
 import { CITIZEN_META, COUNTRY_META, DISTRICT_META, FEATURE_META, TERRAIN_META, YIELD_META, type RGB } from './civ'
 import { CATEGORICAL, PALETTES, mix, ramp, scaleT, shade, sortedDomain, sortedQuantile, yieldColor } from './color'
 import { column } from './data/load'
-import { fmtNumber, fmtUsd } from './format'
+import { fmtNumber, fmtUsd, prettyUnit } from './format'
 import { COUNTRIES, type CountryData, type CountryId, type IndexJson, type Metric, type YieldKey } from './types'
 
 export type LensGroup = 'Map' | 'Yields' | 'People' | 'Economy' | 'Environment' | 'Infrastructure'
@@ -77,14 +77,24 @@ export function lensBasis(m: Pick<Metric, 'kind' | 'unit'>): LensBasis {
   return AREA_UNIT.test(m.unit) ? 'share' : 'density'
 }
 
+/**
+ * A statistic of the land and its residents (admin-unit tables and values derived from them): sea
+ * tiles (ring > 0) must not show it, even when the export carries a value there (reconcile's sea
+ * pieces inherit the nearest unit's rates). Sea tiles keep coastal-sea allocations (weight 'coast',
+ * fish landings), per-hex rasters (hazards, land cover, protected areas, elevation) and facility
+ * points snapped offshore.
+ */
+export function landOnlyMetric(m: Pick<Metric, 'weight' | 'table'>): boolean {
+  if (m.weight === 'coast') return false
+  const t = m.table ?? ''
+  return !(t === 'hex' || t === 'hexes' || t.startsWith('points_'))
+}
+
 /** Metric keys that are coloured as densities (extensive metrics divided by tile area; areas excluded). */
 export function isDensity(d: CountryData, key: string) {
   const m = d.metricByKey.get(key)
   return !!m && lensBasis(m) === 'density'
 }
-
-const prettyUnit = (u: string) =>
-  u.replace(/km2/g, 'km²').replace(/^degC$/i, '°C').replace(/^deg$/i, '°').replace(/\/year$/i, '/yr')
 
 /** Unit caption shown once under a legend (ticks carry bare numbers, $ and % only). */
 export function lensUnitCaption(unit: string, basis: LensBasis): string {
@@ -100,6 +110,8 @@ export function lensUnitCaption(unit: string, basis: LensBasis): string {
   if (MONEY.test(u)) return `US$${prettyUnit(u.replace(MONEY, ''))}`
   if (PCT_UNITS.has(lu) || SHARE_UNITS.has(lu)) return '%'
   if (PEOPLE_UNITS.has(lu)) return 'people'
+  // prettyUnit drops count-like codes (for "N per …" text); a legend caption keeps them
+  if (lu === 'index' || lu === 'count') return lu
   return prettyUnit(u)
 }
 
@@ -116,25 +128,6 @@ export function fmtLensTick(v: number, unit: string, basis: LensBasis): string {
   if (lu === 'degc') return `${fmtNumber(v)}°C`
   if (lu === 'deg') return `${fmtNumber(v)}°`
   return fmtNumber(v)
-}
-
-/**
- * Full value with unit and basis, e.g. "1,234 people per km² of tile", "$2.9k/yr", "12% of tile area".
- * `v` is the lens value (lensValues / lensValue), i.e. already divided by tile area for densities.
- */
-export function fmtLensValue(v: number, unit: string, basis: LensBasis): string {
-  if (!Number.isFinite(v)) return '–'
-  const u = unit.trim(), lu = u.toLowerCase()
-  if (basis === 'share') return `${fmtNumber(v)}% of tile area`
-  if (MONEY.test(u)) {
-    const rest = prettyUnit(u.replace(MONEY, ''))
-    return basis === 'density' ? `${money(v)}${rest} per km² of tile` : `${money(v)}${rest}`
-  }
-  const tick = fmtLensTick(v, unit, basis)
-  if (basis === 'density') return `${tick} ${lensUnitCaption(unit, basis)}`
-  if (LAND_DENSITY_UNITS.has(lu)) return `${tick} people per km² of land`
-  if (PCT_UNITS.has(lu) || SHARE_UNITS.has(lu) || lu === 'degc' || lu === 'deg' || COUNT_UNITS.has(lu) || PEOPLE_UNITS.has(lu) || lu === 'index') return tick
-  return `${tick} ${prettyUnit(u)}`
 }
 
 const CAT_COLORS: Record<string, RGB> = {
@@ -206,8 +199,11 @@ export type Legend =
     unit: string; basis: LensBasis; density: boolean; country: CountryId; scale: ScaleInfo; prov: Provenance[]
   }
   | { kind: 'yield'; title: string; yieldKey: YieldKey; cap: number }
-  /** the chosen metric is not published for this country: the map is dimmed, never another metric */
-  | { kind: 'nodata'; title: string; detail: string; country: CountryId }
+  /**
+   * the chosen metric is not published for this country (the map is dimmed, never another metric),
+   * or (failed) this country's statistics could not be loaded
+   */
+  | { kind: 'nodata'; title: string; detail: string; country: CountryId; failed?: boolean }
   /** the metric matrix (metrics.bin) of this country has not arrived yet */
   | { kind: 'loading'; title: string; country: CountryId }
 
@@ -286,16 +282,6 @@ export function lensValues(d: CountryData, key: string): Float32Array | null {
   const out = new Float32Array(d.n)
   for (let i = 0; i < d.n; i++) out[i] = (col[i] / d.hexArea[i]) * k
   return out
-}
-
-/** One tile's lens value (same basis as lensValues), NaN when missing. */
-export function lensValue(d: CountryData, key: string, i: number): number {
-  const m = d.metricByKey.get(key)
-  const col = m ? column(d, key) : null
-  if (!m || !col) return NaN
-  const basis = lensBasis(m)
-  const v = col[i]
-  return basis === 'raw' ? v : (v / d.hexArea[i]) * (basis === 'share' ? 100 : 1)
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -484,7 +470,7 @@ export function computeLens(
     }
     if (!d.matrixReady) {
       dimAll()
-      if (ctx.failed?.includes(d.id)) return { colors, elevation, legend: { kind: 'nodata', title: lens.label, detail: `${name} statistics failed to load`, country: d.id } }
+      if (ctx.failed?.includes(d.id)) return { colors, elevation, legend: { kind: 'nodata', title: lens.label, detail: `${name} statistics failed to load`, country: d.id, failed: true } }
       return { colors, elevation, legend: { kind: 'loading', title: lens.label, country: d.id } }
     }
     const cols = keys.map((k) => column(d, k)!)
@@ -545,7 +531,7 @@ export function computeLens(
   const failed = new Set(ctx.failed ?? [])
   if (!d.matrixReady) {
     dimAll()
-    if (failed.has(d.id)) return { colors, elevation, legend: { kind: 'nodata', title: m.label, detail: `${name} statistics failed to load`, country: d.id } }
+    if (failed.has(d.id)) return { colors, elevation, legend: { kind: 'nodata', title: m.label, detail: `${name} statistics failed to load`, country: d.id, failed: true } }
     return { colors, elevation, legend: { kind: 'loading', title: m.label, country: d.id } }
   }
   const shared = ctx.shared ?? pool.length > 1
@@ -558,11 +544,14 @@ export function computeLens(
   const { domain, log } = info
   const vals = lensValues(d, key)!
   const pal = PALETTES[lens.palette ?? 'viridis']
+  const landOnly = landOnlyMetric(m), ring = d.hexes.ring
   for (let i = 0; i < n; i++) {
     const v = vals[i]
+    // sea tiles: never painted with a land statistic (see landOnlyMetric), whatever the export holds
+    if (ring[i] > 0 && landOnly) { dimTerrain(i); continue }
     if (!Number.isFinite(v)) { set(i, shade(terrainRGB(d, idx, i), 0.22)); continue }
     if (log && v <= 0) { dimTerrain(i); continue }
-    if (d.hexes.ring[i] > 0 && m.weight !== 'coast' && v === 0) { dimTerrain(i); continue }
+    if (ring[i] > 0 && m.weight !== 'coast' && v === 0) { dimTerrain(i); continue }
     const t = scaleT(v, domain, log)
     set(i, ramp(pal, t))
     elevation[i] = Math.max(0, Math.min(1, t)) * 60000

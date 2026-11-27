@@ -3,15 +3,16 @@ import { H3HexagonLayer } from '@deck.gl/geo-layers'
 import { GeoJsonLayer, IconLayer, PolygonLayer, ScatterplotLayer, TextLayer } from '@deck.gl/layers'
 import DeckGL from '@deck.gl/react'
 import { cellToBoundary, cellToLatLng, cellToParent, getBaseCellNumber, latLngToCell } from 'h3-js'
-import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
 import { COUNTRY_META, DISTRICT_META, YIELD_META, terrainLabel } from '../civ'
 import { ScaleBar } from '../components/ScaleBar'
 import { SourceChips } from '../components/SourceChip'
 import { adminUnitOfHex, finestLevel, hexesOfAdmin, loadAdminGeo, value } from '../data/load'
 import { useSources, type AppData } from '../data/useData'
 import { fmtInt, fmtNumber, fmtUnit } from '../format'
-import { LENS_BY_ID, isDensity, lensMetricKey, lensMetricKeys, metricLabel, type LensDef, type LensResult } from '../lenses'
+import { LENS_BY_ID, isDensity, landOnlyMetric, lensMetricKey, lensMetricKeys, metricLabel, type LensDef, type LensResult } from '../lenses'
 import { CITY_ZOOM, openCity } from '../panels/cityViewNav'
+import { plural } from '../panels/tilePanelStats'
 import { useStore } from '../store'
 import { YIELDS, type City, type CountryData, type CountryId, type PointRow } from '../types'
 import { adminFeature, adminIdAt, adminIndexOf, frameLon, geoForMap, mapLon } from './adminPick'
@@ -69,21 +70,29 @@ function still(v: MapViewState): MapViewState {
   return out as unknown as MapViewState
 }
 
+type Box = [number, number, number, number]
+
 /**
- * Room kept free when fitting a region: the pane label (and US jump buttons) on top, the legend dock
- * and scale bar at the bottom. Capped on small panes, where fitBounds needs most of the pane.
+ * Room kept free when fitting a region: the pane label (and US jump buttons) on top, with room for
+ * the city banners drawn above the northernmost cities; the legend dock and scale bar at the bottom.
+ * Capped on small panes, where fitBounds needs most of the pane.
+ * `sheetTop` (phones): height of the pane above the open bottom sheet; the region is then fitted
+ * into that strip, since the sheet hides the rest of the pane (and the legend and scale bar with it).
  */
-function fitPadding(size: { w: number; h: number }) {
+function fitPadding(size: { w: number; h: number }, sheetTop: number | null = null) {
   const side = Math.min(40, size.w / 10)
+  const top = Math.min(64, size.h / 6)
+  if (sheetTop != null && sheetTop - top > 120) return { top, left: side, right: side, bottom: size.h - sheetTop + 12 }
   return {
-    top: Math.min(48, size.h / 8),
+    top,
     left: side,
     right: side,
     bottom: Math.min(40 + Math.min(100, size.h * 0.14), size.h / 4),
   }
 }
 
-const plural = (w: string) => (/[^aeiou]y$/.test(w) ? `${w.slice(0, -1)}ies` : `${w}s`)
+/** Phones: the bottom sheet is drawn over the map (styles.css, max-width 900px) and is open. */
+const sheetCovers = (panelOpen: boolean) => panelOpen && typeof window !== 'undefined' && window.innerWidth < 900
 
 /** `lon` moved by whole turns to lie within 180° of `ref` (keeps fly-to paths short across 180°). */
 const nearLon = (lon: number, ref: number) => lon + 360 * Math.round((ref - lon) / 360)
@@ -105,6 +114,7 @@ export function MapPane({ country, data, app, lens, compact }: Props) {
   const brushedAll = useStore((s) => s.explorer.brushed)
   const flyTo = useStore((s) => s.flyTo)
   const mode = useStore((s) => s.mode)
+  const panelOpen = useStore((s) => s.panelOpen)
   const sources = useSources()
   const lensDef = LENS_BY_ID.get(lensId) ?? LENS_BY_ID.get('terrain')!
   /** admin level clicks resolve to here: DS divisions fall back to US counties on the US map */
@@ -120,16 +130,30 @@ export function MapPane({ country, data, app, lens, compact }: Props) {
     setSize({ w: el.clientWidth, h: el.clientHeight })
     return () => ro.disconnect()
   }, [])
-  // fit the country on first render, and again on resize until the user moves the map
+  /** fitBounds padding for this pane now: on phones with the sheet open, only the strip above it */
+  const padNow = (sz: { w: number; h: number }) => {
+    const el = ref.current
+    return fitPadding(sz, el && sheetCovers(useStore.getState().panelOpen) ? visibleHeightAboveSheet(el) : null)
+  }
+  // fit the country on first render, and again on resize, or when the phone sheet opens or closes,
+  // until the user moves the map
   const userMoved = useRef(false)
   const appliedFly = useRef<number | null>(null)
+  const sheetOver = sheetCovers(panelOpen)
+  const fittedSheet = useRef(sheetOver)
   useEffect(() => {
     if (!size || size.w < 10 || (view && userMoved.current)) return
+    const sheetToggled = fittedSheet.current !== sheetOver
+    fittedSheet.current = sheetOver
     const vp = new WebMercatorViewport({ width: size.w, height: size.h })
-    const { longitude, latitude, zoom } = vp.fitBounds(INITIAL_BOUNDS[country], { padding: fitPadding(size) })
-    setView((v) => ({ ...(v ? still(v) : { pitch: extrude ? MAX_PITCH_3D : 0, bearing: 0 }), longitude, latitude, zoom }))
+    const { longitude, latitude, zoom } = vp.fitBounds(INITIAL_BOUNDS[country], { padding: padNow(size) })
+    // the sheet slides in or out: follow it; a first fit or a resize jumps
+    const anim = view && sheetToggled && !prefersReducedMotion()
+      ? { transitionDuration: 300, transitionInterpolator: new LinearInterpolator(['longitude', 'latitude', 'zoom']) }
+      : {}
+    setView((v) => ({ ...(v ? still(v) : { pitch: extrude ? MAX_PITCH_3D : 0, bearing: 0 }), longitude, latitude, zoom, ...anim }) as MapViewState)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [size, country])
+  }, [size, country, sheetOver])
 
   // ---- fly-to requests (store.fly from panels, jump buttons, city banners)
   useEffect(() => {
@@ -177,7 +201,9 @@ export function MapPane({ country, data, app, lens, compact }: Props) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [link, view === null])
 
-  const onViewStateChange = ({ viewState, interactionState }: { viewState: MapViewState; interactionState?: { isDragging?: boolean; isZooming?: boolean; isPanning?: boolean; isRotating?: boolean } }) => {
+  const inTransition = useRef(false)
+  const onViewStateChange = ({ viewState, interactionState }: { viewState: MapViewState; interactionState?: { inTransition?: boolean; isDragging?: boolean; isZooming?: boolean; isPanning?: boolean; isRotating?: boolean } }) => {
+    inTransition.current = !!interactionState?.inTransition
     setView(viewState)
     if (interactionState && (interactionState.isZooming || interactionState.isDragging || interactionState.isPanning || interactionState.isRotating)) {
       userMoved.current = true
@@ -274,6 +300,26 @@ export function MapPane({ country, data, app, lens, compact }: Props) {
     return adminFeature(data, selLevel, selUnit, geoForMap(country, geo[selLevel]))
   }, [selLevel, selUnit, geo, data, country])
 
+  // Once the user has moved the map, a resize (panel shown or hidden; on phones, Side by side shrinking
+  // both maps above the opened sheet) keeps the view centre, which can push the selection out of the
+  // pane: bring it back to the centre then. Before that, the fit above shows the whole country.
+  const prevSize = useRef(size)
+  useEffect(() => {
+    const was = prevSize.current
+    prevSize.current = size
+    // a fly-to in progress lands on its target (the selection) at the new size by itself
+    if (!size || !was || !view || !userMoved.current || inTransition.current || (was.w === size.w && was.h === size.h)) return
+    const p = selectionPoint(data, selection, country)
+    if (!p) return
+    const lon = nearLon(mapLon(country, p[0]), view.longitude)
+    const vp = new WebMercatorViewport({ width: size.w, height: size.h, longitude: view.longitude, latitude: view.latitude, zoom: view.zoom, pitch: view.pitch ?? 0, bearing: view.bearing ?? 0 })
+    const [x, y] = vp.project([lon, p[1]])
+    const m = 24
+    if (x > m && x < size.w - m && y > m && y < size.h - m) return
+    setView({ ...still(view), longitude: lon, latitude: p[1] })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [size])
+
   const zoom = view?.zoom ?? 4
   const iconMinZoom = country === 'lka' ? 7.6 : 5.6
 
@@ -302,23 +348,29 @@ export function MapPane({ country, data, app, lens, compact }: Props) {
   }, [data.hexes, data.wonders, data.points, data.n, idx, country, zoom >= iconMinZoom + 1.2])
   const atlas = useMemo(() => emojiAtlas([...new Set(iconData.map((d) => d.icon))]), [iconData])
 
-  // declutter city banners: keep the biggest cities, drop labels whose boxes would overlap
+  // pane overlays in pane pixels (measured below): city banners are not drawn under them
+  const [overlays, setOverlays] = useState<Box[]>([])
+
+  // declutter city banners: keep the biggest cities, drop labels whose boxes would overlap each other
+  // or a pane overlay
   const zKey = view ? Math.round(view.zoom * 4) / 4 : 0
   const visibleCities = useMemo(() => {
     if (!view || !size) return data.cities
     const vp = new WebMercatorViewport({ width: size.w, height: size.h, longitude: view.longitude, latitude: view.latitude, zoom: view.zoom })
-    const boxes: [number, number, number, number][] = []
+    const boxes: Box[] = [...overlays]
     const fs = compact ? 11 : 13
     return [...data.cities].sort((a, b) => b.size - a.size).filter((c) => {
       const [x, y] = vp.project([mapLon(country, c.lon) + lonOffset, c.lat])
       const w = (c.name.length + 4) * fs * 0.62 + 12, h = fs + 8
-      const b: [number, number, number, number] = [x - w / 2, y - 26 - h / 2, x + w / 2, y - 26 + h / 2]
+      const b: Box = [x - w / 2, y - 26 - h / 2, x + w / 2, y - 26 + h / 2]
+      // cut by the top or bottom edge of the pane (labels running off the sides stay readable)
+      if (b[1] < 0 || b[3] > size.h) return false
       if (boxes.some((o) => b[0] < o[2] && b[2] > o[0] && b[1] < o[3] && b[3] > o[1])) return false
       boxes.push(b)
       return true
     })
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [data.cities, zKey, size?.w, size?.h, compact, lonOffset, Math.round((view?.longitude ?? 0) * 10), Math.round((view?.latitude ?? 0) * 10)])
+  }, [data.cities, zKey, size?.w, size?.h, compact, lonOffset, overlays, Math.round((view?.longitude ?? 0) * 10), Math.round((view?.latitude ?? 0) * 10)])
 
   // ---- facility points (Energy / Trade lenses)
   const pointSets = useMemo(() => (lensDef.pointLayers ?? []).flatMap((name) => {
@@ -445,7 +497,9 @@ export function MapPane({ country, data, app, lens, compact }: Props) {
   /** Phones: pan so a tapped point is not hidden under the bottom sheet that the selection opens. */
   const revealAboveSheet = (lonView: number, lat: number) => {
     const el = ref.current
-    if (!el || !view || !size) return
+    // Side by side: both maps shrink to the strip above the sheet (styles.css), and the resize
+    // effect above keeps the selection in view
+    if (!el || !view || !size || mode === 'split') return
     const visH = visibleHeightAboveSheet(el)
     if (visH == null) return
     const vp = new WebMercatorViewport({ width: size.w, height: size.h, longitude: view.longitude, latitude: view.latitude, zoom: view.zoom, pitch: view.pitch ?? 0, bearing: view.bearing ?? 0 })
@@ -466,7 +520,8 @@ export function MapPane({ country, data, app, lens, compact }: Props) {
       const c = info.object as City
       const el = ref.current
       const visH = el ? visibleHeightAboveSheet(el) : null
-      if (visH == null || !size) {
+      // Side by side on phones: the maps themselves shrink to the strip above the sheet (styles.css)
+      if (visH == null || !size || mode === 'split') {
         openCity(country, c) // selects, opens the City View and flies there
         return
       }
@@ -545,6 +600,34 @@ export function MapPane({ country, data, app, lens, compact }: Props) {
   const lensKey = lensDef.kind === 'metric' ? lensMetricKey(lensDef, lensMetricSel, data, loadedCountries(app)) : null
   const shortJump = compact || (size?.w ?? 1000) < 600
 
+  // Pane overlays (label chip, US jump buttons, notes / facility key, legend card) in pane pixels: a
+  // city banner under one of them would be unreadable, so the city declutter treats them as taken.
+  const overlayKey = [compact, shortJump, panelOpen, mode, showKey, basemap, lensId, notes.join('|'), view !== null].join(';')
+  useLayoutEffect(() => {
+    const el = ref.current
+    if (!el) return
+    const targets = () => [
+      ...el.querySelectorAll<HTMLElement>('.pane-label, .jump, .mp-tr > *'),
+      ...(el.closest('.map-cell')?.querySelectorAll<HTMLElement>('.legend-card') ?? []),
+    ]
+    const measure = () => {
+      const pr = el.getBoundingClientRect()
+      const out: Box[] = []
+      for (const t of targets()) {
+        const r = t.getBoundingClientRect()
+        if (r.width > 0 && r.height > 0) out.push([r.left - pr.left - 2, r.top - pr.top - 2, r.right - pr.left + 2, r.bottom - pr.top + 2])
+      }
+      const key = (b: Box[]) => b.map((x) => x.map(Math.round).join(',')).join(';')
+      setOverlays((prev) => (key(prev) === key(out) ? prev : out))
+    }
+    measure()
+    const ro = new ResizeObserver(measure)
+    ro.observe(el)
+    targets().forEach((t) => ro.observe(t))
+    return () => ro.disconnect()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [overlayKey, lens?.legend])
+
   return (
     <div className={`map-pane ${compact ? 'mp-compact' : ''}`} ref={ref}>
       {view && (
@@ -579,7 +662,7 @@ export function MapPane({ country, data, app, lens, compact }: Props) {
               onClick={() => {
                 if (!size) return
                 const vp = new WebMercatorViewport({ width: size.w, height: size.h })
-                const f = vp.fitBounds(j.bounds, { padding: fitPadding(size) })
+                const f = vp.fitBounds(j.bounds, { padding: padNow(size) })
                 useStore.getState().fly('usa', f.longitude, f.latitude, f.zoom)
               }}
             >
@@ -638,6 +721,27 @@ export function MapPane({ country, data, app, lens, compact }: Props) {
   )
 }
 
+/** Where the current selection sits in this country ([lon, lat], data frame), or null. */
+function selectionPoint(d: CountryData, sel: ReturnType<typeof useStore.getState>['selection'], country: CountryId): [number, number] | null {
+  if (!sel || sel.country !== country) return null
+  try {
+    if (sel.kind === 'hex') { const [la, lo] = cellToLatLng(sel.id); return [lo, la] }
+    if (sel.kind === 'city') {
+      const c = d.cities.find((x) => x.id === sel.id)
+      if (!c) return null
+      const [la, lo] = cellToLatLng(c.centre)
+      return [lo, la]
+    }
+    if (sel.kind === 'wonder') { const w = d.wonders.find((x) => x.name === sel.id); return w ? [w.lon, w.lat] : null }
+    if (sel.kind === 'admin') {
+      const [lvl, ui] = sel.id.split(':')
+      const u = d.admin[lvl]?.units[Number(ui)]
+      return u && Number.isFinite(u.lon) && Number.isFinite(u.lat) ? [u.lon, u.lat] : null
+    }
+  } catch { /* malformed id */ }
+  return null
+}
+
 // tile centres, cached per hexes table (kept across the metric-matrix arrival, which swaps CountryData)
 const centreCache = new WeakMap<CountryData['hexes'], Float64Array>()
 function hexCenter(d: CountryData, i: number): [number, number] {
@@ -673,8 +777,10 @@ function hexTooltip(d: CountryData, app: AppData, i: number, lens: LensDef, lens
     const wanted = lensMetric || lensMetricKeys(lens, all.length ? all : [d])[0]
     if (key) {
       const m = d.metricByKey.get(key)!
-      const v = value(d, key, i)
-      const shown = !d.matrixReady ? 'loading…' : key === 'pop_density' ? `${fmtNumber(v)} people per km² of land` : fmtUnit(v, m.unit)
+      // a land statistic has no value on a sea tile (the map dims it too)
+      const sea = d.hexes.ring[i] > 0 && landOnlyMetric(m)
+      const v = sea ? NaN : value(d, key, i)
+      const shown = !d.matrixReady ? 'loading…' : sea ? 'none at sea' : key === 'pop_density' ? `${fmtNumber(v)} people per km² of land` : fmtUnit(v, m.unit)
       const dens = isDensity(d, key) && Number.isFinite(v) ? ` <span class="k">(${fmtUnit(v / d.hexArea[i], m.unit)} per km² of tile)</span>` : ''
       lensLine = `<div><span class="k">${escapeHtml(m.label)}</span> ${shown}${dens}</div>`
     } else if (wanted) {

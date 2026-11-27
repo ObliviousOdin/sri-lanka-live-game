@@ -133,36 +133,61 @@ DISTRICTS = {
 DISTRICT_ORDER = ["city_center", "spaceport", "harbor", "aerodrome", "campus", "commercial_hub",
                   "industrial_zone", "dam", "power_plant", "holy_site", "theater_square", "encampment",
                   "entertainment", "plantation", "farmland", "fishery", "neighborhood", "preserve"]
+# Plantation thresholds. Sri Lanka: share of the tile's land (area inside the boundary) under tea, rubber and
+# coconut, from the district crop extents (Economic Census 2013/14) allocated to tiles by tree cover; the US
+# publishes no crop extents of that kind, so it keeps the county orchard share of cropland (tree_crop_share).
+PLANTATION_CROPS = ("tea_ha", "rubber_ha", "coconut_ha")
+PLANTATION = {"lka_share_min": 0.15, "cover_min": 0.40, "built_max": 0.25, "protected_max": 75.0,
+              "us_tree_crop_share_min": 40.0, "us_food_min": 3}
+
+
+def plantation_land_share(H: pd.DataFrame) -> np.ndarray:
+    """(tea + rubber + coconut ha) / (land_km2 x 100) per row; 0 where land_km2 <= 0.5 km² or no extents."""
+    ha = sum(np.nan_to_num(col(H, k, 0.0)) for k in PLANTATION_CROPS)
+    land = np.nan_to_num(col(H, "land_km2", 0.0))
+    with np.errstate(divide="ignore", invalid="ignore"):
+        return np.where(land > 0.5, ha / (np.maximum(land, 1e-9) * 100), 0.0)
+
+
 DISTRICT_RULES = {
     "city_center": "Centre tile of a City View city: the most populous tile within one ring of the city's coordinates.",
-    "harbor": "Seaport with ≥ 1 million tonnes of annual cargo, or one of the country's 3 busiest ports.",
-    "aerodrome": "Airport with ≥ 1 million annual passenger boardings (US: FAA enplanements, about half of all "
-                 "arriving + departing passengers), or the country's busiest airport by boardings. Sri Lanka has no "
-                 "open airport-level passenger statistics, so there every large airport with scheduled service "
-                 "(OurAirports classification) qualifies.",
+    "harbor": "Seaports in the tile handle ≥ 1 million tonnes of annual cargo, or the tile holds one of the "
+              "country's 3 busiest ports.",
+    "aerodrome": "Airports in the tile have ≥ 1 million annual passenger boardings (US: FAA enplanements, about half "
+                 "of all arriving + departing passengers), or the tile holds the country's busiest airport by "
+                 "boardings. Sri Lanka has no open airport-level passenger statistics, so there every large airport "
+                 "with scheduled service (OurAirports classification) qualifies.",
     "spaceport": "Launch site that has hosted an orbital or orbital-class launch (Cape Canaveral, Kennedy, Vandenberg, "
                  "Wallops / Mid-Atlantic Regional Spaceport, Pacific Spaceport Complex – Alaska, Starbase). "
                  "Other FAA-listed spaceports (runway, suborbital or reentry-only sites) do not qualify.",
     "campus": "≥ 2,000 research works in 5 years from institutions in the tile (OpenAlex), "
-              "or STEM workforce location quotient ≥ 1.8 with ≥ 300 people/km².",
-    "commercial_hub": "Finance, real-estate & professional-services employment LQ ≥ 1.15 and either Gold ≥ 7 "
-                      "or GDP density in the country's top 1% of tiles.",
+              "or STEM (Engineers class) workforce location quotient ≥ 1.8 with ≥ 300 people per km² of land.",
+    "commercial_hub": "Land tile with finance, real-estate & professional-services employment LQ ≥ 1.15 and either "
+                      "Gold ≥ 7 or GDP density in the top 1% of the country's land tiles.",
     "industrial_zone": "Production yield ≥ 5 and manufacturing employment LQ ≥ 1.5, "
                        "or an export-processing zone / industrial park in the tile.",
     "dam": "Hydroelectric capacity ≥ 100 MW in the tile.",
-    "power_plant": "Thermal, nuclear, wind or solar capacity ≥ 500 MW in the tile.",
+    "power_plant": "Other (non-hydro) generating capacity — thermal, nuclear, wind, solar… — ≥ 500 MW in the tile.",
     "encampment": "Military installation in the tile.",
-    "holy_site": "One of the country's most notable religious sites (top 10 in Sri Lanka, top 25 in the US by "
-                 "Wikipedia language editions), or worship-site density in the top 1% of the country's tiles.",
-    "theater_square": "UNESCO World Heritage (cultural) site, ≥ 5 museums, or arts/recreation/hospitality LQ ≥ 2 "
-                      "with ≥ 300 people/km².",
+    "holy_site": "Holds one of the country's most notable religious sites (top 10 in Sri Lanka, top 25 in the US by "
+                 "Wikipedia language editions), or worship-site density in the top 1% of the country's land tiles.",
+    "theater_square": "UNESCO World Heritage cultural or mixed site, ≥ 5 museums (Wikidata), or "
+                      "arts/recreation/hospitality employment LQ ≥ 2 with ≥ 300 people per km² of land.",
     "entertainment": "Arts, recreation & hospitality employment LQ ≥ 2.5 (tourism economy) with ≥ 5,000 residents "
                      "in the tile.",
-    "preserve": "≥ 75% strictly protected (WDPA, IUCN categories Ia–IV), or a national park with visitor statistics.",
-    "plantation": "Perennial/tree-crop share of agriculture ≥ 40%, Food yield ≥ 3 and ≥ 40% tree + crop cover.",
-    "farmland": "Food yield ≥ 4 and ≥ 40% cropland.",
-    "fishery": "Sea tile with Food yield ≥ 6 from fish landings (≥ 31.6 t per km² of coastal sea).",
-    "neighborhood": "≥ 1,500 people/km² without another district.",
+    "preserve": "Land tile ≥ 75% strictly protected (WDPA, IUCN categories Ia–IV), or holding a national park with "
+                "visitor statistics.",
+    "plantation": f"Sri Lanka: ≥ {PLANTATION['lka_share_min'] * 100:.0f}% of the tile's land under tea, rubber or "
+                  "coconut (district crop extents of the Economic Census 2013/14, allocated to tiles by tree cover), "
+                  f"≥ {PLANTATION['cover_min'] * 100:.0f}% tree + crop cover, < "
+                  f"{PLANTATION['built_max'] * 100:.0f}% built-up, < {PLANTATION['protected_max']:.0f}% strictly "
+                  "protected and no national park. US: fruit & nut orchards, citrus and vineyards ≥ "
+                  f"{PLANTATION['us_tree_crop_share_min']:.0f}% of the county's cropland (Census of Agriculture), "
+                  f"Food yield ≥ {PLANTATION['us_food_min']} and ≥ {PLANTATION['cover_min'] * 100:.0f}% tree + crop "
+                  "cover.",
+    "farmland": "Land tile with Food yield ≥ 4 and ≥ 40% cropland (ESA WorldCover).",
+    "fishery": "Sea tile with Food yield ≥ 6 from fish landings (≥ 31.6 t landed per km² of tile).",
+    "neighborhood": "Land tile with ≥ 1,500 people per km² of land (also when the tile has other districts).",
 }
 
 
@@ -339,6 +364,18 @@ def build_tiles(country: str) -> tuple[pd.DataFrame, dict]:
     tree_share = np.nan_to_num(col(H, "tree_crop_share", 0.0))
     lc_tree = np.nan_to_num(col(H, "lc_tree", 0.0))
     lc_crop = np.nan_to_num(col(H, "lc_crop", 0.0))
+    lc_built = np.nan_to_num(col(H, "lc_built", 0.0))
+    PL = PLANTATION
+    if all(k in H.columns for k in PLANTATION_CROPS):
+        # Sri Lanka: plantation crops' share of the tile's own land (tea estates up-country, rubber, coconut)
+        # (the extents follow tree cover, so strictly protected forest and national parks would otherwise
+        # "hold" tea: excluded)
+        plantation = ((plantation_land_share(H) >= PL["lka_share_min"]) & (lc_tree + lc_crop >= PL["cover_min"])
+                      & (lc_built < PL["built_max"]) & (protected < PL["protected_max"]) & ~park_tile.to_numpy()
+                      & land_mask)
+    else:
+        plantation = ((tree_share >= PL["us_tree_crop_share_min"]) & (Y["food"].to_numpy() >= PL["us_food_min"])
+                      & (lc_tree + lc_crop >= PL["cover_min"]) & land_mask)
 
     D = {
         "harbor": (port_t >= 1e6).to_numpy() | idx.isin(top_ports),
@@ -355,7 +392,7 @@ def build_tiles(country: str) -> tuple[pd.DataFrame, dict]:
         | ((np.nan_to_num(lq_arts) >= 2) & (popd >= 300)),
         "entertainment": (np.nan_to_num(lq_arts) >= 2.5) & (col(H, "pop", 0.0) >= 5000),
         "preserve": ((protected >= 75) | park_tile.to_numpy()) & land_mask,
-        "plantation": (tree_share >= 40) & (Y["food"].to_numpy() >= 3) & (lc_tree + lc_crop >= 0.4) & land_mask,
+        "plantation": plantation,
         "farmland": (Y["food"].to_numpy() >= 4) & (lc_crop >= 0.4) & land_mask,
         "fishery": (H.ring.to_numpy() > 0) & (Y["food"].to_numpy() >= 6),
         "neighborhood": (popd >= 1500) & land_mask,
@@ -661,6 +698,10 @@ def build_cities(country: str, tiles: pd.DataFrame, H: pd.DataFrame, wonders: li
             "official_pop": m.get("population"), "official_pop_year": m.get("population_year"),
             **city_population_fields(country, m),
             "official_gdp_usd": m.get("gdp_usd"), "official_gdp_year": m.get("gdp_year"),
+            # BEA county GDP summed over the metro's member counties (OMB delineation)
+            "official_gdp_sources": (["bea_cagdp1", "census_delineation_2023"] if m.get("gdp_usd") else []),
+            # sources of the metro list itself (definition, principal-city point, boundaries)
+            "metro_sources": list(m.get("sources") or []),
             "admin_ids": m.get("admin_ids"), "wikidata": m.get("wikidata"),
             "size": size, "citizens": cit, "citizen_icons": icons,
             "employed": float(sub["employed"].sum()) if "employed" in sub else None,

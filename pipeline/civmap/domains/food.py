@@ -237,7 +237,9 @@ _LKA_GVA_METHOD = (
     "error from shares quoted to 0.1 pp); the remaining "
     "share is split among the other five provinces in proportion to their index totals. Within a province "
     "districts keep their index proportions. Converted at the World Bank PA.NUS.FCRF 2024 average rate. "
-    "Hex allocation: cropland weight."
+    "Hex allocation: cropland weight. Differs from the economy domain's gdp_agri_usd (Abstract Table 10.2 "
+    "vintage, districts by LFS agricultural employment): +1.6 % nationally, Uva +26 %, Sabaragamuwa +12 %, "
+    "Northern -20 %; this series drives the Food yield."
 )
 
 _US_GVA_METHOD = (
@@ -252,7 +254,9 @@ _US_GVA_METHOD = (
     "lines 4 + 31, place of residence). (a) CAGDP2 cells suppressed '(D)': the state row minus the "
     "disclosed units is shared among the suppressed units in proportion to the proxy; (b) BEA "
     "combination areas (Virginia county + independent cities, Maui + Kalawao) are split to their member "
-    "counties in proportion to the proxy. Hex allocation: cropland weight."
+    "counties in proportion to the proxy. Hex allocation: cropland weight. Not the economy domain's "
+    f"gdp_agri_usd, which is the CAGDP2 {US_CTY_GDP_YEAR} county release itself ($269.7 B; this SAGDP2 "
+    f"vintage gives $248.1 B for {US_CTY_GDP_YEAR} and $255.9 B for {US_GDP_YEAR})."
 )
 
 _US_SALES_METHOD = (

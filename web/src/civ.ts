@@ -34,7 +34,6 @@ export const FEATURE_META: Record<string, { label: string; rgb: RGB | null; icon
   marsh: { label: 'Marsh', rgb: [84, 120, 98], icon: '🪷' },
   mangrove: { label: 'Mangrove', rgb: [56, 104, 84], icon: '🌿' },
   urban: { label: 'Urban', rgb: [146, 136, 128], icon: '🏙️' },
-  floodplain: { label: 'Floodplain', rgb: [120, 150, 90], icon: '' },
 }
 
 export const DISTRICT_META: Record<string, { label: string; icon: string; rgb: RGB }> = {

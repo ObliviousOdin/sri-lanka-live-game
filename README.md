@@ -5,8 +5,13 @@ United States with **real public data**. Every tile carries Gold, Production, Fo
 and Faith yields computed from official statistics; districts, wonders, citizens and city screens are
 assigned by published-data rules, and every number links back to its source.
 
-* Sri Lanka on an H3 resolution-6 grid (~36 km² tiles, ~7 km across): 1,861 land + 435 sea tiles
-* United States on an H3 resolution-5 grid (~253 km² tiles, ~17 km across): 38,405 land + 2,557 sea tiles
+* Sri Lanka on an H3 resolution-6 grid (tiles average 39.0 km², ~6.7 km across the flats): 1,861 land +
+  435 sea tiles
+* United States on an H3 resolution-5 grid (tiles average 255.2 km², ~17.2 km across the flats): 38,405
+  land + 2,557 sea tiles
+* (These are the means of the exported grids; H3's global averages for the two resolutions are 36.1 and
+  252.9 km².) Money is in current US dollars at market exchange rates; purchasing-power comparisons
+  appear only in the Advisors' national remarks.
 * 6 yields, 18+ lenses (income, education, religion, ethnicity, workforce, disasters, energy, trade,
   population, land cover, elevation…), City View, five Advisors, an Explorer (linked table + scatter),
   a Wonders race and a full source catalogue with download provenance.
@@ -16,7 +21,9 @@ assigned by published-data rules, and every number links back to its source.
 
 ## Quick start (app only)
 
-The built data is committed in `web/public/data`, so the app runs without the pipeline:
+The built data is committed in `web/public/data` (JSON, GeoJSON and the gzipped metric matrices
+`<cc>/metrics.bin.gz`; the uncompressed `metrics.bin` the pipeline also writes is gitignored and not
+used by the app), so the app runs without the pipeline:
 
 ```bash
 cd web
@@ -27,6 +34,10 @@ npm run build && npm run preview   # http://localhost:4173
 ```
 
 Requires Node 18+. The optional basemap (CARTO) needs internet; everything else is local.
+
+Browser: a current desktop or mobile browser with **WebGL 2** (deck.gl 9; Chrome/Edge 56+, Firefox 51+,
+Safari 15+). The metric matrices are inflated with `DecompressionStream` where available (Chrome 80+,
+Firefox 113+, Safari 16.4+) and with the bundled fflate library otherwise.
 
 ## Rebuilding the data
 
@@ -42,6 +53,8 @@ python -m civmap.validate economy    # check one domain's tables against the con
 
 Downloads are cached in `data/cache/` with a `.meta.json` sidecar per file (URL, SHA-256, size,
 time); a second run works offline. Intermediate tidy tables go to `data/interim/` (both gitignored).
+`sources.json` records, per source, the number and total size of its cached downloads and the first 20
+download records (URL, size, time, SHA-256 prefix).
 
 ### Pipeline stages
 
@@ -50,9 +63,9 @@ time); a second run works offline. Intermediate tidy tables go to `data/interim/
 | core | `civmap/core.py` | Boundaries (OCHA COD-AB; Census cartographic files), WorldPop rasters → H3 grid + population crosswalk (pixel → tile × admin unit), rescaled to official 2023 populations |
 | domains | `civmap/domains/*.py` | One module per theme writes tidy admin / point / hex tables + metric & source metadata |
 | national | `civmap/domains/national.py` | World Bank indicators for the advisors, metro list for City View |
-| reconcile | `civmap/reconcile.py` | Allocates every admin table to tiles (mass-preserving for totals, weighted means for rates) and re-aggregates to every admin level |
+| reconcile | `civmap/reconcile.py` | Allocates every admin table to tiles (mass-preserving for totals, weighted means for rates; sea tiles get no admin rates), places facility points on their tile and on the admin unit that contains them, and re-aggregates to every admin level |
 | civ | `civmap/civ.py` | Terrain classes, yields, districts, wonders, citizens, city screens |
-| export | `civmap/export.py` | Columnar JSON + Float32 metric matrix (`metrics.bin`, rounded to ~4 significant digits, plus a gzip copy `metrics.bin.gz` that the app inflates in the browser) + simplified GeoJSON for the web app |
+| export | `civmap/export.py` | Columnar JSON + Float32 metric matrix (`metrics.bin.gz`, rounded to ~4 significant digits, inflated in the browser; the raw `metrics.bin` is a local by-product) + simplified GeoJSON + the source catalogue with download provenance for the web app |
 
 ### Data domains
 
@@ -69,7 +82,7 @@ time); a second run works offline. Intermediate tidy tables go to `data/interim/
 | infra | WRI Global Power Plant Database, PortWatch, OurAirports (no open airport-level passenger statistics), Wikidata | EIA-860, PortWatch, OurAirports + FAA enplanements (boardings), Wikidata |
 
 The app's **Sources** tab lists every dataset with publisher, vintage, licence, access date and the
-metrics it feeds.
+metrics (or City View, Wonders, Advisors) it feeds.
 
 ## Repository layout
 

@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent } from 'react'
 import { COUNTRY_META } from './civ'
-import { useAppData, useLens } from './data/useData'
+import { describeLoadError, useAppData, useLens, type AppData } from './data/useData'
 import { Legend } from './components/Legend'
 import { LensBar } from './components/LensBar'
 import { MapPane } from './map/MapPane'
@@ -61,6 +61,10 @@ export default function App() {
   const optsRef = useRef<HTMLDivElement>(null)
   const sideRef = useRef<HTMLElement>(null)
   const tabRefs = useRef<(HTMLButtonElement | null)[]>([])
+  const bodyRef = useRef<HTMLDivElement>(null)
+
+  // every tab opens at its top: the panel body is one scroll container shared by all tabs
+  useLayoutEffect(() => { bodyRef.current?.scrollTo({ top: 0 }) }, [panel])
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -155,15 +159,19 @@ export default function App() {
       <LensBar countries={loaded} />
 
       <main className={`maps maps-${shown.length}`}>
-        {app.error && <div className="error">Data failed to load: {app.error}. Run the pipeline (see README) to build web/public/data.</div>}
+        {app.errors.index && <LoadFailed app={app} id="index" className="error" />}
         {shown.map((c) => {
           const d = app.countries[c]
           const lr = c === 'lka' ? lensLka : lensUsa
-          // busy until this country's statistics (metrics.bin) have arrived, unless its load failed
-          const busy = !app.error?.startsWith(`${c}:`) && !d?.matrixReady
+          const err = app.errors[c]
+          // busy until this country's statistics (metrics.bin.gz) have arrived, unless its load failed
+          const busy = !err && !app.errors.index && !d?.matrixReady
           return (
             <section key={c} className="map-cell" aria-label={`${COUNTRY_META[c].name} map`} aria-busy={busy}>
-              {d && app.index ? <MapPane country={c} data={d} app={app} lens={lr} compact={shown.length > 1} /> : <div className="loading">Loading {COUNTRY_META[c].name}…</div>}
+              {d && app.index
+                ? <MapPane country={c} data={d} app={app} lens={lr} compact={shown.length > 1} />
+                : !err && !app.errors.index && <div className="loading">Loading {COUNTRY_META[c].name}…</div>}
+              {err && <LoadFailed app={app} id={c} className="cell-error" />}
               {lr && (
                 <LegendDock
                   legend={lr.legend}
@@ -198,8 +206,12 @@ export default function App() {
             </button>
           ))}
         </div>
-        <div className="panel-body" role="tabpanel" id="side-tabpanel" aria-labelledby={`tab-${panel}`} tabIndex={0}>
-          {!app.index || !lka ? <div className="loading">Loading data…</div> : (
+        <div ref={bodyRef} className="panel-body" role="tabpanel" id="side-tabpanel" aria-labelledby={`tab-${panel}`} tabIndex={0}>
+          {!app.index || !lka ? (
+            app.errors.index || app.errors.lka?.stage === 'map'
+              ? <div className="panel-empty">The panels need {app.errors.index ? 'the data index' : 'the Sri Lanka map data'}, which did not load. <button type="button" className="retry-btn" onClick={app.retry}>Retry</button></div>
+              : <div className="loading">Loading data…</div>
+          ) : (
             <>
               {panel === 'tile' && <TilePanel app={app} />}
               {panel === 'city' && <CityView app={app} />}
@@ -211,6 +223,18 @@ export default function App() {
           )}
         </div>
       </aside>
+    </div>
+  )
+}
+
+/** What failed to load and what to do about it, with a Retry button. */
+function LoadFailed({ app, id, className }: { app: AppData; id: CountryId | 'index'; className: string }) {
+  const e = app.errors[id]
+  if (!e) return null
+  return (
+    <div className={`${className} stage-${e.stage}`} role="alert">
+      <span>{describeLoadError(id, e)}</span>
+      <button type="button" className="retry-btn" onClick={app.retry}>Retry</button>
     </div>
   )
 }

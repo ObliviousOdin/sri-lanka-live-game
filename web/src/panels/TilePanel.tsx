@@ -16,7 +16,8 @@ import { PlaceSearch } from './PlaceSearch'
 import { MetricGroups, type MetricRowData } from './TilePanelMetrics'
 import {
   adminParents, adminRank, adminZoom, explainYields, fmtDensity, fmtLandDensity, fmtVal, hasDensity, hexPercentile, isLandDensity,
-  landYieldMeans, plural, POINT_LAYER_META, pointsInHex, pointValue, tieInfo, wonderUnit, type YieldExplain,
+  landYieldMeans, LOADING_STATS, plural, POINT_LAYER_META, pointsInHex, pointValue, STATS_FAILED, statsState, tieInfo, wonderUnit,
+  type StatsState, type YieldExplain,
 } from './tilePanelStats'
 import './TilePanel.css'
 
@@ -47,7 +48,7 @@ function TileBody({ app, selection }: { app: AppData; selection: Selection | nul
   if (selection.kind === 'hex') {
     const i = d.hexIndex.get(selection.id)
     if (i == null) return <NotFound what={`Tile ${selection.id}`} />
-    return <HexInspector key={`${d.id}:${i}`} d={d} idx={idx} i={i} />
+    return <HexInspector key={`${d.id}:${i}`} d={d} idx={idx} i={i} stats={statsState(d, app.errors)} />
   }
   if (selection.kind === 'admin') {
     const [level, s] = selection.id.split(':')
@@ -80,7 +81,7 @@ function CloseButton() {
 // ---------------------------------------------------------------------------------------------
 // Hex
 // ---------------------------------------------------------------------------------------------
-function HexInspector({ d, idx, i }: { d: CountryData; idx: IndexJson; i: number }) {
+function HexInspector({ d, idx, i, stats }: { d: CountryData; idx: IndexJson; i: number; stats: StatsState }) {
   const h3 = d.hexes.h3[i]
   const country = d.id
   const t = idx.terrain_codes[d.hexes.terrain[i]] ?? 'plains'
@@ -91,7 +92,7 @@ function HexInspector({ d, idx, i }: { d: CountryData; idx: IndexJson; i: number
   const allDistricts = (d.hexes.districts_all?.[i] ?? '').split(',').filter(Boolean)
   const [lat, lon] = useMemo(() => cellToLatLng(h3), [h3])
   const yields = useMemo(() => Object.fromEntries(YIELDS.map((y) => [y, d.hexes.yields?.[y]?.[i] ?? 0])) as Record<YieldKey, number>, [d, i])
-  const explain = useMemo(() => explainYields(d, idx, i), [d, idx, i])
+  const explain = useMemo(() => explainYields(d, idx, i, stats === 'failed'), [d, idx, i, stats])
   const facilities = useMemo(() => pointsInHex(d, h3), [d, h3])
   const wonders = useMemo(() => d.wonders.filter((w) => w.h3 === h3), [d, h3])
   const crumbs = useMemo(() => Object.keys(d.meta.admin_levels).map((lvl) => ({ lvl, u: adminUnitOfHex(d, lvl, i) })).filter((c) => c.u), [d, i])
@@ -177,7 +178,7 @@ function HexInspector({ d, idx, i }: { d: CountryData; idx: IndexJson; i: number
         )}
       </div>
 
-      <YieldBreakdown explain={explain} idx={idx} />
+      <YieldBreakdown explain={explain} idx={idx} failed={stats === 'failed'} />
 
       {(facilities.length > 0 || wonders.length > 0) && (
         <div className="card">
@@ -209,7 +210,7 @@ function HexInspector({ d, idx, i }: { d: CountryData; idx: IndexJson; i: number
       )}
 
       <h3 className="section-title">All metrics</h3>
-      <MetricGroups rows={rows} scopeLabel={scope} country={country} />
+      <MetricGroups rows={rows} scopeLabel={scope} country={country} loading={stats === 'ready' ? undefined : stats} />
     </div>
   )
 }
@@ -234,7 +235,7 @@ function hexRankInfo(d: CountryData, m: Metric, i: number) {
 // open by default on desktop, collapsed in the phone bottom sheet; remembers the user's last toggle
 let whyOpen: boolean | null = null
 
-function YieldBreakdown({ explain, idx }: { explain: YieldExplain[]; idx: IndexJson }) {
+function YieldBreakdown({ explain, idx, failed }: { explain: YieldExplain[]; idx: IndexJson; failed?: boolean }) {
   const open = whyOpen ?? (typeof window === 'undefined' || window.innerWidth >= 900)
   return (
     <details className="card tilepanel-why" open={open} onToggle={(e) => { whyOpen = (e.currentTarget as HTMLDetailsElement).open }}>
@@ -248,7 +249,11 @@ function YieldBreakdown({ explain, idx }: { explain: YieldExplain[]; idx: IndexJ
             <YieldIcon y={e.key} size={16} />
             <strong>{YIELD_META[e.key].label}</strong>
             <span className="tilepanel-ytotal" style={{ color: YIELD_META[e.key].color }}>{e.actual}</span>
-            {e.computed !== e.actual && (
+            {e.loading ? (
+              <span className="tilepanel-ydiff is-loading" title={failed ? 'The tile statistics (metrics.bin) did not load, so the breakdown cannot be recomputed; the yield itself comes from the map data.' : 'The tile statistics (metrics.bin) are still downloading; the breakdown fills in when they arrive.'}>
+                {failed ? STATS_FAILED : LOADING_STATS}
+              </span>
+            ) : e.computed !== e.actual && (
               <span className="tilepanel-ydiff" title="Recomputed in the browser from the published metrics and point layers. Differences come from facilities not shipped to the browser or data that changed since the yields were built.">
                 recomputed {e.computed}
               </span>
@@ -256,11 +261,11 @@ function YieldBreakdown({ explain, idx }: { explain: YieldExplain[]; idx: IndexJ
           </div>
           <ul className="tilepanel-parts">
             {e.parts.map((p) => (
-              <li key={p.label} className={`${p.counted ? '' : 'is-uncounted'} ${p.missing ? 'is-missing' : ''}`}>
+              <li key={p.label} className={`${p.counted ? '' : 'is-uncounted'} ${p.missing || p.loading ? 'is-missing' : ''}`}>
                 <div className="tilepanel-part-main">
                   <span className="tilepanel-part-label">{p.label}</span>
                   <span className="tilepanel-part-amt">{p.amount}</span>
-                  <span className="tilepanel-part-pts">{p.counted ? `+${p.points}` : `(${p.points})`}</span>
+                  <span className="tilepanel-part-pts">{p.loading ? '…' : p.counted ? `+${p.points}` : `(${p.points})`}</span>
                 </div>
                 <div className="tilepanel-part-detail">
                   {p.detail}

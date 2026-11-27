@@ -10,22 +10,29 @@ import { computeLens, LENS_BY_ID, lensBasis } from '../lenses'
 import { useStore } from '../store'
 import type { CountryData, CountryId, IndexJson, Metric } from '../types'
 import {
-  axisInfo, brushFlags, brushSets, buildPlot, buildSeries, fmtShort, fmtVal, hasBrush, levelNoun, metricOptions,
-  provenance, resolveKey, rowLonLat, rowName, segOf, selectionTargets, unitCaption, X_PREFS, Y_PREFS,
+  axisInfo, brushFlags, brushSets, buildPlot, buildSeries, exMetric, fmtShort, fmtVal, hasBrush, levelNoun, metricOptions,
+  provenance, resolveKey, rowLonLat, rowName, segOf, selectionTargets, unitCaption, X_PREFS, Y_PREFS, yieldOfKey,
   type AxisInfo, type BrushMemo, type ColorBy, type ExLevel, type MetricOptions, type Norm, type PlotData, type Targets,
 } from './explorerData'
+import { statsState } from './tilePanelStats'
 import { ExplorerPlot } from './ExplorerPlot'
 import './Explorer.css'
 
 type ExState = ReturnType<typeof useStore.getState>['explorer']
-/** Extra Explorer settings kept in store.explorer (not yet declared in store.ts; merged by setExplorer). */
-interface ExExtra { adminLevel?: 'adm1' | 'adm2'; norm?: Norm; colorBy?: ColorBy }
-type Ex = ExState & ExExtra
-const setEx = (p: Partial<Ex>) => useStore.getState().setExplorer(p)
+/**
+ * Explorer settings kept in store.explorer. store.ts types adminLevel as 'adm1' | 'adm2'; the Explorer
+ * also offers Sri Lanka's DS divisions ('adm3'), which setExplorer merges like any other value.
+ */
+interface ExExtra { adminLevel?: 'adm1' | 'adm2' | 'adm3'; norm?: Norm; colorBy?: ColorBy }
+type Ex = Omit<ExState, 'adminLevel' | 'norm' | 'colorBy'> & ExExtra
+const setEx = (p: Partial<Ex>) => useStore.getState().setExplorer(p as Partial<ExState>)
+
+/** "Map X/Y": a game yield has its own map lens; any other metric goes to the "Any metric" lens. */
+const mapMetric = (k: string) => { const y = yieldOfKey(k); if (y) useStore.getState().setLens(y); else useStore.getState().setLens('custom', k) }
 
 const TABLE_ROWS = 200
 const FLY_ZOOM: Record<string, Record<CountryId, number | undefined>> = {
-  hex: { lka: undefined, usa: undefined }, adm2: { lka: 8, usa: 6.4 }, adm1: { lka: 7.4, usa: 5 },
+  hex: { lka: undefined, usa: undefined }, adm3: { lka: 9.4, usa: undefined }, adm2: { lka: 8, usa: 6.4 }, adm1: { lka: 7.4, usa: 5 },
 }
 
 export const Explorer = memo(function Explorer({ app }: { app: AppData }) {
@@ -44,12 +51,17 @@ export const Explorer = memo(function Explorer({ app }: { app: AppData }) {
     [scope, lka, usa],
   )
   const pending = wanted.filter((c) => !app.countries[c])
-  const level: ExLevel = ex.level === 'hex' ? 'hex' : ex.adminLevel ?? 'adm2'
+  // DS divisions exist for Sri Lanka only: with the US alone in scope, fall back to counties
+  const hasAdm3 = ds.some((d) => !!d.admin.adm3)
+  const wantLevel: ExLevel = ex.level === 'hex' ? 'hex' : ex.adminLevel ?? 'adm2'
+  const level: ExLevel = wantLevel === 'adm3' && !hasAdm3 ? 'adm2' : wantLevel
+  // tile statistics come from metrics.bin (yields and admin tables do not): which countries are still waiting
+  const statsWait = level === 'hex' ? ds.filter((d) => statsState(d, app.errors) !== 'ready') : []
   const norm: Norm = ex.norm ?? 'total'
   const colorBy: ColorBy = level === 'hex' ? ex.colorBy ?? 'country' : 'country'
 
   // ---- metrics & axes
-  const opts = useMemo(() => metricOptions(ds, level), [ds, level])
+  const opts = useMemo(() => metricOptions(ds, level, idx), [ds, level, idx])
   const xKey = resolveKey(ex.x, opts.byKey, X_PREFS, null)
   const yKey = resolveKey(ex.y, opts.byKey, Y_PREFS, xKey)
   const xOpt = xKey ? opts.byKey.get(xKey) : undefined
@@ -120,12 +132,20 @@ export const Explorer = memo(function Explorer({ app }: { app: AppData }) {
   }, [plot, level, xInfo, yInfo])
 
   if (!ds.length) return <div className="loading">Loading {wanted.map((c) => COUNTRY_META[c].name).join(' and ')}…</div>
+  const waitText = (d: CountryData) => (statsState(d, app.errors) === 'failed' ? 'statistics did not load' : 'loading statistics…')
+  // a wanted metric that only the still-loading matrix can provide: say so rather than plotting a stand-in
+  const wantedMissing = [ex.x, ex.y].some((k) => !yieldOfKey(k) && !opts.byKey.has(k))
+  const statsBlock = statsWait.length > 0 && statsWait.length === ds.length && wantedMissing
 
   const nounAll = levelNoun(ds, level)
   const anyExtensive = xInfo?.metric.kind === 'extensive' || yInfo?.metric.kind === 'extensive'
-  const missingNotes = series.filter((s) => s.missing).map((s) => {
+  const missingNotes = series.filter((s) => s.missing && !(level === 'hex' && !s.d.matrixReady)).map((s) => {
     const nm = COUNTRY_META[s.country].name
-    if (s.missing === 'level') return `${nm} has no ${level} table.`
+    if (s.missing === 'level') {
+      const levels = Object.values(s.d.meta.admin_levels)
+      return `${nm} has no ${lowerNoun(levelNoun(ds, level))}${levels.length ? ` (its finest admin level is the ${lowerNoun(levels[levels.length - 1].label)})` : ''}.`
+    }
+    if (level === 'hex' && !s.d.matrixReady) return ''
     const which = s.missing === 'both' ? `${xOpt?.label} or ${yOpt?.label}` : s.missing === 'x' ? xOpt?.label : yOpt?.label
     return `${nm}: no data for ${which}${level === 'hex' ? '' : ' at this level'}.`
   })
@@ -148,14 +168,15 @@ export const Explorer = memo(function Explorer({ app }: { app: AppData }) {
           onChange={(v) => setEx(v === 'hex' ? { level: 'hex' } : { level: 'admin', adminLevel: v })}
           items={[
             { v: 'hex', label: 'Tiles' },
+            ...(hasAdm3 ? [{ v: 'adm3' as ExLevel, label: levelNoun(ds.filter((d) => d.admin.adm3), 'adm3'), title: 'Sri Lankan DS divisions (no US equivalent below counties)' }] : []),
             { v: 'adm2', label: levelNoun(ds, 'adm2') },
             { v: 'adm1', label: levelNoun(ds, 'adm1') },
           ]} />
 
         <AxisRow axis="X" k={xKey} opts={opts} log={plot.logX} blocked={plot.logBlocked.x}
-          onKey={(k) => setEx({ x: k })} onLog={(b) => setEx({ logX: b })} lensActive={lensId === 'custom' && lensMetric === xKey} />
+          onKey={(k) => setEx(yieldOfKey(k) ? { x: k, logX: false } : { x: k })} onLog={(b) => setEx({ logX: b })} lensActive={isOnMap(xKey, lensId, lensMetric)} />
         <AxisRow axis="Y" k={yKey} opts={opts} log={plot.logY} blocked={plot.logBlocked.y}
-          onKey={(k) => setEx({ y: k })} onLog={(b) => setEx({ logY: b })} lensActive={lensId === 'custom' && lensMetric === yKey} />
+          onKey={(k) => setEx(yieldOfKey(k) ? { y: k, logY: false } : { y: k })} onLog={(b) => setEx({ logY: b })} lensActive={isOnMap(yKey, lensId, lensMetric)} />
 
         {level !== 'hex' && anyExtensive && (
           <>
@@ -176,8 +197,19 @@ export const Explorer = memo(function Explorer({ app }: { app: AppData }) {
       </div>
 
       {pending.length > 0 && <p className="explorer-note">{pending.map((c) => COUNTRY_META[c].name).join(', ')} still loading…</p>}
-      {!xInfo || !yInfo ? (
-        <div className="card">No metrics are available for this scope yet. The data pipeline may still be running.</div>
+      {statsWait.length > 0 && !statsBlock && [xKey, yKey].some((k) => !yieldOfKey(k)) && (
+        <p className="explorer-note" aria-busy="true">
+          {statsWait.map((d) => `${COUNTRY_META[d.id].name}: ${waitText(d)}`).join(' · ')} — its tiles join the plot when the tile data arrives.
+        </p>
+      )}
+      {statsBlock ? (
+        <div className="card" aria-busy="true">
+          {statsWait.some((d) => statsState(d, app.errors) === 'failed')
+            ? 'Tile statistics did not load. Game yields can still be plotted for tiles; districts and counties use their own tables.'
+            : 'Loading statistics… tile metrics appear when the tile data has downloaded. Game yields (in the X / Y lists) can be plotted already.'}
+        </div>
+      ) : !xInfo || !yInfo ? (
+        <div className="card">No metric is published for this scope and level.</div>
       ) : (
         <>
           <div className="explorer-axis-title y" title={yInfo.metric.description}>
@@ -202,7 +234,7 @@ export const Explorer = memo(function Explorer({ app }: { app: AppData }) {
           </div>
 
           <div className="explorer-stats" aria-label="Correlation by country">
-            {plot.segs.map((sg) => (
+            {plot.segs.filter((sg) => sg.s.missing !== 'level').map((sg) => (
               <div key={sg.country} className="explorer-stat">
                 <i className={`explorer-swatch ${sg.country}`} aria-hidden />
                 <b>{COUNTRY_META[sg.country].name}</b>
@@ -216,7 +248,7 @@ export const Explorer = memo(function Explorer({ app }: { app: AppData }) {
             ))}
             {(hidden > 0 || missingNotes.length > 0) && (
               <div className="explorer-note">
-                {hidden > 0 && <span>{hidden.toLocaleString()} {levelNoun(ds, level, hidden !== 1).toLowerCase()} with values ≤ 0 {hidden === 1 ? 'is' : 'are'} hidden on the log axis. </span>}
+                {hidden > 0 && <span>{hidden.toLocaleString()} {lowerNoun(levelNoun(ds, level, hidden !== 1))} with values ≤ 0 {hidden === 1 ? 'is' : 'are'} hidden on the log axis. </span>}
                 {missingNotes.join(' ')}
               </div>
             )}
@@ -236,8 +268,8 @@ export const Explorer = memo(function Explorer({ app }: { app: AppData }) {
           </div>
 
           <div className="explorer-defs">
-            <MetricDef axis="X" info={xInfo} ds={ds} level={level} log={plot.logX} onMap={() => useStore.getState().setLens('custom', xInfo.key)} />
-            <MetricDef axis="Y" info={yInfo} ds={ds} level={level} log={plot.logY} onMap={() => useStore.getState().setLens('custom', yInfo.key)} />
+            <MetricDef axis="X" info={xInfo} ds={ds} idx={idx} level={level} log={plot.logX} onMap={() => mapMetric(xInfo.key)} />
+            <MetricDef axis="Y" info={yInfo} ds={ds} idx={idx} level={level} log={plot.logY} onMap={() => mapMetric(yInfo.key)} />
           </div>
 
           <ExplorerTable plot={plot} level={level} xInfo={xInfo} yInfo={yInfo} brush={brush} targets={targets}
@@ -247,6 +279,14 @@ export const Explorer = memo(function Explorer({ app }: { app: AppData }) {
     </div>
   )
 })
+
+/** "Counties" → "counties", "DS Divisions" → "DS divisions" (acronyms keep their capitals). */
+const lowerNoun = (s: string) => s.split(' ').map((w) => (/^[A-Z]{2,}$/.test(w) ? w : w.toLowerCase())).join(' ')
+
+const isOnMap = (k: string | null, lensId: string, lensMetric: string | undefined) => {
+  const y = yieldOfKey(k)
+  return y ? lensId === y : lensId === 'custom' && lensMetric === k
+}
 
 const fmtSlope = (v: number) => (Math.abs(v) >= 100 || (Math.abs(v) < 0.01 && v !== 0) ? v.toExponential(1) : v.toFixed(2))
 
@@ -277,6 +317,7 @@ function Seg<T extends string>({ items, value, onChange, labelledBy }: {
  */
 function mapScaleTitle(m: Metric | undefined, plotLog: boolean, axis: 'X' | 'Y'): string {
   if (!m) return `Colour the map by this ${axis} metric`
+  if (yieldOfKey(m.key)) return `Show the ${m.label.replace(/ yield$/, '')} yield lens on the map (points per tile).`
   const b = lensBasis(m)
   const rule = b === 'density' ? 'always on a log ramp (per km² of tile)'
     : b === 'share' ? 'on a linear ramp (share of the tile)'
@@ -316,7 +357,7 @@ function AxisRow({ axis, k, opts, log, blocked, onKey, onLog, lensActive }: {
           log
         </label>
         <button type="button" className={`btn explorer-map ${lensActive ? 'on' : ''}`} disabled={!k} aria-pressed={lensActive}
-          title={mapScaleTitle(k ? opts.byKey.get(k)?.metric : undefined, log, axis)} onClick={() => k && useStore.getState().setLens('custom', k)}>
+          title={mapScaleTitle(k ? opts.byKey.get(k)?.metric : undefined, log, axis)} onClick={() => k && mapMetric(k)}>
           Map {axis}
         </button>
       </div>
@@ -362,10 +403,10 @@ function Tip({ plot, p, level, xInfo, yInfo, idx }: {
 // Definitions & provenance
 // ---------------------------------------------------------------------------------------------
 
-function MetricDef({ axis, info, ds, level, log, onMap }: { axis: 'X' | 'Y'; info: AxisInfo; ds: CountryData[]; level: ExLevel; log: boolean; onMap: () => void }) {
+function MetricDef({ axis, info, ds, idx, level, log, onMap }: { axis: 'X' | 'Y'; info: AxisInfo; ds: CountryData[]; idx: IndexJson | null; level: ExLevel; log: boolean; onMap: () => void }) {
   const per = ds.flatMap((d) => {
-    const m = d.metricByKey.get(info.key)
-    return m ? [{ c: d.id, m, pv: provenance(d, info.key) }] : []
+    const m = exMetric(d, info.key, idx)
+    return m ? [{ c: d.id, m, pv: provenance(d, info.key, idx) }] : []
   })
   const m = info.metric
   const sameMethod = per.every((x) => x.m.method === per[0].m.method)
@@ -373,7 +414,9 @@ function MetricDef({ axis, info, ds, level, log, onMap }: { axis: 'X' | 'Y'; inf
   const sameVintage = per.every((x) => x.pv.vintage === per[0].pv.vintage)
   const vintages = sameVintage ? [per[0]?.pv.vintage || 'n/a'] : per.map((x) => `${COUNTRY_META[x.c].short} ${x.pv.vintage || 'n/a'}`)
   const via = [...new Set(per.flatMap((x) => x.pv.via))]
-  const tfNote = info.tf === 'density'
+  const tfNote = yieldOfKey(info.key)
+    ? (level === 'hex' ? 'A tile’s points on the shared scale (per-tile intensity, comparable across both grids).' : 'Mean of its land tiles’ points: a yield is an intensity index, so units are compared by their mean, never their sum.')
+    : info.tf === 'density'
     ? (level === 'hex' ? 'Shown per km² of tile (value ÷ H3 tile area, including any water — the basis of yields and map lenses).' : 'Shown per km² of land (value ÷ the unit’s land area).')
     : info.tf === 'capita' ? 'Shown per resident (value ÷ population).'
       : m.kind === 'intensive' && m.weight === 'land' && /\/km2$/.test(m.unit) ? 'Measured per km² of land (excluding water), not per km² of tile.' : ''
@@ -387,7 +430,7 @@ function MetricDef({ axis, info, ds, level, log, onMap }: { axis: 'X' | 'Y'; inf
       <p className="explorer-def-desc">{m.description || 'No description.'} {tfNote && <span className="muted">{tfNote}</span>}</p>
       <div className="explorer-def-meta">
         <span className="chip">{m.unit ? unitCaption(m.unit) : 'unitless'}</span>
-        <span className="chip">{m.kind === 'extensive' ? 'Total (additive)' : 'Rate / average'}</span>
+        <span className="chip">{yieldOfKey(m.key) ? `Per-tile index (0–${(idx?.yield_scale.cap ?? 12) + 4} points)` : m.kind === 'extensive' ? 'Total (additive)' : 'Rate / average'}</span>
         <span className="chip">Vintage {vintages.join(' · ')}</span>
         {via.length > 0 && <span className="chip" title="Derived metric: sources are those of its inputs">Derived from {via.join(', ')}</span>}
       </div>

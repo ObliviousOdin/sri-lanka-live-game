@@ -5,17 +5,24 @@ Read it before adding a data domain or a UI panel.
 
 ## 1. Hex grids
 
-| Country | Grid | Avg hex area | Across (corner–corner) | Hexes (approx.) |
+| Country | Grid | Mean tile area (exported grid) | Across: flat–flat / corner–corner | Tiles |
 |---|---|---|---|---|
-| Sri Lanka | H3 resolution **6** | 36.1 km² | ~7.3 km | ~2,000 land + 2 rings of sea |
-| United States (50 states + DC) | H3 resolution **5** | 252.9 km² | ~17 km | ~37,000 land + 1 ring of sea |
+| Sri Lanka | H3 resolution **6** | 39.0 km² (global res-6 average: 36.1 km²) | ~6.7 km / ~7.7 km | 1,861 land + 435 sea (2 rings) |
+| United States (50 states + DC) | H3 resolution **5** | 255.2 km² (global res-5 average: 252.9 km²) | ~17.2 km / ~19.8 km | 38,405 land + 2,557 sea (1 ring) |
+
+The means are `avg_hex_km2` in `<cc>/meta.json` (all exported tiles, land and sea alike; Sri Lanka's land
+tiles alone average 39.0 km², the US land tiles 255.7 km²). H3 cells near the equator are larger than the
+global average for their resolution. Widths are those of a regular hexagon of the mean area.
 
 * H3 levels step by √7 in linear size. Res 6 sits inside the requested 5–10 km band for Sri Lanka.
-  For the US the request was "~25 km": res 5 (~17 km) is the nearest level (res 4 is ~45 km, which
-  would merge Manhattan, Brooklyn and Jersey City into one tile). The ratio (×7 area) is deliberate:
-  both maps have a comparable number of tiles across a metro area.
-* An optional **equal-tile** mode recomputes Sri Lanka at res 5, so a tile means the same land area in
-  both countries.
+  For the US the request was "~25 km": res 5 (~17 km across the flats, ~20 km corner to corner) is the
+  nearest level (res 4 is ~45 km across the flats, which would merge Manhattan, Brooklyn and Jersey City
+  into one tile). The ratio (×7 area) is deliberate: both maps have a comparable number of tiles across a
+  metro area.
+* *Possible extension, not implemented:* an equal-tile mode that recomputes Sri Lanka at res 5 so a tile
+  means the same area in both countries (`civmap.core.build(country, res=5, tag="core_r5")` can already
+  build the grid and crosswalk; reconcile, civ, export and the app have no res-5 Sri Lanka option). The
+  app's "True size" view only locks the km-per-pixel scale of the two maps.
 * Yields are computed from **densities per km² of tile area**, so a res-6 tile and a res-5 tile with the
   same intensity of activity get the same yield; compare yields across countries as per-tile means,
   never as sums (the US has ~20× more tiles). Totals of extensive metrics always sum absolute values.
@@ -23,6 +30,7 @@ Read it before adding a data domain or a UI panel.
   density alone is per km² of land.
 * Land hexes = every hex that contains at least one population-raster pixel inside the country boundary.
   Water hexes = k-rings around land hexes (2 rings for LKA, 1 ring for USA), classed Coast/Ocean.
+  `land_km2` = area inside the national boundary (summed pixel areas), *including* inland water.
 
 ## 2. Pipeline stages
 
@@ -46,9 +54,15 @@ fetch (cached) ──► parse (domain modules) ──► tidy tables (data/inte
    ```
 4. **Reconcile** (`civmap.reconcile`) — admin tables → hexes using the crosswalk:
    * extensive metrics (sums, e.g. GDP): `hex = Σ_admin value_admin × w(hex∩admin) / w(admin)`
-   * intensive metrics (rates, e.g. median income): `hex = Σ_admin value_admin × w(hex∩admin) / w(hex)`
-   * the weight `w` is `pop` (default), `land` (area), or a land-cover weight such as `cropland`.
-   * point tables (plants, ports, universities) → `h3.latlng_to_cell`, snapped to the nearest grid hex.
+   * intensive metrics (rates, e.g. median income): `hex = Σ_admin value_admin × w(hex∩admin) / w(hex)`;
+     admin units above the published level get the same weighted average of their pieces. Sea hexes take
+     no admin-level intensive value (NaN) unless the weight is `coast`.
+   * the weight `w` is `pop` (default), `land` (area), `coast` (ring-1 sea area) or a land-cover weight
+     such as `cropland`, `tree`, `built`, `grass`.
+   * point tables (plants, ports, universities) → the hex in the table's `h3` column (`h3.latlng_to_cell`,
+     snapped to the nearest grid hex), and the finest admin unit whose polygon contains the point
+     (point-in-polygon; offshore points: the hex's dominant unit). Each point's whole value goes to that
+     piece, so hex totals and admin totals are both exact sums of points.
 5. **Civ layer** (`civmap.civ`) — terrain class, yields, districts, wonders, citizens, cities (§4).
 6. **Export** (`civmap.export`) — static files in `web/public/data/<country>/` (§3).
 
@@ -65,12 +79,13 @@ Run everything: `python -m civmap.run` (or `--country lka --stage reconcile`, se
 | `sources.json` | list of `Source` | idem |
 
 `Metric` fields: `key` (same key in both countries when comparable), `label`, `unit`, `category`,
-`kind` (`extensive`/`intensive`), `weight` (`pop`/`land`/`cropland`/`tree`/`built`), `table`
+`kind` (`extensive`/`intensive`), `weight` (`pop`/`land`/`cropland`/`tree`/`built`/`grass`/`coast`), `table`
 (file stem, e.g. `admin_adm2`), `sources` (ids), `vintage`, `description`, `method`, `better`
 (`higher`/`lower`/`neutral`).
 
-Money is **current US dollars** (market exchange rate of the vintage year). The app can display
-Sri Lankan values PPP-adjusted using the World Bank PPP conversion factor.
+Money is **current US dollars** (market exchange rate of the vintage year). The app shows no PPP-adjusted
+tile, admin or city values; purchasing-power comparisons are limited to the Advisors' national remarks,
+which quote the World Bank PPP indicators in `national.json`.
 
 ## 4. Civ translation (implemented in `civmap/civ.py`, documented in METHODOLOGY.md)
 
@@ -93,15 +108,23 @@ Sri Lankan values PPP-adjusted using the World Bank PPP conversion factor.
 ## 5. Web data contract (web/public/data/)
 
 ```
-index.json                    countries, build date, global yield scales
-sources.json                  all sources (id, title, publisher, url, license, vintage, accessed)
+index.json                    countries, build date, global yield scales, district rule texts
+sources.json                  all sources (id, title, publisher, url, license, vintage, accessed, metrics per
+                              country, used_in {cc: ['cities' | 'wonders'], national: ['advisors']},
+                              provenance 'download' | 'software' | 'none', n_downloads, total_bytes and the
+                              first 20 download records: url, bytes, fetched_at, sha256 prefix)
 national.json                 World Bank national indicators for both countries
-<cc>/meta.json                hex res, bbox, metric list (Metric + stats), admin levels, column order
+<cc>/meta.json                hex res, bbox, metric list (Metric + stats), admin levels, column order. Each
+                              metric's `method` holds only that country's part of a two-country text.
+                              stats: n, min, p05, p50, p95, max over land tiles; `total` (extensive
+                              metrics) over all tiles, land and sea rings
 <cc>/hexes.json               {h3:[…], terrain:[…], district:[…], adm1:[…], adm2:[…], yields:{gold:[…],…}}
-<cc>/metrics.bin              Float32 column-major matrix, n_hex × n_metrics (NaN = no data), values rounded
-                              to 13 mantissa bits (~4 significant digits, relative error ≤ 6e-5)
-<cc>/metrics.bin.gz           the same bytes, gzip level 9 (US ~8.7 MB vs 23 MB); the app fetches it and
-                              inflates it with DecompressionStream, falling back to metrics.bin
+<cc>/metrics.bin.gz           Float32 column-major matrix, n_hex × n_metrics (NaN = no data), values rounded
+                              to 13 mantissa bits (~4 significant digits, relative error ≤ 6e-5), gzip level 9
+                              (US ~8.7 MB vs 23 MB raw); the app fetches it and inflates it with
+                              DecompressionStream (fflate where the browser lacks it)
+<cc>/metrics.bin              the same matrix uncompressed: written by the pipeline for local inspection,
+                              gitignored and not loaded by the app
 <cc>/admin_<level>.json       units with id, name, parent, centroid, aggregated metric values
 <cc>/admin_<level>.geojson    simplified boundaries for outlines and admin picking
 <cc>/points.json              facilities used for wonders/districts (with source ids)

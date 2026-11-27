@@ -1,5 +1,5 @@
 {
- "built_at": "2026-11-27T01:47:57+00:00",
+ "built_at": "2026-11-27T02:48:56+00:00",
  "countries": [
   {
    "id": "lka",
@@ -148,22 +148,22 @@
   {
    "code": "harbor",
    "label": "Harbor",
-   "rule": "Seaport with \u2265 1 million tonnes of annual cargo, or one of the country's 3 busiest ports."
+   "rule": "Seaports in the tile handle \u2265 1 million tonnes of annual cargo, or the tile holds one of the country's 3 busiest ports."
   },
   {
    "code": "aerodrome",
    "label": "Aerodrome",
-   "rule": "Airport with \u2265 1 million annual passenger boardings (US: FAA enplanements, about half of all arriving + departing passengers), or the country's busiest airport by boardings. Sri Lanka has no open airport-level passenger statistics, so there every large airport with scheduled service (OurAirports classification) qualifies."
+   "rule": "Airports in the tile have \u2265 1 million annual passenger boardings (US: FAA enplanements, about half of all arriving + departing passengers), or the tile holds the country's busiest airport by boardings. Sri Lanka has no open airport-level passenger statistics, so there every large airport with scheduled service (OurAirports classification) qualifies."
   },
   {
    "code": "campus",
    "label": "Campus",
-   "rule": "\u2265 2,000 research works in 5 years from institutions in the tile (OpenAlex), or STEM workforce location quotient \u2265 1.8 with \u2265 300 people/km\u00b2."
+   "rule": "\u2265 2,000 research works in 5 years from institutions in the tile (OpenAlex), or STEM (Engineers class) workforce location quotient \u2265 1.8 with \u2265 300 people per km\u00b2 of land."
   },
   {
    "code": "commercial_hub",
    "label": "Commercial Hub",
-   "rule": "Finance, real-estate & professional-services employment LQ \u2265 1.15 and either Gold \u2265 7 or GDP density in the country's top 1% of tiles."
+   "rule": "Land tile with finance, real-estate & professional-services employment LQ \u2265 1.15 and either Gold \u2265 7 or GDP density in the top 1% of the country's land tiles."
   },
   {
    "code": "industrial_zone",
@@ -178,17 +178,17 @@
   {
    "code": "power_plant",
    "label": "Power Plant",
-   "rule": "Thermal, nuclear, wind or solar capacity \u2265 500 MW in the tile."
+   "rule": "Other (non-hydro) generating capacity \u2014 thermal, nuclear, wind, solar\u2026 \u2014 \u2265 500 MW in the tile."
   },
   {
    "code": "holy_site",
    "label": "Holy Site",
-   "rule": "One of the country's most notable religious sites (top 10 in Sri Lanka, top 25 in the US by Wikipedia language editions), or worship-site density in the top 1% of the country's tiles."
+   "rule": "Holds one of the country's most notable religious sites (top 10 in Sri Lanka, top 25 in the US by Wikipedia language editions), or worship-site density in the top 1% of the country's land tiles."
   },
   {
    "code": "theater_square",
    "label": "Theater Square",
-   "rule": "UNESCO World Heritage (cultural) site, \u2265 5 museums, or arts/recreation/hospitality LQ \u2265 2 with \u2265 300 people/km\u00b2."
+   "rule": "UNESCO World Heritage cultural or mixed site, \u2265 5 museums (Wikidata), or arts/recreation/hospitality employment LQ \u2265 2 with \u2265 300 people per km\u00b2 of land."
   },
   {
    "code": "encampment",
@@ -203,27 +203,27 @@
   {
    "code": "plantation",
    "label": "Plantation",
-   "rule": "Perennial/tree-crop share of agriculture \u2265 40%, Food yield \u2265 3 and \u2265 40% tree + crop cover."
+   "rule": "Sri Lanka: \u2265 15% of the tile's land under tea, rubber or coconut (district crop extents of the Economic Census 2013/14, allocated to tiles by tree cover), \u2265 40% tree + crop cover, < 25% built-up, < 75% strictly protected and no national park. US: fruit & nut orchards, citrus and vineyards \u2265 40% of the county's cropland (Census of Agriculture), Food yield \u2265 3 and \u2265 40% tree + crop cover."
   },
   {
    "code": "farmland",
    "label": "Farmland",
-   "rule": "Food yield \u2265 4 and \u2265 40% cropland."
+   "rule": "Land tile with Food yield \u2265 4 and \u2265 40% cropland (ESA WorldCover)."
   },
   {
    "code": "fishery",
    "label": "Fishery",
-   "rule": "Sea tile with Food yield \u2265 6 from fish landings (\u2265 31.6 t per km\u00b2 of coastal sea)."
+   "rule": "Sea tile with Food yield \u2265 6 from fish landings (\u2265 31.6 t landed per km\u00b2 of tile)."
   },
   {
    "code": "neighborhood",
    "label": "Neighborhood",
-   "rule": "\u2265 1,500 people/km\u00b2 without another district."
+   "rule": "Land tile with \u2265 1,500 people per km\u00b2 of land (also when the tile has other districts)."
   },
   {
    "code": "preserve",
    "label": "Preserve",
-   "rule": "\u2265 75% strictly protected (WDPA, IUCN categories Ia\u2013IV), or a national park with visitor statistics."
+   "rule": "Land tile \u2265 75% strictly protected (WDPA, IUCN categories Ia\u2013IV), or holding a national park with visitor statistics."
   }
  ],
  "terrain_codes": [

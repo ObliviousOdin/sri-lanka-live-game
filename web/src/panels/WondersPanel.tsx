@@ -171,11 +171,13 @@ export function WondersPanel({ app }: { app: AppData }) {
         Real landmarks promoted to Civ wonders by published ranking rules — every list below states its rule and source.
       </p>
 
-      {total === 0 ? (
-        <section className="card wonders-empty" aria-label="No wonders yet">
-          <h3>No wonders yet — data still building</h3>
+      {total === 0 && COUNTRIES.some((c) => !app.countries[c] && !app.errors?.[c]) ? (
+        <div className="loading">Loading wonders…</div>
+      ) : total === 0 ? (
+        <section className="card wonders-empty" aria-label="No wonders">
+          <h3>No wonders in this data export</h3>
           <p className="muted">
-            Wonders are picked by rules once their data domains finish: national parks by visitors, universities by research
+            Wonders are picked by rules from the published data: national parks by visitors, universities by research
             output, ports by cargo volume, power stations by capacity, airports by passenger boardings, every UNESCO World Heritage
             site, and the most widely documented holy sites.
           </p>

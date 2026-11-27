@@ -159,7 +159,8 @@ RENEWABLE_FUELS = {"Hydro", "Wind", "Solar", "Geothermal", "Biomass"}
 
 METRICS = [
     Metric("power_capacity_mw", "Power plant capacity", "MW", "energy", "extensive", "none",
-           "points_power_plants", ["eia_860", "wri_gppd", "ceb_annual_report_2023", "wikidata"],
+           "points_power_plants", ["eia_860", "wri_gppd", "ceb_annual_report_2023", "ceb_statistical_digest_2025",
+                                   "wikidata"],
            "USA 2025; LKA 2023 (CEB plants) / GPPD v1.3.0, capacity year not stated (others)",
            "Installed (nameplate) electric generating capacity of utility-scale power plants.",
            "USA: EIA-860 2025 generator file, sheet 'Operable', summing nameplate MW of generators with "
@@ -177,7 +178,7 @@ METRICS = [
            "have no published locations and are missing (see coverage in the infra report). Rooftop "
            "solar is not included in either country.", "higher"),
     Metric("generation_gwh", "Electricity generation", "GWh", "energy", "extensive", "none",
-           "points_power_plants", ["eia_923", "ceb_annual_report_2023", "wri_gppd"],
+           "points_power_plants", ["eia_923", "ceb_annual_report_2023", "ceb_statistical_digest_2025", "wri_gppd"],
            "USA 2025; LKA 2023 (CEB) / 2017 estimate (others)",
            "Annual net electricity generation of each plant.",
            "USA: EIA-923 2025 'Page 1 Generation and Fuel Data' net generation (MWh) summed over all "
@@ -191,17 +192,19 @@ METRICS = [
            "generation_gwh_gppd_estimate. USA: plants reported in EIA-923 without an operating/standby generator "
            "in EIA-860 are not mapped (count and GWh in the infra report). Columns generation_year and "
            "generation_basis record which applies.", "higher"),
-    Metric("renewable_capacity_mw", "Renewable power capacity", "MW", "energy", "extensive", "none", "hex",
+    Metric("renewable_capacity_mw", "Renewable power capacity", "MW", "energy", "extensive", "none",
+           "points_power_plants",
            ["eia_860", "wri_gppd", "ceb_annual_report_2023"], "USA 2025; LKA 2023 (CEB) / GPPD v1.3.0 (others)",
            "Installed capacity of hydro (excl. pumped storage), wind, solar, geothermal and biomass plants per hex.",
-           "Plant-level capacity of renewable technologies summed per snapped H3 cell. For US plants the "
+           "Plant-level capacity of renewable technologies (column renewable_capacity_mw of the plant points), "
+           "summed per snapped H3 cell and per admin unit containing the plant. For US plants the "
            "renewable part is computed per generator (EIA technologies Conventional Hydroelectric, "
            "Onshore/Offshore Wind, Solar PV/Thermal, Geothermal, Wood/Wood Waste Biomass, Landfill Gas, "
            "Other Waste Biomass); municipal solid waste, pumped storage and batteries are not counted. "
-           "The hex table also carries power_capacity_mw / generation_gwh aggregated per hex for "
-           "convenience (identical to aggregating the plant points).", "higher"),
+           "The infra hex table carries the same per-hex sums of power_capacity_mw / generation_gwh / "
+           "renewable_capacity_mw for convenience.", "higher"),
     Metric("port_cargo_t", "Seaport cargo (imports + exports)", "t", "trade", "extensive", "none", "points_ports",
-           ["imf_portwatch"], "2025",
+           ["imf_portwatch", "dcs_abstract_2025_transport"], "2025",
            "Estimated annual maritime import + export volume handled by each port (metric tonnes).",
            "IMF PortWatch daily port activity (AIS-based estimates of tonnes discharged / loaded for trade), "
            "import + export summed over calendar year 2025, all vessel types. Same method in both countries. "

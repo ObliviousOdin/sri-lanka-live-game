@@ -483,10 +483,36 @@ export function unitContaining(d: CountryData, level: string, geo: GeoJSON.Featu
   return hits[0]
 }
 
-/** The admin unit of a City View metro: the polygon containing the city's coordinates (fallback: the centre tile's dominant unit). */
+/**
+ * The unit a city's `admin_ids` name at `level` when they name exactly one (Sri Lanka: the district
+ * that contains the city point, located by the pipeline; a single-county US metro: that county).
+ * Multi-county metros return null: which county holds the city point needs the boundary file.
+ */
+function cityUnitFromIds(d: CountryData, level: string, c: City): number | null {
+  const ids = c.admin_ids ?? []
+  if (!ids.length) return null
+  const units = unitById(d, level)
+  const at = ids.filter((id) => units.has(String(id)))
+  if (at.length !== 1 || at.length !== ids.length) return null
+  const t = d.admin[level]
+  const k = t ? t.units.indexOf(units.get(String(at[0]))!) : -1
+  return k >= 0 ? k : null
+}
+
+/** True when only the boundary file (admin_<level>.geojson) can tell which unit contains the city point. */
+export function cityNeedsGeo(d: CountryData, level: string, c: City): boolean {
+  return !!d.admin[level] && cityUnitFromIds(d, level, c) == null
+}
+
+/**
+ * The admin unit of a City View metro: the polygon containing the city's coordinates, or the single
+ * unit its admin_ids name (fallback: the centre tile's dominant unit, exact = false).
+ */
 export function cityUnit(d: CountryData, level: string, c: City, geo?: GeoJSON.FeatureCollection | null): { index: number; exact: boolean } | null {
   const ui = geo ? unitContaining(d, level, geo, c.lon, c.lat, c.admin_ids) : null
   if (ui != null) return { index: ui, exact: true }
+  const byIds = cityUnitFromIds(d, level, c)
+  if (byIds != null) return { index: byIds, exact: true }
   const ci = d.hexIndex.get(c.centre)
   const u = ci != null ? adminUnitOfHex(d, level, ci) : null
   return u ? { index: u.index, exact: false } : null

@@ -62,22 +62,6 @@ export function sortedDomain(sorted: ArrayLike<number>, log: boolean, qlo = 0.02
   return [lo, hi]
 }
 
-/** Robust domain (quantiles) of positive / finite values across arrays. */
-export function robustDomain(arrays: ArrayLike<number>[], log: boolean, qlo = 0.02, qhi = 0.98): [number, number] {
-  let total = 0
-  for (const arr of arrays) total += arr.length
-  // typed buffer + typed-array sort (numeric, no comparator): ~10x faster than Array.sort((a, b) => a - b)
-  const buf = new Float64Array(total)
-  let k = 0
-  for (const arr of arrays) {
-    for (let i = 0; i < arr.length; i++) {
-      const v = arr[i]
-      if (Number.isFinite(v) && (!log || v > 0)) buf[k++] = v
-    }
-  }
-  return sortedDomain(buf.subarray(0, k).sort(), log, qlo, qhi)
-}
-
 export function scaleT(v: number, dom: [number, number], log: boolean): number {
   if (!Number.isFinite(v)) return NaN
   if (log) {

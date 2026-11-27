@@ -194,6 +194,8 @@ export interface DistrictDef {
   code: string
   label: string
   rule: string
+  /** optional: ranked-site cut-off per country when the rule names one (Holy Site: top N listed sites by Wikipedia editions) */
+  top?: Partial<Record<CountryId, number>>
 }
 
 export interface IndexJson {

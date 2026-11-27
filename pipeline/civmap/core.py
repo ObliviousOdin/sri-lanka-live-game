@@ -60,12 +60,19 @@ METRICS = [
            "Resident population.",
            "WorldPop 2020 pixels summed per hex, rescaled so every district (LKA) / county (USA) "
            "matches the official 2023 estimate."),
-    Metric("land_km2", "Land area", "km2", "population", "extensive", "land", "hexes",
-           ["ocha_codab_lka", "census_cb_2023"], "2023", "Land area inside the country boundary.",
-           "Sum of raster-pixel areas whose centres fall inside the admin boundaries."),
+    Metric("land_km2", "Area inside boundary (incl. inland water)", "km2", "population", "extensive", "land",
+           "hexes", ["ocha_codab_lka", "census_cb_2023", "worldpop_2020"], "2023",
+           "Area inside the national boundary, including lakes, reservoirs and lagoons (sea excluded); "
+           "the 'land' of land tiles and of population density.",
+           "Sum of the areas of WorldPop raster pixels (LKA ~100 m, USA ~1 km) whose centres fall inside the "
+           "admin boundaries, plus populated pixels that straddle the boundary. Inland water is NOT removed, so "
+           "the totals exceed official land areas (Sri Lanka 66,074 km2 vs 65,610 km2 total area incl. inland "
+           "water, World Bank AG.SRF.TOTL.K2; USA 9.30 M km2 vs Census land area ~9.15 M km2)."),
     Metric("pop_density", "Population density", "persons/km2", "population", "intensive", "land", "hexes",
            ["worldpop_2020", "unfpa_codps_lka", "census_pep_2023"], "2023",
-           "People per km² of land.", "pop / land_km2", "neutral"),
+           "People per km² of land (area inside the boundary, incl. inland water).",
+           "pop / land_km2 (tiles with more than 0.5 km2 inside the boundary). land_km2 includes inland water, "
+           "so densities are slightly lower than per km2 of dry land.", "neutral"),
 ]
 
 POP_RASTER = {

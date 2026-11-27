@@ -76,7 +76,7 @@ export function Legend({ legend, note }: { legend: L | null; note?: string }) {
     return (
       <div className="legend lgx-nodata" role="status">
         <div className="legend-title">{legend.title}</div>
-        <div className="legend-note">{legend.detail}. Pick another metric in the lens menu.</div>
+        <div className="legend-note">{legend.detail}.{legend.failed ? '' : ' Pick another metric in the lens menu.'}</div>
       </div>
     )
   }

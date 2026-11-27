@@ -78,7 +78,7 @@ function ringIndex(d: CountryData) {
 
 /**
  * National citizen-class mix: Σ tiles cit_k / Σ tiles Σ_k cit_k (the same basis as a city's
- * `citizens`, so the two are directly comparable). null while the labour data is still building.
+ * `citizens`, so the two are directly comparable). null while metrics.bin is loading or without labour data.
  */
 const natCache = new WeakMap<CountryData, { shares: Record<string, number>; workers: number; employed: number | null } | null>()
 function nationalCitizenMix(d: CountryData) {
@@ -327,7 +327,7 @@ function CityList({ app }: { app: AppData }) {
       </div>
       {!usa && filter !== 'lka' && <p className="muted cityview-note">Loading United States…</p>}
       {shown.length === 0 && (usa || filter === 'lka') && (
-        <p className="muted cityview-note">No cities yet — the City View payload is still being built.</p>
+        <p className="muted cityview-note">No City View cities in this data export (cities.json is empty).</p>
       )}
       <ul className="cityview-list">
         {shown.map(({ d, c, rank, n }) => {
@@ -660,7 +660,7 @@ function CityCitizens({ d, city }: { d: CountryData; city: City }) {
     return (
       <section className="card" aria-label="Citizens">
         <h3>Citizens</h3>
-        <p className="muted cityview-note">Workforce composition is still being built — citizens appear once the labour-force data domain finishes.</p>
+        <p className="muted cityview-note">No workforce composition is published for this city’s tiles, so it has no citizens.</p>
       </section>
     )
   }
@@ -713,7 +713,7 @@ function CityCitizens({ d, city }: { d: CountryData; city: City }) {
         })}
       </div>
       <p className="cityview-foot">
-        {nat ? `× = city share ÷ national share (location quotient). National mix = all tiles' citizen classes${nat.employed ? `; classes cover ${fmtPct(Math.min(100, (nat.workers / nat.employed) * 100), 0)} of the employed` : ''}.` : 'National mix not available yet.'}
+        {nat ? `× = city share ÷ national share (location quotient). National mix = all tiles' citizen classes${nat.employed ? `; classes cover ${fmtPct(Math.min(100, (nat.workers / nat.employed) * 100), 0)} of the employed` : ''}.` : !d.matrixReady ? 'National mix: loading statistics…' : 'No national mix: the citizen classes are not published by tile.'}
       </p>
       {src.length > 0 && <SourceChips ids={src} />}
     </section>
@@ -731,7 +731,7 @@ function CityIndustries({ d, city }: { d: CountryData; city: City }) {
     return (
       <section className="card" aria-label="Top industries">
         <h3>Top industries</h3>
-        <p className="muted cityview-note">Industry employment by tile is still being built.</p>
+        <p className="muted cityview-note">No industry employment is published for this city’s tiles.</p>
       </section>
     )
   }
@@ -799,7 +799,7 @@ function CityDistricts({ d, city, idx }: { d: CountryData; city: City; idx: Inde
         </ul>
       )}
       <h3 className="cityview-h3b">Wonders in the city</h3>
-      {wonders.length === 0 ? <p className="muted cityview-note">No wonders within the ring{d.wonders.length ? '' : ' (wonder data still building)'}.</p> : (
+      {wonders.length === 0 ? <p className="muted cityview-note">No wonders within the ring{d.wonders.length ? '' : ` (no wonders in ${COUNTRY_META[d.id].name}’s data export)`}.</p> : (
         <ul className="cityview-wonders">
           {wonders.map(({ name, w }) => (
             <li key={name}>

@@ -320,8 +320,22 @@ export function landYieldMeans(d: CountryData): { mean: Record<YieldKey, number>
 // ---------------------------------------------------------------------------------------------
 // Holy sites: the Faith bonus counts every listed site, the Holy Site district only the top N
 // ---------------------------------------------------------------------------------------------
-/** civ.py: holy_top = the 10 (LKA) / 25 (US) listed holy sites with the most Wikipedia editions. */
-export const HOLY_DISTRICT_TOP: Record<string, number> = { lka: 10, usa: 25 }
+/** Used only when index.json states no cut-off at all (civ.py: holy_top, 10 in Sri Lanka / 25 in the US). */
+const HOLY_DISTRICT_TOP_FALLBACK: Record<string, number> = { lka: 10, usa: 25 }
+
+/**
+ * How many of a country's listed holy sites qualify a tile for the Holy Site district. Read from
+ * index.json: the district's `top` field when exported, else the cut-off its rule text states
+ * ("top 10 in Sri Lanka, top 25 in the US"), so the panel never disagrees with the published rule.
+ */
+export function holyDistrictTop(idx: IndexJson, country: CountryId): number {
+  const def = idx.districts.find((x) => x.code === 'holy_site')
+  const given = def?.top?.[country]
+  if (given != null && Number.isFinite(given)) return given
+  const re = country === 'lka' ? /top\s+(\d+)\s+in\s+Sri Lanka/i : /top\s+(\d+)\s+in\s+the\s+(US|United States)\b/i
+  const m = def?.rule ? re.exec(def.rule) : null
+  return m ? Number(m[1]) : HOLY_DISTRICT_TOP_FALLBACK[country] ?? 10
+}
 
 const holyRankCache = new WeakMap<CountryData, Map<string, number>>()
 /** Rank (1 = most Wikipedia editions) of each listed holy site, by point id. */
@@ -354,18 +368,44 @@ export interface YieldPart {
   points: number
   counted: boolean
   missing?: boolean
+  /** the tile statistics (metrics.bin) are still downloading: no value yet, not missing data */
+  loading?: boolean
   metric?: string
   sources?: string[]
 }
-export interface YieldExplain { key: YieldKey; actual: number; computed: number; parts: YieldPart[]; note?: string }
+export interface YieldExplain { key: YieldKey; actual: number; computed: number; parts: YieldPart[]; note?: string; loading?: boolean }
+
+export const LOADING_STATS = 'loading statistics…'
+export const STATS_FAILED = 'statistics did not load'
+
+/** State of a country's tile statistics (metrics.bin): downloading, failed, or loaded. */
+export type StatsState = 'ready' | 'loading' | 'failed'
+export function statsState(d: CountryData | undefined, errors?: Partial<Record<string, { stage: string }>>): StatsState {
+  if (d?.matrixReady) return 'ready'
+  const e = d ? errors?.[d.id] : undefined
+  return e && (e.stage === 'statistics' || e.stage === 'map') ? 'failed' : 'loading'
+}
 
 const BASE_LABELS: Record<string, string> = {
   gold: 'GDP', production: 'Industrial GVA', food: 'Agricultural GVA', food_sea: 'Fish landings',
   science: 'STEM workers', culture: 'Arts, recreation & hospitality jobs', faith: 'Places of worship',
 }
 
-// culture / faith bonuses are constants in civ.py (not in index.json)
-const WHS_PTS = 2, WHS_MAX = 2, MUSEUM_MIN = 3, PARK_VIS_MIN = 1_000_000, HOLY_PTS = 2
+type BonusKey = keyof NonNullable<CountryData['hexes']['bonus']>
+const bonusCache = new WeakMap<object, Map<string, Map<number, number>>>()
+/**
+ * Per-tile yield-bonus input exported by the pipeline (hexes.json `bonus`, the exact values civ.py
+ * scored), or undefined when this export has no such input. Tiles not listed hold 0.
+ */
+function bonusValue(d: CountryData, key: BonusKey, i: number): number | undefined {
+  const b = d.hexes.bonus?.[key]
+  if (!b) return undefined
+  let byKey = bonusCache.get(d.hexes)
+  if (!byKey) { byKey = new Map(); bonusCache.set(d.hexes, byKey) }
+  let m = byKey.get(key)
+  if (!m) { m = new Map(b.i.map((t, k) => [t, b.v[k]])); byKey.set(key, m) }
+  return m.get(i) ?? 0
+}
 
 function logYield(dens: number, base: number, cap: number) {
   if (!(dens >= base) || !Number.isFinite(dens)) return 0
@@ -378,12 +418,32 @@ function stepBonus(v: number, steps: [number, number][]) {
 }
 const fmtThreshold = (v: number, unit: string) => (isMoneyUnit(unit) ? fmtUsd(v) : fmtNumber(v))
 
-export function explainYields(d: CountryData, idx: IndexJson, i: number): YieldExplain[] {
+/**
+ * Culture and Faith bonus rules from index.json `yield_scale` (civ.py CULTURE_BONUS / FAITH_BONUS).
+ * The defaults only stand in for an older export that did not ship them.
+ */
+function bonusRules(idx: IndexJson) {
+  const cb = idx.yield_scale.culture_bonus
+  const fb = idx.yield_scale.faith_bonus
+  return {
+    culture: {
+      per_whs: cb?.per_whs ?? 2, max_whs: cb?.max_whs ?? 2, museums_min: cb?.museums_min ?? 3, museums_bonus: cb?.museums_bonus ?? 1,
+      park_visitors_min: cb?.park_visitors_min ?? 1_000_000, park_bonus: cb?.park_bonus ?? 1,
+    },
+    faith: { per_holy_site: fb?.per_holy_site ?? 2, max_holy_sites: fb?.max_holy_sites ?? 1 },
+  }
+}
+
+/** `failed`: the tile statistics did not load (shown instead of "loading statistics…"). */
+export function explainYields(d: CountryData, idx: IndexJson, i: number, failed = false): YieldExplain[] {
   const ys = idx.yield_scale
   const cap = ys.cap
+  const rules = bonusRules(idx)
   const area = d.hexArea[i]
   const sea = d.hexes.ring[i] > 0
   const pts = pointsInHex(d, d.hexes.h3[i])
+  const loading = !d.matrixReady
+  const waitText = failed ? STATS_FAILED : LOADING_STATS
 
   const basePart = (bkey: string, label?: string): YieldPart => {
     const b = ys.bases[bkey]
@@ -392,7 +452,10 @@ export function explainYields(d: CountryData, idx: IndexJson, i: number): YieldE
     const name = label ?? m?.label ?? BASE_LABELS[bkey] ?? b.metric
     const baseTxt = `${fmtThreshold(b.base, isMoneyUnit(m?.unit ?? '') || b.unit.startsWith('US$') ? 'usd' : '')}/km²`
     if (!m) {
-      return { label: name, amount: 'awaiting data', detail: `1 point at ${baseTxt} (${b.unit}) · ${b.metric} not published yet`, points: 0, counted: true, missing: true, metric: b.metric }
+      return { label: name, amount: 'not published', detail: `1 point at ${baseTxt} (${b.unit}) · ${b.metric} is not in this export`, points: 0, counted: true, missing: true, metric: b.metric }
+    }
+    if (loading) {
+      return { label: name, amount: waitText, detail: `1 point at ${baseTxt} (${b.unit})`, points: 0, counted: true, loading: true, metric: m.key, sources: m.sources }
     }
     const v = d.matrix[m.col * d.n + i]
     if (!Number.isFinite(v)) {
@@ -409,10 +472,17 @@ export function explainYields(d: CountryData, idx: IndexJson, i: number): YieldE
     }
   }
 
-  /** tile total from a metric if published, else from the exported point layer(s). */
-  const tileAmount = (metricKey: string | null, layers: string[], col: 'value' | 'count'): { v: number; from: string; sources?: string[] } | null => {
+  type Amount = { v: number; from: string; sources?: string[]; loading?: boolean }
+  /**
+   * Tile total of a bonus input: the pipeline's own per-tile input (hexes.json `bonus`) when exported,
+   * else the published metric, else the exported point layer(s).
+   */
+  const tileAmount = (bonusKey: BonusKey | null, metricKey: string | null, layers: string[], col: 'value' | 'count'): Amount | null => {
     const m = metricKey ? d.metricByKey.get(metricKey) : undefined
+    const b = bonusKey ? bonusValue(d, bonusKey, i) : undefined
+    if (b !== undefined) return { v: b, from: 'the facilities the yields were built from', sources: m?.sources }
     if (m) {
+      if (loading) return { v: NaN, from: `metric ${m.key}`, sources: m.sources, loading: true }
       const v = d.matrix[m.col * d.n + i]
       return { v: Number.isFinite(v) ? v : 0, from: `metric ${m.key}`, sources: m.sources }
     }
@@ -429,10 +499,14 @@ export function explainYields(d: CountryData, idx: IndexJson, i: number): YieldE
     const partial = pl.total > pl.rows.length ? `, top ${fmtNumber(pl.rows.length)} of ${fmtNumber(pl.total)} shipped` : ''
     return { v, from: `${layer.replace(/_/g, ' ')} points${partial}` }
   }
-  const bonusPart = (label: string, amt: ReturnType<typeof tileAmount>, unit: string, points: (v: number) => number, rule: string): YieldPart =>
-    amt
-      ? { label, amount: `${fmtNumber(amt.v)} ${amt.v === 1 ? unit.replace(/s$/, '') : unit}`.trim(), detail: `${rule} · from ${amt.from}`, points: points(amt.v), counted: true, sources: amt.sources }
-      : { label, amount: 'awaiting data', detail: rule, points: 0, counted: true, missing: true }
+  const bonusPart = (label: string, amt: Amount | null, unit: string, points: (v: number) => number, rule: string): YieldPart => {
+    if (!amt) return { label, amount: 'not published', detail: rule, points: 0, counted: true, missing: true }
+    if (amt.loading) return { label, amount: waitText, detail: rule, points: 0, counted: true, loading: true, sources: amt.sources }
+    return {
+      label, amount: `${fmtNumber(amt.v)} ${amt.v === 1 ? unit.replace(/s$/, '') : unit}`.trim(), detail: `${rule} · from ${amt.from}`,
+      points: points(amt.v), counted: true, sources: amt.sources,
+    }
+  }
 
   const stepsText = (steps: [number, number][], unit: string) => steps.map(([t, b]) => `≥ ${fmtNumber(t)} ${unit} +${b}`).join(' · ')
 
@@ -441,11 +515,14 @@ export function explainYields(d: CountryData, idx: IndexJson, i: number): YieldE
   const finish = (key: YieldKey, parts: YieldPart[], computed?: number, note?: string) => {
     let c = computed ?? parts.filter((p) => p.counted).reduce((s, p) => s + p.points, 0)
     c = Math.max(0, Math.min(cap + 4, c))
+    const busy = parts.some((p) => p.loading)
     if (sea && (key === 'science' || key === 'culture' || key === 'faith')) {
       c = 0
       note = 'Sea tiles yield no Science, Culture or Faith.'
+      out.push({ key, actual: actual(key), computed: c, parts, note })
+      return
     }
-    out.push({ key, actual: actual(key), computed: c, parts, note })
+    out.push({ key, actual: actual(key), computed: c, parts, note, loading: busy || undefined })
   }
 
   // Gold
@@ -454,7 +531,7 @@ export function explainYields(d: CountryData, idx: IndexJson, i: number): YieldE
   // Production (+ power stations)
   finish('production', [
     basePart('production'),
-    bonusPart('Power stations', tileAmount('power_capacity_mw', ['power_plants'], 'value'), 'MW',
+    bonusPart('Power stations', tileAmount('capacity_mw', 'power_capacity_mw', ['power_plants'], 'value'), 'MW',
       (v) => stepBonus(v, ys.power_bonus), stepsText(ys.power_bonus, 'MW')),
   ])
 
@@ -467,44 +544,48 @@ export function explainYields(d: CountryData, idx: IndexJson, i: number): YieldE
     finish('food', [fish, land], fish.points)
   } else {
     const best = Math.max(land.points, fish.points)
-    if (land.points >= fish.points) fish.counted = false; else land.counted = false
+    if (!land.loading && !fish.loading) { if (land.points >= fish.points) fish.counted = false; else land.counted = false }
     finish('food', [land, fish], best, 'Land tiles take the larger of farm and fishery yield.')
   }
 
   // Science (+ research output)
   finish('science', [
     basePart('science'),
-    bonusPart('Research output', tileAmount('research_works_5y', ['institutions', 'universities'], 'value'), 'works / 5 y',
+    bonusPart('Research output', tileAmount('works_5y', 'research_works_5y', ['institutions', 'universities'], 'value'), 'works / 5 y',
       (v) => stepBonus(v, ys.research_bonus), stepsText(ys.research_bonus, 'works')),
   ])
 
-  // Culture (+ World Heritage, museums, park visitors)
+  // Culture (+ World Heritage, museums, park visitors) — rules from index.json yield_scale.culture_bonus
+  const cr = rules.culture
   finish('culture', [
     basePart('culture'),
-    bonusPart('World Heritage sites', tileAmount(null, ['heritage'], 'count'), 'sites',
-      (v) => WHS_PTS * Math.min(v, WHS_MAX), `+${WHS_PTS} per site (max ${WHS_MAX})`),
-    bonusPart('Museums', tileAmount('museums', ['museums'], 'count'), '',
-      (v) => (v >= MUSEUM_MIN ? 1 : 0), `≥ ${MUSEUM_MIN} museums +1`),
-    bonusPart('National park visitors', tileAmount('park_visitors', ['parks'], 'value'), 'visitors / yr',
-      (v) => (v >= PARK_VIS_MIN ? 1 : 0), `≥ ${fmtNumber(PARK_VIS_MIN)} visitors +1`),
+    bonusPart('World Heritage sites', tileAmount('whs', null, ['heritage'], 'count'), 'sites',
+      (v) => cr.per_whs * Math.min(v, cr.max_whs), `+${cr.per_whs} per site (max ${cr.max_whs})`),
+    bonusPart('Museums', tileAmount('museums', 'museums', ['museums'], 'count'), '',
+      (v) => (v >= cr.museums_min ? cr.museums_bonus : 0), `≥ ${fmtNumber(cr.museums_min)} museums +${cr.museums_bonus}`),
+    bonusPart('National park visitors', tileAmount('park_visitors', 'park_visitors', ['parks'], 'value'), 'visitors / yr',
+      (v) => (v >= cr.park_visitors_min ? cr.park_bonus : 0), `≥ ${fmtNumber(cr.park_visitors_min)} visitors +${cr.park_bonus}`),
   ])
 
-  // Faith (+ listed holy sites). The bonus counts every exported site; the Holy Site district
-  // only the country's top N by Wikipedia editions — say both so the two cards agree.
+  // Faith (+ listed holy sites) — rules from index.json yield_scale.faith_bonus. The bonus counts
+  // every exported site; the Holy Site district only the country's top N by Wikipedia editions —
+  // say both so the two cards agree.
+  const fr = rules.faith
   const holyLayer = d.points?.holy_sites
   const holyN = holyLayer?.total ?? holyLayer?.rows.length ?? 0
-  const topN = HOLY_DISTRICT_TOP[d.id] ?? 10
+  const topN = holyDistrictTop(idx, d.id)
   const ranks = holySiteRanks(d)
   const here = pts.filter((p) => p.layer === 'holy_sites').map((p) => ({ name: p.row.name, rank: ranks.get(p.row.id) }))
+  const perSite = fr.max_holy_sites > 1 ? `+${fr.per_holy_site} per listed holy site (max ${fr.max_holy_sites})` : `+${fr.per_holy_site} for any`
   const holyRule = [
-    `+${HOLY_PTS} for any of the ${fmtNumber(holyN)} listed holy sites (Wikidata, ranked by Wikipedia language editions)`,
+    `${perSite} of the ${fmtNumber(holyN)} listed holy sites (Wikidata, ranked by Wikipedia language editions)`,
     `the Holy Site district needs one of the top ${topN}`,
     ...here.filter((h) => h.rank != null).map((h) => `${h.name} ranks #${h.rank} of ${fmtNumber(holyN)}${h.rank! <= topN ? ' (qualifies for the district)' : ''}`),
   ].join(' · ')
   finish('faith', [
     basePart('faith'),
-    bonusPart('Listed holy sites', tileAmount(null, ['holy_sites'], 'count'), 'sites',
-      (v) => (v >= 1 ? HOLY_PTS : 0), holyRule),
+    bonusPart('Listed holy sites', tileAmount('holy_sites', null, ['holy_sites'], 'count'), 'sites',
+      (v) => fr.per_holy_site * Math.min(v, fr.max_holy_sites), holyRule),
   ])
   return out
 }

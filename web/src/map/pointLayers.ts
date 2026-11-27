@@ -11,7 +11,7 @@ export interface PointStyle {
   label: string
   plural: string
   color: RGB
-  /** row fields holding the size measure, first finite > 0 wins */
+  /** row fields holding the size measure (points.json columns), first finite > 0 wins */
   value: string[]
   /** unit of the size measure, for fmtUnit */
   unit: string
@@ -37,11 +37,11 @@ export const POINT_STYLE: Record<string, PointStyle> = {
     sizeLabel: 'capacity (MW)', ref: 1000, metric: 'power_capacity_mw',
   },
   ports: {
-    label: 'Seaport', plural: 'Seaports', color: [90, 190, 255], value: ['port_cargo_t', 'cargo_tonnes'], unit: 't',
+    label: 'Seaport', plural: 'Seaports', color: [90, 190, 255], value: ['port_cargo_t'], unit: 't',
     sizeLabel: 'cargo (t/yr)', ref: 30e6, metric: 'port_cargo_t',
   },
   airports: {
-    label: 'Airport', plural: 'Airports', color: [205, 225, 255], value: ['airport_pax', 'enplanements', 'passengers'], unit: 'enplanements',
+    label: 'Airport', plural: 'Airports', color: [205, 225, 255], value: ['airport_pax'], unit: 'enplanements',
     sizeLabel: 'enplanements (boardings)/yr', ref: 10e6, metric: 'airport_pax',
     noValue: { lka: 'Sri Lanka publishes no open airport-level passenger statistics: airports are shown as rings, without a size.' },
     noValueKey: { lka: 'rings, no size: Sri Lanka publishes no open airport-level passenger statistics' },
@@ -113,10 +113,8 @@ const FIELDS: Record<string, { label: string; unit?: string; year?: boolean }> =
   commissioning_year: { label: 'Commissioned', year: true },
   owner: { label: 'Owner' },
   port_cargo_t: { label: 'Cargo (imports + exports)', unit: 't/yr' },
-  cargo_tonnes: { label: 'Cargo', unit: 't/yr' },
   port_calls: { label: 'Port calls', unit: '/yr' },
   airport_pax: { label: 'Enplanements (boardings)', unit: '/yr' },
-  enplanements: { label: 'Enplanements (boardings)', unit: '/yr' },
   iata: { label: 'IATA code' },
   launch_type: { label: 'Launch type' },
   faa_license: { label: 'Licence' },

@@ -209,9 +209,17 @@ METRICS: list[Metric] = [
                 "prices. Note: US county GDP is industry value added (taxes on production are inside "
                 "industry value added), so both are GDP at market prices."),
     _gdp_metric("gdp_agri_usd", "Agriculture GDP", "Value added of agriculture, forestry and fishing (NAICS 11 / ISIC A).",
-                _US_GDP_METHOD + " Hex allocation uses the cropland weight.",
+                _US_GDP_METHOD + " Hex allocation uses the cropland weight. Not the series behind the Food "
+                "yield: ag_gva_usd (food domain) takes BEA SAGDP2 state totals for 2025 ($255.9 B) split by "
+                "these CAGDP2 county shares, while this metric is the CAGDP2 county release for 2024 "
+                "($269.7 B; BEA's later SAGDP2 vintage revises 2024 to $248.1 B).",
                 _LKA_GDP_METHOD + " Sector values are GVA at basic prices (they sum to GVA, not GDP). "
-                "Hex allocation uses the cropland weight.", weight="cropland"),
+                "Hex allocation uses the cropland weight. Sri Lanka has two agriculture value-added series "
+                "in the app: this one is consistent with the GDP sector split (Abstract 2025 Table 10.2 "
+                "vintage, Rs 2,481,487 mn; districts by LFS agricultural employment), whereas the Food "
+                "yield's ag_gva_usd (food domain) uses the revised QGDP 2024 total (Rs 2,520,119 mn, +1.6 %) "
+                "spread by an activity-by-activity crop / livestock / fishery model, so provinces differ "
+                "(ag_gva_usd vs this: Uva +26 %, Sabaragamuwa +12 %, Northern -20 %).", weight="cropland"),
     _gdp_metric("gdp_industry_usd", "Industry GDP (Production)",
                 "Value added of mining, manufacturing, construction and utilities.",
                 _US_GDP_METHOD, _LKA_GDP_METHOD + " Sector values are GVA at basic prices; DCS 'industry' = "

@@ -6,13 +6,13 @@ import { cellToLatLng } from 'h3-js'
 import { COUNTRY_META } from '../civ'
 import { SourceChips } from '../components/SourceChip'
 import { YieldIcon } from '../components/YieldIcon'
-import { loadAdminGeo } from '../data/load'
-import { useNational, useSources, type AppData } from '../data/useData'
+import { loadAdminGeo, loadNational } from '../data/load'
+import { useSources, type AppData } from '../data/useData'
 import { useStore } from '../store'
 import type { CountryData, CountryId, NationalIndicator, Selection, YieldKey } from '../types'
 import {
-  ADJ, ADVISORS, type AdvisorId, citiesByPop, cityUnit, type Comment, counterpartLevel, fig, levelNoun, nm, ok, otherOf, type Place,
-  resolvePlace, sameSelection, type Seg, SHORT, unitName,
+  ADJ, ADVISORS, type AdvisorId, citiesByPop, cityNeedsGeo, cityUnit, type Comment, counterpartLevel, fig, levelNoun, nm, ok, otherOf,
+  type Place, resolvePlace, sameSelection, type Seg, SHORT, unitName,
 } from './advisorsCore'
 import {
   advisorRows, densityVerdict, fmtRow, indexRows, isTourismRow, type NatCtx, nationalComments, PANDEMIC_YEARS, rowVal, sparkRows, specFor,
@@ -20,6 +20,7 @@ import {
 import { placeComments, twinName } from './advisorsPlace'
 import { closeness, findTwins, fmtFeature, twinModel, type TwinResult } from './advisorsTwin'
 import { CITY_ZOOM, flyToCountry } from './cityViewNav'
+import { statsState, type StatsState } from './tilePanelStats'
 import './Advisors.css'
 
 type Countries = AppData['countries']
@@ -68,13 +69,15 @@ function goTo(countries: Countries, t: Target) {
 }
 
 // ---------------------------------------------------------------------------------------------
-// Admin boundaries (to find the district / county that contains a city's coordinates)
+// Admin boundaries (to find the district / county that contains a city's coordinates). Loaded only
+// when a computation needs them: the US county file is 2.5 MB, and on a slow link fetching it at
+// startup delays the metric matrix. Sri Lankan cities name their district in cities.json.
 // ---------------------------------------------------------------------------------------------
 type GeoState = { geo: GeoJSON.FeatureCollection | null; failed: boolean }
 const geoDone = new Map<string, GeoState>()
 const NO_GEO: GeoState = { geo: null, failed: false }
 
-/** admin_<level>.geojson of a country (null country: nothing). `undefined` while loading. */
+/** admin_<level>.geojson of a country (null country: nothing is fetched). `undefined` while loading. */
 function useAdminGeo(country: CountryId | null, level = 'adm2'): GeoState | undefined {
   const k = country ? `${country}/${level}` : ''
   const [, bump] = useState(0)
@@ -90,11 +93,17 @@ function useAdminGeo(country: CountryId | null, level = 'adm2'): GeoState | unde
   return country ? geoDone.get(k) : NO_GEO
 }
 
-function computeTwin(place: Place, countries: Countries): TwinResult & { waiting?: boolean } {
+function computeTwin(place: Place, countries: Countries, errors?: AppData['errors']): TwinResult & { waiting?: boolean } {
   const oc = otherOf(place.country)
   const other = countries[oc]
   if (!other || !countries.lka || !countries.usa) return { ok: false, reason: `Waiting for ${nm(oc)} data to load…`, waiting: true }
   const ol = counterpartLevel(place.level, other)
+  // tile twins are matched on the metric matrix; admin units on their own tables (already loaded)
+  if (place.level === 'hex' || ol === 'hex') {
+    const st = [place.d, other].map((d) => statsState(d, errors))
+    if (st.includes('failed')) return { ok: false, reason: 'Tile statistics did not load, so tiles cannot be matched; select a district or county instead' }
+    if (st.includes('loading')) return { ok: false, reason: 'Loading statistics…', waiting: true }
+  }
   const [ll, ul] = place.country === 'lka' ? [place.level, ol] : [ol, place.level]
   const model = twinModel(countries.lka, countries.usa, ll, ul)
   if (typeof model === 'string') return { ok: false, reason: model }
@@ -107,13 +116,17 @@ function computeTwin(place: Place, countries: Countries): TwinResult & { waiting
 export function Advisors({ app }: { app: AppData }) {
   const selection = useStore((s) => s.selection)
   const mode = useStore((s) => s.mode)
-  const rows = useNational()
+  const national = useNationalRows()
+  const rows = national ?? NO_ROWS
   const [persp, setPersp] = useState<CountryId | null>(null)
   const [jump, setJump] = useState<{ from: Selection; to: Selection } | null>(null)
   const idx = app.index
   const d = selection ? app.countries[selection.country] : undefined
-  // a city is ranked as the district / county whose boundary contains its coordinates
-  const cityGeo = useAdminGeo(selection?.kind === 'city' && d?.admin.adm2 ? selection.country : null)
+  // a city is ranked as the district / county whose boundary contains its coordinates; the boundary
+  // file is fetched only when the city's own record does not name that unit (multi-county US metros)
+  const city = selection?.kind === 'city' && d ? d.cities.find((c) => c.id === selection.id) : undefined
+  const needGeo = !!(city && d && cityNeedsGeo(d, 'adm2', city))
+  const cityGeo = useAdminGeo(needGeo ? selection!.country : null)
   const place = useMemo(
     () => (selection && d && idx && cityGeo ? resolvePlace(selection, d, idx, cityGeo.geo) : null),
     [selection, d, idx, cityGeo],
@@ -150,14 +163,27 @@ export function Advisors({ app }: { app: AppData }) {
     )
   }
   const home: CountryId = persp ?? (mode === 'usa' ? 'usa' : 'lka')
-  return <NationalCouncil app={app} rows={rows} home={home} setHome={setPersp} />
+  return <NationalCouncil app={app} rows={rows} rowsLoaded={national != null} home={home} setHome={setPersp} />
+}
+
+const NO_ROWS: NationalIndicator[] = []
+/** national.json rows; null while the file is still loading (an empty list = not available). */
+function useNationalRows(): NationalIndicator[] | null {
+  const [rows, setRows] = useState<NationalIndicator[] | null>(null)
+  useEffect(() => {
+    let alive = true
+    loadNational().then((r) => { if (alive) setRows(r) }, () => { if (alive) setRows([]) })
+    return () => { alive = false }
+  }, [])
+  return rows
 }
 
 // ---------------------------------------------------------------------------------------------
 // National view
 // ---------------------------------------------------------------------------------------------
-function NationalCouncil({ app, rows, home, setHome }: { app: AppData; rows: NationalIndicator[]; home: CountryId; setHome: (c: CountryId) => void }) {
+function NationalCouncil({ app, rows, rowsLoaded, home, setHome }: { app: AppData; rows: NationalIndicator[]; rowsLoaded: boolean; home: CountryId; setHome: (c: CountryId) => void }) {
   const { lka, usa } = app.countries
+  const natLoading = [lka, usa].some((d) => d && statsState(d, app.errors) === 'loading')
   const ctx = useMemo<NatCtx>(() => ({ rows, byKey: indexRows(rows), home, rival: otherOf(home), data: { lka, usa }, idx: app.index }), [rows, home, lka, usa, app.index])
   const groups = useMemo(() => ADVISORS.map((a) => ({
     a, comments: nationalComments(a.id, ctx), spark: sparkRows(rows, a.id), ledger: advisorRows(rows, a.id),
@@ -187,12 +213,14 @@ function NationalCouncil({ app, rows, home, setHome }: { app: AppData; rows: Nat
         </div>
       </header>
       {verdict && <Verdict lead={verdict.lead} c={verdict.c} />}
-      {!rows.length && (
-        <p className="advisors-note">World Bank national indicators (national.json) are not built yet, so the council speaks from the map’s own metrics. Re-run the pipeline’s <code>national</code> stage to add them.</p>
+      {rowsLoaded && !rows.length && (
+        <p className="advisors-note">World Bank national indicators (national.json) are not available, so the council speaks from the map’s own metrics. The pipeline’s <code>national</code> stage builds them.</p>
       )}
       {groups.map((g) => (
         <AdvisorCard key={g.a.id} advisor={g.a} comments={g.comments} home={home}
-          waiting={!rows.length && (!lka || !usa) ? `Waiting for ${!lka ? 'Sri Lanka' : 'United States'} data to load…` : undefined}
+          waiting={!rowsLoaded ? 'Loading national indicators…'
+            : !rows.length && (!lka || !usa) ? `Waiting for ${!lka ? 'Sri Lanka' : 'United States'} data to load…`
+              : natLoading ? 'Loading statistics…' : undefined}
           extra={<>
             {g.spark.length > 0 && <div className="advisors-sparks">{g.spark.map((r) => <Sparkline key={r.code} row={r} />)}</div>}
             {g.ledger.length > 0 && <Ledger rows={g.ledger} home={home} />}
@@ -204,20 +232,47 @@ function NationalCouncil({ app, rows, home, setHome }: { app: AppData; rows: Nat
   )
 }
 
+/**
+ * True once `el` has come within `margin` px of the visible part of its scroll container (the panel
+ * body), so work it needs (a boundary download) waits until the user scrolls towards it.
+ */
+function useNearView(el: HTMLElement | null, margin = 600): boolean {
+  const [near, setNear] = useState(false)
+  useEffect(() => {
+    if (near || !el) return
+    if (typeof IntersectionObserver === 'undefined') { setNear(true); return }
+    const io = new IntersectionObserver((es) => {
+      if (es.some((e) => e.isIntersecting)) { setNear(true); io.disconnect() }
+    }, { root: el.closest('.panel-body'), rootMargin: `${margin}px 0px` })
+    io.observe(el)
+    return () => io.disconnect()
+  }, [el, near, margin])
+  return near
+}
+
+/** Largest City View metros per country in the famous-twins card. */
+const TWIN_CITIES: Record<CountryId, number> = { lka: 6, usa: 4 }
+
 function FamousTwins({ app }: { app: AppData }) {
   const { lka, usa } = app.countries
-  const gl = useAdminGeo(lka?.admin.adm2 ? 'lka' : null), gu = useAdminGeo(usa?.admin.adm2 ? 'usa' : null)
+  const [el, setEl] = useState<HTMLElement | null>(null)
+  const near = useNearView(el)
+  // only metros spanning several districts / counties need the boundary file (US metros, 2.5 MB):
+  // fetched when the card nears the view, never at startup
+  const needs = (d?: CountryData) => !!d?.admin.adm2 && d.cities.some((c) => cityNeedsGeo(d, 'adm2', c))
+  const gl = useAdminGeo(near && needs(lka) ? 'lka' : null), gu = useAdminGeo(near && needs(usa) ? 'usa' : null)
+  const pending: Record<CountryId, boolean> = { lka: needs(lka) && (!near || !gl), usa: needs(usa) && (!near || !gu) }
   const res = useMemo(() => {
-    if (!lka || !usa || !lka.admin.adm2 || !usa.admin.adm2 || !gl || !gu) return null
+    if (!lka || !usa || !lka.admin.adm2 || !usa.admin.adm2) return null
     const model = twinModel(lka, usa, 'adm2', 'adm2')
     if (typeof model === 'string') return { reason: model, rows: [], approx: false }
     const rows: { city: string; from: Target; to: Target; dist: number }[] = []
     let approx = false
-    const add = (d: CountryData, geo: GeoJSON.FeatureCollection | null, n: number) => {
+    const add = (d: CountryData, geo: GeoJSON.FeatureCollection | null) => {
       const seen = new Set<number>()
       // the most populous City View metros (same order as the City View list), one row per unit
       for (const c of citiesByPop(d)) {
-        if (seen.size >= n) break
+        if (seen.size >= TWIN_CITIES[d.id]) break
         const u = cityUnit(d, 'adm2', c, geo)
         if (!u || seen.has(u.index)) continue
         seen.add(u.index)
@@ -226,45 +281,48 @@ function FamousTwins({ app }: { app: AppData }) {
         if (r.ok) rows.push({ city: c.name, from: { country: d.id, level: 'adm2', index: u.index }, to: { country: r.country, level: 'adm2', index: r.matches[0].index }, dist: r.matches[0].dist })
       }
     }
-    add(lka, gl.geo, 6)
-    add(usa, gu.geo, 4)
+    if (!pending.lka) add(lka, gl?.geo ?? null)
+    if (!pending.usa) add(usa, gu?.geo ?? null)
     return { reason: '', rows, feats: model.feats, approx }
-  }, [lka, usa, gl, gu])
-  if (lka?.admin.adm2 && usa?.admin.adm2 && (!gl || !gu)) {
-    return (
-      <section className="card advisors-twins" aria-labelledby="adv-twins-h">
-        <h3 id="adv-twins-h"><span aria-hidden>🌊</span> Twins across the ocean</h3>
-        <p className="advisors-empty">Finding the district or county that contains each city…</p>
-      </section>
-    )
-  }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [lka, usa, gl, gu, pending.lka, pending.usa])
   if (!res) return null
-  if (!res.rows.length && !res.reason) return null
+  const waiting = (['lka', 'usa'] as CountryId[]).filter((c) => pending[c])
+  if (!res.rows.length && !res.reason && !waiting.length) return null
   return (
-    <section className="card advisors-twins" aria-labelledby="adv-twins-h">
+    <section className="card advisors-twins" aria-labelledby="adv-twins-h" ref={setEl}>
       <h3 id="adv-twins-h"><span aria-hidden>🌊</span> Twins across the ocean</h3>
       {res.reason ? <p className="advisors-empty">{endDot(res.reason)}</p> : (
         <>
-          <ul className="advisors-twinlist">
-            {res.rows.map((r) => {
-              const a = twinName(app.countries[r.from.country]!, 'adm2', r.from.index)
-              const b = twinName(app.countries[r.to.country]!, 'adm2', r.to.index)
-              return (
-                <li key={`${r.from.country}:${r.from.index}:${r.city}`}>
-                  <button className={`advisors-twinlink ${r.from.country}`} onClick={() => goTo(app.countries, r.from)} title={`Select ${a.title}`}>
-                    <b>{r.city}</b> <small>{a.title}</small>
-                  </button>
-                  <span className="advisors-twinarrow" aria-label="twin of">⇄</span>
-                  <button className={`advisors-twinlink ${r.to.country}`} onClick={() => goTo(app.countries, r.to)} title={`Show ${b.title}`}>
-                    <b>{b.title}</b> <small>Δ {r.dist.toFixed(2)} SD</small>
-                  </button>
-                </li>
-              )
-            })}
-          </ul>
-          <p className="advisors-small" title={`Indicators: ${res.feats!.map((f) => f.label).join(', ')}`}>
-            The district or county whose boundary contains each of the largest City View metros{res.approx ? ' (boundaries unavailable for some: the unit dominating the centre tile is used)' : ''}, matched on {res.feats!.length} shared indicators (z-scores pooled across both countries). Δ = root-mean-square difference of those z-scores, in standard deviations, raised 15% for each indicator missing on one side.
-          </p>
+          {res.rows.length > 0 && (
+            <ul className="advisors-twinlist">
+              {res.rows.map((r) => {
+                const a = twinName(app.countries[r.from.country]!, 'adm2', r.from.index)
+                const b = twinName(app.countries[r.to.country]!, 'adm2', r.to.index)
+                return (
+                  <li key={`${r.from.country}:${r.from.index}:${r.city}`}>
+                    <button className={`advisors-twinlink ${r.from.country}`} onClick={() => goTo(app.countries, r.from)} title={`Select ${a.title}`}>
+                      <b>{r.city}</b> <small>{a.title}</small>
+                    </button>
+                    <span className="advisors-twinarrow" aria-label="twin of">⇄</span>
+                    <button className={`advisors-twinlink ${r.to.country}`} onClick={() => goTo(app.countries, r.to)} title={`Show ${b.title}`}>
+                      <b>{b.title}</b> <small>Δ {r.dist.toFixed(2)} SD</small>
+                    </button>
+                  </li>
+                )
+              })}
+            </ul>
+          )}
+          {waiting.map((c) => (
+            <p key={c} className="advisors-empty" aria-busy="true">
+              Finding the {(app.countries[c]?.meta.admin_levels.adm2?.label ?? 'district').toLowerCase()} that contains each {ADJ[c]} metro…
+            </p>
+          ))}
+          {res.rows.length > 0 && (
+            <p className="advisors-small" title={`Indicators: ${res.feats!.map((f) => f.label).join(', ')}`}>
+              The district or county that contains each of the largest City View metros{res.approx ? ' (boundaries unavailable for some: the unit dominating the centre tile is used)' : ''}, matched on {res.feats!.length} shared indicators (z-scores pooled across both countries). Δ = root-mean-square difference of those z-scores, in standard deviations, raised 15% for each indicator missing on one side.
+            </p>
+          )}
         </>
       )}
     </section>
@@ -278,7 +336,10 @@ function PlaceCouncil({ app, place, back, onJump, onBack }: { app: AppData; plac
   const other = app.countries[otherOf(place.country)]
   const { lka, usa } = app.countries
   const groups = useMemo(() => ADVISORS.map((a) => ({ a, comments: placeComments(a.id, { place, other }) })), [place, other])
-  const twin = useMemo(() => computeTwin(place, { lka, usa }), [place, lka, usa])
+  const twin = useMemo(() => computeTwin(place, { lka, usa }, app.errors), [place, lka, usa, app.errors])
+  // tile figures and national averages come from the metric matrices (metrics.bin)
+  const stats = [statsState(place.d, app.errors), other ? statsState(other, app.errors) : 'ready' as StatsState]
+  const statsNote = stats.includes('loading') ? 'loading' : stats.includes('failed') ? 'failed' : null
   const verdict = useMemo(() => {
     let best: Comment | null = null
     for (const g of groups) for (const c of g.comments) if ((c.weight ?? 0) > (best?.weight ?? 0)) best = c
@@ -321,7 +382,16 @@ function PlaceCouncil({ app, place, back, onJump, onBack }: { app: AppData; plac
       {verdict && <Verdict lead="" c={{ id: 'v', icon: '⚖️', segs: verdict.segs, sources: verdict.sources }} />}
       <TwinCard app={app} place={place} twin={twin} onJump={onJump} />
       {!other && <p className="advisors-note">{COUNTRY_META[otherName].name} data is still loading — comparisons with its median will appear when it arrives.</p>}
-      {groups.map((g) => <AdvisorCard key={g.a.id} advisor={g.a} comments={g.comments} home={place.country} local />)}
+      {other && statsNote === 'loading' && (
+        <p className="advisors-note" aria-busy="true">Loading statistics… {place.level === 'hex' ? 'remarks on this tile’s figures' : 'national averages'} appear when the tile data has downloaded.</p>
+      )}
+      {other && statsNote === 'failed' && (
+        <p className="advisors-note">Tile statistics did not load, so only {place.level === 'hex' ? 'the tile’s yields' : 'the unit’s own published figures'} can be discussed here.</p>
+      )}
+      {groups.map((g) => (
+        <AdvisorCard key={g.a.id} advisor={g.a} comments={g.comments} home={place.country} local
+          waiting={statsNote === 'loading' ? 'Loading statistics…' : undefined} />
+      ))}
     </div>
   )
 }
@@ -497,12 +567,14 @@ function AdvisorCard({ advisor, comments, home, extra, local, waiting }: {
   )
 }
 
+/** Shown when an advisor has nothing to say: the published data has no value for any of its remarks. */
 const EMPTY: Record<AdvisorId, (local?: boolean) => string> = {
-  economic: (l) => `No economic data ${l ? 'for this place ' : ''}yet — GDP, income and jobs arrive when the pipeline's economy & labour domains finish.`,
-  military: (l) => `Nothing to report ${l ? 'here ' : ''}yet — military, population and terrain data are still being built.`,
-  cultural: (l) => `No cultural data ${l ? 'for this place ' : ''}yet — tourism, heritage and religion domains are still being built.`,
-  scientific: (l) => `No research or education data ${l ? 'for this place ' : ''}yet — the science domain is still being built.`,
-  environmental: (l) => `No environmental data ${l ? 'for this place ' : ''}yet.`,
+  economic: (l) => `No GDP, income or jobs figures are published ${l ? 'for this place' : 'for both countries'}.`,
+  military: (l) => (l ? 'Nothing to report here: no military, population or hazard figures are published for this place.'
+    : 'Nothing to report: no military, population or hazard figures are published for both countries.'),
+  cultural: (l) => `No tourism, heritage or religion figures are published ${l ? 'for this place' : 'for both countries'}.`,
+  scientific: (l) => `No research or education figures are published ${l ? 'for this place' : 'for both countries'}.`,
+  environmental: (l) => `No land-cover, climate or emissions figures are published ${l ? 'for this place' : 'for both countries'}.`,
 }
 
 function CommentItem({ c, home }: { c: Comment; home: CountryId }) {
