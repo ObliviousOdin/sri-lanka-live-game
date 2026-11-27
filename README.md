@@ -16,6 +16,8 @@ assigned by published-data rules, and every number links back to its source.
   population, land cover, elevation…), City View, five Advisors, an Explorer (linked table + scatter),
   a Wonders race and a full source catalogue with download provenance.
 
+[![Deploy to GitHub Pages](https://github.com/ObliviousOdin/sri-lanka-live-game/actions/workflows/deploy-pages.yml/badge.svg)](https://github.com/ObliviousOdin/sri-lanka-live-game/actions/workflows/deploy-pages.yml)
+
 **Live site:** https://obliviousodin.github.io/sri-lanka-live-game/ (deployed by
 `.github/workflows/deploy-pages.yml` on every push to `main`).
 
