@@ -79,7 +79,7 @@ h1, h2, h3, h4 { font-family: var(--serif); font-weight: 600; letter-spacing: .0
 .lens-btn { display: flex; align-items: center; gap: 5px; background: transparent; border: 1px solid transparent; border-radius: 7px; padding: 3px 7px; color: var(--text); white-space: nowrap; font-size: 12.5px; }
 .lens-btn:hover { border-color: var(--line2); background: #ffffff08; }
 .lens-btn.active { border-color: var(--brass); background: #d9a44122; color: var(--brass2); }
-.lens-btn:focus-visible, .tabs button:focus-visible, .mode-switch button:focus-visible, .legend-toggle:focus-visible, .sheet-grip:focus-visible { outline: 2px solid var(--brass2); outline-offset: 1px; }
+.lens-btn:focus-visible, .tabs button:focus-visible, .panel-toggle:focus-visible, .options-toggle:focus-visible, .mode-switch button:focus-visible, .legend-toggle:focus-visible, .sheet-grip:focus-visible { outline: 2px solid var(--brass2); outline-offset: 1px; }
 .lens-icon { width: 16px; text-align: center; }
 .lens-metric { background: var(--panel); border: 1px solid var(--brass); color: var(--text); border-radius: 6px; padding: 4px 6px; max-width: 220px; min-width: 0; flex: 0 1 auto; }
 
@@ -216,6 +216,8 @@ select.input, input.input { background: var(--bg); border: 1px solid var(--line2
   .pane-label { font-size: 12px; padding: 3px 8px; }
   .app.panel-open .pane-label .muted { display: none; }
   .app.panel-open .jump { display: none; }
+  /* the scale bar stays bottom-left (legends sit above it), clear of the city banners at the top */
+  .map-cell .scalebar, .map-cell .scalebar.mp-below-jump { top: auto; bottom: 10px; }
 }
 
 @media (prefers-reduced-motion: reduce) {

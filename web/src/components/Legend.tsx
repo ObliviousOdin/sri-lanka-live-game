@@ -3,7 +3,7 @@ import { invScale, rgbCss, yieldColor } from '../color'
 import { useMatrixProgress } from '../data/useData'
 import { fmtLensTick, lensUnitCaption, type Legend as L, type Provenance, type ScaleInfo } from '../lenses'
 import { useStore } from '../store'
-import type { CountryId } from '../types'
+import { COUNTRIES, type CountryId } from '../types'
 import { SourceChips } from './SourceChip'
 import { YieldIcon } from './YieldIcon'
 import './Legend.css'
@@ -31,7 +31,7 @@ function scaleNote(s: ScaleInfo, country: CountryId): { short: string; long: str
 function vintageText(prov: Provenance[]): string {
   const uniq = [...new Set(prov.map((p) => p.vintage).filter(Boolean))]
   if (uniq.length <= 1) return uniq[0] ?? ''
-  return prov.filter((p) => p.vintage).map((p) => `${SHORT[p.country]} ${p.vintage}`).join(' · ')
+  return COUNTRIES.flatMap((c) => prov.filter((p) => p.country === c && p.vintage)).map((p) => `${SHORT[p.country]} ${p.vintage}`).join(' · ')
 }
 
 /** Up to MAX_CHIPS source chips of this pane's own country, then "+N" (opens the Sources tab). */

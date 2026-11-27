@@ -1,24 +1,41 @@
-import { FlyToInterpolator, WebMercatorViewport, type MapViewState, type PickingInfo } from '@deck.gl/core'
+import { FlyToInterpolator, LinearInterpolator, WebMercatorViewport, type MapViewState, type PickingInfo } from '@deck.gl/core'
 import { H3HexagonLayer } from '@deck.gl/geo-layers'
-import { GeoJsonLayer, IconLayer, ScatterplotLayer, TextLayer } from '@deck.gl/layers'
+import { GeoJsonLayer, IconLayer, PolygonLayer, ScatterplotLayer, TextLayer } from '@deck.gl/layers'
 import DeckGL from '@deck.gl/react'
-import { useEffect, useMemo, useRef, useState } from 'react'
-import { Map as BaseMap } from 'react-map-gl/maplibre'
-import 'maplibre-gl/dist/maplibre-gl.css'
+import { cellToBoundary, cellToLatLng, cellToParent, getBaseCellNumber, latLngToCell } from 'h3-js'
+import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
 import { COUNTRY_META, DISTRICT_META, YIELD_META, terrainLabel } from '../civ'
-import { adminUnitOfHex, hexesOfAdmin, loadAdminGeo, value } from '../data/load'
-import type { AppData } from '../data/useData'
-import { fmtUnit } from '../format'
-import { LENS_BY_ID, isDensity, type LensResult } from '../lenses'
-import { useStore } from '../store'
-import { YIELDS, type CountryData, type CountryId } from '../types'
-import { emojiAtlas } from './emojiAtlas'
 import { ScaleBar } from '../components/ScaleBar'
+import { SourceChips } from '../components/SourceChip'
+import { adminUnitOfHex, finestLevel, hexesOfAdmin, loadAdminGeo, value } from '../data/load'
+import { useSources, type AppData } from '../data/useData'
+import { fmtInt, fmtNumber, fmtUnit } from '../format'
+import { LENS_BY_ID, isDensity, type LensResult } from '../lenses'
+import { openCity } from '../panels/cityViewNav'
+import { useStore } from '../store'
+import { YIELDS, type City, type CountryData, type CountryId, type PointRow } from '../types'
+import { adminFeature, adminIdAt, adminIndexOf, frameLon, geoForMap, mapLon } from './adminPick'
+import { BaseMap } from './BaseMap'
+import { emojiAtlas } from './emojiAtlas'
+import { coarsePointer, prefersReducedMotion } from './motion'
+import { escapeHtml, pointRadiusScale, pointStyle, pointTooltip, pointValue, splitRows } from './pointLayers'
+import { markMoved, metersPerPixel, publishScale, scaleLeader, useScaleLink, zoomForMpp } from './scaleLink'
+import { visibleHeightAboveSheet } from './sheet'
+import './MapPane.css'
 
-const INITIAL_BOUNDS: Record<CountryId, [[number, number], [number, number]]> = {
+type Bounds = [[number, number], [number, number]]
+
+const INITIAL_BOUNDS: Record<CountryId, Bounds> = {
   lka: [[79.5, 5.85], [82.0, 9.9]],
   usa: [[-125.0, 24.3], [-66.9, 49.4]],
 }
+
+/** US jump targets; Alaska includes the western Aleutians drawn west of 180° (longitudes < -180). */
+const US_JUMPS: { name: string; short: string; bounds: Bounds }[] = [
+  { name: 'Contiguous US', short: 'US', bounds: INITIAL_BOUNDS.usa },
+  { name: 'Alaska', short: 'AK', bounds: [[-188.5, 51.0], [-129.5, 71.5]] },
+  { name: 'Hawaii', short: 'HI', bounds: [[-160.6, 18.8], [-154.6, 22.4]] },
+]
 
 const BASEMAPS = {
   dark: 'https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json',
@@ -27,21 +44,35 @@ const BASEMAPS = {
 
 export const WONDER_ICON: Record<string, string> = {
   'Great University': '📚', 'Great Port': '🚢', 'Great Power Station': '🔋', 'Natural Wonder': '🏞️',
-  'Great Airport': '🛫', 'World Heritage': '🏯', 'Holy Wonder': '🕌',
+  'Great Airport': '🛫', 'World Heritage': '🏯', 'Holy Wonder': '🛐',
 }
 
-const POINT_COLORS: Record<string, [number, number, number]> = {
-  power_plants: [250, 210, 60], ports: [90, 190, 255], airports: [200, 220, 255],
-}
-const POINT_VALUE: Record<string, string[]> = {
-  power_plants: ['capacity_mw'], ports: ['port_cargo_t', 'cargo_tonnes'], airports: ['airport_pax', 'passengers'],
-}
-
-function metersPerPixel(zoom: number, lat: number) {
-  return (78271.517 * Math.cos((lat * Math.PI) / 180)) / Math.pow(2, zoom)
-}
+// constant layer props, hoisted so re-renders do not hand deck.gl new objects
+const HEX_MATERIAL = { ambient: 0.55, diffuse: 0.6, shininess: 20 }
+const HEX_HIGHLIGHT: [number, number, number, number] = [255, 236, 170, 110]
+/** Labels, icons, facilities and selections draw over extruded columns in 3D. */
+const ON_TOP = { depthCompare: 'always', depthWriteEnabled: false } as const
+const lonShift = (deg: number) => new Float64Array([1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, deg, 0, 0, 1])
+const SHIFT: Record<number, Float64Array | undefined> = { [-360]: lonShift(-360), 0: undefined, 360: lonShift(360) }
+const MAX_PITCH_3D = 45
 
 interface Props { country: CountryId; data: CountryData; app: AppData; lens: LensResult | null; compact?: boolean }
+interface IconDatum { pos: [number, number]; icon: string; size: number; kind: 'district' | 'wonder'; label: string }
+
+/** A view state without pending transition props (so spreading it never restarts an animation). */
+function still(v: MapViewState): MapViewState {
+  const out = { ...v } as Record<string, unknown>
+  delete out.transitionDuration
+  delete out.transitionInterpolator
+  delete out.transitionEasing
+  delete out.transitionInterruption
+  return out as unknown as MapViewState
+}
+
+const plural = (w: string) => (/[^aeiou]y$/.test(w) ? `${w.slice(0, -1)}ies` : `${w}s`)
+
+/** `lon` moved by whole turns to lie within 180° of `ref` (keeps fly-to paths short across 180°). */
+const nearLon = (lon: number, ref: number) => lon + 360 * Math.round((ref - lon) / 360)
 
 export function MapPane({ country, data, app, lens, compact }: Props) {
   const idx = app.index!
@@ -60,7 +91,11 @@ export function MapPane({ country, data, app, lens, compact }: Props) {
   const brushedAll = useStore((s) => s.explorer.brushed)
   const flyTo = useStore((s) => s.flyTo)
   const mode = useStore((s) => s.mode)
-  const lensDef = LENS_BY_ID.get(lensId)!
+  const sources = useSources()
+  const lensDef = LENS_BY_ID.get(lensId) ?? LENS_BY_ID.get('terrain')!
+  /** admin level clicks resolve to here: DS divisions fall back to US counties on the US map */
+  const pickLv = pickLevel === 'hex' ? 'hex' : data.meta.admin_levels[pickLevel] ? pickLevel : finestLevel(data)
+  const pickFallback = pickLevel !== 'hex' && pickLv !== pickLevel
 
   // ---- sizing / initial view
   useEffect(() => {
@@ -78,54 +113,114 @@ export function MapPane({ country, data, app, lens, compact }: Props) {
     if (!size || size.w < 10 || (view && userMoved.current)) return
     const vp = new WebMercatorViewport({ width: size.w, height: size.h })
     const { longitude, latitude, zoom } = vp.fitBounds(INITIAL_BOUNDS[country], { padding: Math.min(40, size.w / 10) })
-    setView((v) => ({ ...(v ?? { pitch: 0, bearing: 0 }), longitude, latitude, zoom }))
+    setView((v) => ({ ...(v ? still(v) : { pitch: extrude ? MAX_PITCH_3D : 0, bearing: 0 }), longitude, latitude, zoom }))
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [size, country])
 
-  // ---- fly-to requests
+  // ---- fly-to requests (store.fly from panels, jump buttons, city banners)
   useEffect(() => {
     if (!flyTo || flyTo.country !== country || !view || flyTo.ts === appliedFly.current) return
     appliedFly.current = flyTo.ts
     userMoved.current = true
-    setView({ ...view, longitude: flyTo.lon, latitude: flyTo.lat, zoom: flyTo.zoom ?? Math.max(view.zoom, country === 'lka' ? 9 : 7.5),
-      transitionDuration: 900, transitionInterpolator: new FlyToInterpolator() } as MapViewState)
+    markMoved(country)
+    const target = {
+      ...still(view),
+      longitude: nearLon(mapLon(country, flyTo.lon), view.longitude),
+      latitude: flyTo.lat,
+      zoom: flyTo.zoom ?? Math.max(view.zoom, country === 'lka' ? 9 : 7.5),
+    }
+    setView(prefersReducedMotion() ? target : ({ ...target, transitionDuration: 900, transitionInterpolator: new FlyToInterpolator() } as MapViewState))
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [flyTo?.ts, view === null])
 
-  // ---- same-scale linking between the two panes
-  const other: CountryId = country === 'lka' ? 'usa' : 'lka'
-  const otherRef = useStore((s) => s.zoomRef[other])
+  // ---- 3D: tilt the camera when columns are extruded, flatten it again when they are not
+  const prevExtrude = useRef(extrude)
   useEffect(() => {
-    if (!sameScale || mode !== 'split' || !otherRef || !view) return
-    const mpp = metersPerPixel(otherRef.zoom, otherRef.lat)
-    const z = Math.log2((78271.517 * Math.cos((view.latitude * Math.PI) / 180)) / mpp)
-    if (Math.abs(z - view.zoom) > 0.02) setView({ ...view, zoom: z })
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [otherRef?.zoom, otherRef?.lat, sameScale, mode])
+    if (prevExtrude.current === extrude) return
+    prevExtrude.current = extrude
+    const anim = prefersReducedMotion() ? {} : { transitionDuration: 500, transitionInterpolator: new LinearInterpolator(['pitch', 'bearing']) }
+    setView((v) => (v ? ({ ...still(v), pitch: extrude ? MAX_PITCH_3D : 0, bearing: extrude ? v.bearing ?? 0 : 0, ...anim } as MapViewState) : v))
+  }, [extrude])
 
-  const onViewStateChange = ({ viewState, interactionState }: { viewState: MapViewState; interactionState?: { isDragging?: boolean; isZooming?: boolean; isPanning?: boolean } }) => {
+  // ---- "True size": the most recently moved pane leads, the other adopts its metres per pixel
+  const linking = sameScale && mode === 'split'
+  const link = useScaleLink((s) => (linking && s.link && s.link.from !== country ? s.link : null))
+  useEffect(() => {
+    if (!linking) useScaleLink.setState({ link: null })
+  }, [linking])
+  useEffect(() => {
+    if (!linking || !view || scaleLeader() !== country) return
+    publishScale(country, metersPerPixel(view.zoom, view.latitude))
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [linking, view?.zoom, view?.latitude, country])
+  useEffect(() => {
+    if (!link || !view || scaleLeader() === country) return
+    const z = Math.max(0, Math.min(20, zoomForMpp(link.mpp, view.latitude)))
+    if (Math.abs(z - view.zoom) < 0.005) return
+    userMoved.current = true
+    setView({ ...still(view), zoom: z })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [link, view === null])
+
+  const onViewStateChange = ({ viewState, interactionState }: { viewState: MapViewState; interactionState?: { isDragging?: boolean; isZooming?: boolean; isPanning?: boolean; isRotating?: boolean } }) => {
     setView(viewState)
-    if (interactionState && (interactionState.isZooming || interactionState.isDragging || interactionState.isPanning)) {
+    if (interactionState && (interactionState.isZooming || interactionState.isDragging || interactionState.isPanning || interactionState.isRotating)) {
       userMoved.current = true
-      useStore.setState((s) => ({ zoomRef: { ...s.zoomRef, [country]: { zoom: viewState.zoom, lat: viewState.latitude } } }))
+      markMoved(country)
     }
   }
 
-  // ---- admin outlines
+  // ---- admin boundaries (outlines, click picking, selection outline)
   const [geo, setGeo] = useState<Record<string, GeoJSON.FeatureCollection>>({})
+  const needGeo = (l: string | undefined) => {
+    if (!l || geo[l] || !data.meta.admin_levels[l]) return
+    loadAdminGeo(country, l).then((g) => setGeo((s) => (s[l] ? s : { ...s, [l]: g }))).catch(() => {})
+  }
   useEffect(() => {
-    const lv = country === 'lka' ? ['adm1', 'adm2'] : ['adm1']
-    lv.forEach((l) => loadAdminGeo(country, l).then((g) => setGeo((s) => ({ ...s, [l]: g }))).catch(() => {}))
+    ;(country === 'lka' ? ['adm1', 'adm2'] : ['adm1']).forEach(needGeo)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [country])
+  const selAdmin = selection && selection.country === country && selection.kind === 'admin' ? selection.id.split(':') : null
+  const selLevel = selAdmin?.[0]
+  const selUnit = selAdmin ? Number(selAdmin[1]) : -1
   useEffect(() => {
-    if (pickLevel !== 'hex' && !geo[pickLevel] && data.meta.admin_levels[pickLevel])
-      loadAdminGeo(country, pickLevel).then((g) => setGeo((s) => ({ ...s, [pickLevel]: g }))).catch(() => {})
-  }, [pickLevel, country, geo, data])
+    if (pickLv !== 'hex') needGeo(pickLv)
+    needGeo(selLevel)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pickLv, selLevel, country, geo, data.meta])
+  const mapGeo = (l: string) => (geo[l] ? geoForMap(country, geo[l]) : null)
 
-  // ---- colours with brushing / admin-selection emphasis
-  const indices = useMemo(() => Array.from({ length: data.n }, (_, i) => i), [data])
+  // ---- tiles: drawn in place, plus (US) the western Aleutians east of 180° drawn 360° west
+  const hexSets = useMemo(() => {
+    const all = Array.from({ length: data.n }, (_, i) => i)
+    if (country !== 'usa') return { main: all, east: [] as number[] }
+    const main: number[] = [], east: number[] = []
+    // base cells are ~2,000 km across: only those centred near 180° need a per-tile test
+    const nearAntimeridian = new Map<number, boolean>()
+    for (let i = 0; i < data.n; i++) {
+      const h = data.hexes.h3[i]
+      const bc = getBaseCellNumber(h)
+      let near = nearAntimeridian.get(bc)
+      if (near === undefined) {
+        near = Math.abs(cellToLatLng(cellToParent(h, 0))[1]) > 140
+        nearAntimeridian.set(bc, near)
+      }
+      ;(near && cellToLatLng(h)[1] > 0 ? east : main).push(i)
+    }
+    return { main, east }
+  }, [data.hexes, data.n, country])
+
+  // US view centred east of 50°E (after panning across 180°): draw the US data one turn east too
+  const lonOffset = country === 'usa' && view && view.longitude > 50 ? 360 : 0
+  const shiftBy = (deg: number) => SHIFT[lonOffset + deg]
+
+  // ---- colours with brushing emphasis
   const brushed = brushedAll[country]
-  const anyBrush = Object.values(brushedAll).some((b) => b && [...b].some((i) => i >= 0))
+  const anyBrush = useMemo(() => Object.values(brushedAll).some((b) => {
+    if (!b) return false
+    for (const i of b) if (i >= 0) return true
+    return false
+  }), [brushedAll])
   const colors = useMemo(() => {
     if (!lens) return null
     if (!anyBrush || !brushed) return lens.colors
@@ -134,7 +229,7 @@ export function MapPane({ country, data, app, lens, compact }: Props) {
       if (!brushed.has(i)) { c[i * 4] *= 0.25; c[i * 4 + 1] *= 0.25; c[i * 4 + 2] *= 0.25 }
     }
     return c
-  }, [lens, brushed, anyBrush, data])
+  }, [lens, brushed, anyBrush, data.n])
 
   // ---- selection geometry
   const selectedHexes = useMemo(() => {
@@ -148,28 +243,41 @@ export function MapPane({ country, data, app, lens, compact }: Props) {
       const c = data.cities.find((x) => x.id === selection.id)
       return c ? c.tiles.map((t) => t.h3) : []
     }
+    if (selection.kind === 'wonder') {
+      const w = data.wonders.find((x) => x.name === selection.id)
+      return w?.h3 ? [w.h3] : []
+    }
     return []
-  }, [selection, country, data])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selection, country, data.hexes, data.cities, data.wonders, data.admin])
+  const selPolys = useMemo(
+    () => selectedHexes.map((h) => cellToBoundary(h, true).map(([lo, la]) => [mapLon(country, lo), la])),
+    [selectedHexes, country],
+  )
+  const selFeature = useMemo(() => {
+    if (!selLevel || selUnit < 0 || !geo[selLevel]) return null
+    return adminFeature(data, selLevel, selUnit, geoForMap(country, geo[selLevel]))
+  }, [selLevel, selUnit, geo, data, country])
 
   const zoom = view?.zoom ?? 4
   const iconMinZoom = country === 'lka' ? 7.6 : 5.6
 
   // ---- icons (districts + wonders)
   const iconData = useMemo(() => {
-    const out: { pos: [number, number]; icon: string; size: number; kind: 'district' | 'wonder'; label: string }[] = []
+    const out: IconDatum[] = []
     const codes = idx.districts.map((x) => x.code)
     const minor = new Set(['neighborhood', 'farmland', 'preserve', 'fishery', 'plantation', 'encampment'])
     for (let i = 0; i < data.n; i++) {
       const code = codes[data.hexes.district[i]]
       if (!code) continue
       if (minor.has(code) && zoom < iconMinZoom + 1.2) continue
-      const h = data.hexes.h3[i]
-      const ll = hexCenter(data, i)
-      out.push({ pos: ll, icon: DISTRICT_META[code]?.icon ?? '•', size: code === 'city_center' ? 30 : 22, kind: 'district', label: `${DISTRICT_META[code]?.label} · ${h}` })
+      const [lo, la] = hexCenter(data, i)
+      out.push({ pos: [mapLon(country, lo), la], icon: DISTRICT_META[code]?.icon ?? '•', size: code === 'city_center' ? 30 : 22, kind: 'district', label: `Civ district: ${DISTRICT_META[code]?.label ?? code}` })
     }
-    for (const w of data.wonders) out.push({ pos: [w.lon, w.lat], icon: WONDER_ICON[w.category] ?? '★', size: 30, kind: 'wonder', label: `${w.category}: ${w.name}` })
+    for (const w of data.wonders) out.push({ pos: [mapLon(country, w.lon), w.lat], icon: WONDER_ICON[w.category] ?? '★', size: 30, kind: 'wonder', label: `${w.category}: ${w.name}` })
     return out
-  }, [data, idx, zoom >= iconMinZoom + 1.2])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [data.hexes, data.wonders, data.n, idx, country, zoom >= iconMinZoom + 1.2])
   const atlas = useMemo(() => emojiAtlas([...new Set(iconData.map((d) => d.icon))]), [iconData])
 
   // declutter city banners: keep the biggest cities, drop labels whose boxes would overlap
@@ -180,7 +288,7 @@ export function MapPane({ country, data, app, lens, compact }: Props) {
     const boxes: [number, number, number, number][] = []
     const fs = compact ? 11 : 13
     return [...data.cities].sort((a, b) => b.size - a.size).filter((c) => {
-      const [x, y] = vp.project([c.lon, c.lat])
+      const [x, y] = vp.project([mapLon(country, c.lon) + lonOffset, c.lat])
       const w = (c.name.length + 4) * fs * 0.62 + 12, h = fs + 8
       const b: [number, number, number, number] = [x - w / 2, y - 26 - h / 2, x + w / 2, y - 26 + h / 2]
       if (boxes.some((o) => b[0] < o[2] && b[2] > o[0] && b[1] < o[3] && b[3] > o[1])) return false
@@ -188,116 +296,215 @@ export function MapPane({ country, data, app, lens, compact }: Props) {
       return true
     })
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [data.cities, zKey, size?.w, size?.h, compact, Math.round((view?.longitude ?? 0) * 10), Math.round((view?.latitude ?? 0) * 10)])
+  }, [data.cities, zKey, size?.w, size?.h, compact, lonOffset, Math.round((view?.longitude ?? 0) * 10), Math.round((view?.latitude ?? 0) * 10)])
 
-  const pointLayers = (lensDef.pointLayers ?? []).flatMap((name) => {
+  // ---- facility points (Energy / Trade lenses)
+  const pointSets = useMemo(() => (lensDef.pointLayers ?? []).flatMap((name) => {
     const layer = data.points[name]
     if (!layer) return []
-    const vk = POINT_VALUE[name] ?? []
-    const rows = layer.rows.filter((r) => vk.some((k) => Number(r[k]) > 0))
-    const val = (r: Record<string, unknown>) => Number(vk.map((k) => r[k]).find((v) => Number(v) > 0) ?? 0)
-    const maxV = Math.max(1, ...rows.map(val))
-    return [new ScatterplotLayer({
-      id: `pts-${name}`, data: rows, pickable: true, stroked: true, filled: true,
-      getPosition: (r: Record<string, unknown>) => [Number(r.lon), Number(r.lat)],
-      getRadius: (r: Record<string, unknown>) => 3 + 22 * Math.sqrt(val(r) / maxV),
-      radiusUnits: 'pixels', getFillColor: [...(POINT_COLORS[name] ?? [255, 255, 255]), 170] as [number, number, number, number],
-      getLineColor: [10, 15, 25, 220], lineWidthMinPixels: 1,
-    })]
+    return [{ name, ...splitRows(name, layer.rows), total: layer.total }]
+  }), [data.points, lensDef])
+  const radiusScale = pointRadiusScale(view ? metersPerPixel(view.zoom, view.latitude) : 1000)
+  const pointLayers = pointSets.flatMap(({ name, sized, unsized }) => {
+    const st = pointStyle(name)
+    const pos = (r: PointRow): [number, number] => [mapLon(country, Number(r.lon)), Number(r.lat)]
+    return [
+      sized.length > 0 && new ScatterplotLayer<PointRow>({
+        id: `pts-${name}`, data: sized, pickable: true, stroked: true, filled: true,
+        getPosition: pos, getRadius: (r) => Math.sqrt(pointValue(name, r) / st.ref),
+        radiusUnits: 'pixels', radiusScale, radiusMinPixels: 1.6, radiusMaxPixels: 30,
+        getFillColor: [...st.color, 120] as [number, number, number, number], getLineColor: [10, 15, 25, 210], lineWidthUnits: 'pixels', getLineWidth: 0.8,
+        modelMatrix: shiftBy(0), parameters: ON_TOP,
+      }),
+      unsized.length > 0 && new ScatterplotLayer<PointRow>({
+        id: `pts-${name}-ring`, data: unsized, pickable: true, stroked: true, filled: true,
+        getPosition: pos, getRadius: 4.5, radiusUnits: 'pixels',
+        getFillColor: [10, 15, 25, 90], getLineColor: [...st.color, 235] as [number, number, number, number], lineWidthUnits: 'pixels', getLineWidth: 1.5,
+        modelMatrix: shiftBy(0), parameters: ON_TOP,
+      }),
+    ]
   })
 
+  const hexProps = {
+    getHexagon: (i: number) => data.hexes.h3[i],
+    getFillColor: (i: number): [number, number, number, number] => [colors![i * 4], colors![i * 4 + 1], colors![i * 4 + 2], colors![i * 4 + 3]],
+    getElevation: (i: number) => (lens ? lens.elevation[i] : 0),
+    // raw metres of relief (terrain, district and dominant lenses) are exaggerated ×6; metric and
+    // yield lenses already scale their columns (normalised value × 60 km, yield × 1.5 km)
+    elevationScale: lensDef.kind === 'terrain' || lensDef.kind === 'district' || lensDef.kind === 'dominant' ? 6 : 1,
+    extruded: extrude,
+    coverage: extrude ? 0.92 : 0.955,
+    highPrecision: false,
+    pickable: true,
+    autoHighlight: true,
+    highlightColor: HEX_HIGHLIGHT,
+    updateTriggers: { getFillColor: [colors], getElevation: [lens] },
+    material: HEX_MATERIAL,
+  }
+  const pickGeo = pickLv !== 'hex' ? mapGeo(pickLv) : null
+  const adm1Geo = mapGeo('adm1'), adm2Geo = country === 'lka' ? mapGeo('adm2') : null
+
   const layers = [
-    colors && new H3HexagonLayer<number>({
-      id: `hex-${country}`,
-      data: indices,
-      getHexagon: (i) => data.hexes.h3[i],
-      getFillColor: (i) => [colors[i * 4], colors[i * 4 + 1], colors[i * 4 + 2], colors[i * 4 + 3]],
-      getElevation: (i) => (lens ? lens.elevation[i] : 0),
-      elevationScale: lensDef.kind === 'terrain' || lensId === 'elevation' ? 6 : 1,
-      extruded: extrude,
-      coverage: extrude ? 0.92 : 0.955,
-      highPrecision: false,
-      pickable: true,
-      autoHighlight: true,
-      highlightColor: [255, 236, 170, 110],
-      updateTriggers: { getFillColor: [colors], getElevation: [lens] },
-      material: { ambient: 0.55, diffuse: 0.6, shininess: 20 },
+    colors && new H3HexagonLayer<number>({ id: `hex-${country}`, data: hexSets.main, modelMatrix: shiftBy(0), ...hexProps }),
+    colors && hexSets.east.length > 0 && new H3HexagonLayer<number>({ id: `hex-${country}-east`, data: hexSets.east, modelMatrix: shiftBy(-360), ...hexProps }),
+    showAdmin && adm2Geo && new GeoJsonLayer({
+      id: `adm2-${country}`, data: adm2Geo, stroked: true, filled: false,
+      getLineColor: [230, 220, 190, 70], lineWidthMinPixels: 0.6, pickable: false, modelMatrix: shiftBy(0),
     }),
-    showAdmin && geo.adm2 && country === 'lka' && new GeoJsonLayer({
-      id: `adm2-${country}`, data: geo.adm2, stroked: true, filled: false,
-      getLineColor: [230, 220, 190, 70], lineWidthMinPixels: 0.6, pickable: false,
+    showAdmin && adm1Geo && new GeoJsonLayer({
+      id: `adm1-${country}`, data: adm1Geo, stroked: true, filled: false,
+      getLineColor: [240, 226, 180, 150], lineWidthMinPixels: country === 'usa' ? 0.9 : 1.4, pickable: false, modelMatrix: shiftBy(0),
     }),
-    showAdmin && geo.adm1 && new GeoJsonLayer({
-      id: `adm1-${country}`, data: geo.adm1, stroked: true, filled: false,
-      getLineColor: [240, 226, 180, 150], lineWidthMinPixels: country === 'usa' ? 0.9 : 1.4, pickable: false,
+    pickGeo && new GeoJsonLayer({
+      id: `pick-${country}-${pickLv}`, data: pickGeo, stroked: true, filled: false,
+      getLineColor: [255, 255, 255, 60], lineWidthMinPixels: 0.5, pickable: false, modelMatrix: shiftBy(0),
     }),
-    pickLevel !== 'hex' && geo[pickLevel] && new GeoJsonLayer({
-      id: `pick-${country}-${pickLevel}`, data: geo[pickLevel], stroked: true, filled: false,
-      getLineColor: [255, 255, 255, 60], lineWidthMinPixels: 0.5,
+    selPolys.length > 0 && new PolygonLayer<number[][]>({
+      id: `sel-${country}`, data: selPolys, getPolygon: (p) => p, filled: true, stroked: true,
+      getFillColor: [255, 240, 190, selFeature ? 22 : 40], getLineColor: [255, 244, 210, selFeature ? 150 : 255],
+      lineWidthMinPixels: selPolys.length > 1 ? 1 : 2.5, modelMatrix: shiftBy(0), parameters: ON_TOP,
     }),
-    selectedHexes.length > 0 && new H3HexagonLayer<string>({
-      id: `sel-${country}`, data: selectedHexes, getHexagon: (h) => h, filled: true, stroked: true, extruded: false,
-      getFillColor: [255, 240, 190, 40], getLineColor: [255, 244, 210, 255], lineWidthMinPixels: selectedHexes.length > 1 ? 1 : 2.5,
-      highPrecision: true,
+    selFeature && new GeoJsonLayer({
+      id: `selunit-${country}`, data: [selFeature], stroked: true, filled: true,
+      getFillColor: [255, 240, 190, 30], getLineColor: [255, 244, 210, 255], lineWidthMinPixels: 2.5,
+      pickable: false, modelMatrix: shiftBy(0), parameters: ON_TOP,
     }),
     ...pointLayers,
-    showIcons && zoom >= iconMinZoom && new IconLayer({
+    showIcons && zoom >= iconMinZoom && new IconLayer<IconDatum>({
       id: `icons-${country}`, data: iconData, iconAtlas: atlas.canvas as unknown as string, iconMapping: atlas.mapping,
       getIcon: (d) => d.icon, getPosition: (d) => d.pos, getSize: (d) => d.size, sizeUnits: 'pixels',
-      pickable: true, updateTriggers: { getIcon: [atlas] },
+      pickable: true, updateTriggers: { getIcon: [atlas] }, modelMatrix: shiftBy(0), parameters: ON_TOP,
     }),
-    showIcons && new TextLayer<CountryData['cities'][number]>({
-      id: `cities-${country}`, data: visibleCities, getPosition: (c) => [c.lon, c.lat], getText: (c) => `${c.size}  ${c.name}`,
+    showIcons && new TextLayer<City>({
+      id: `cities-${country}`, data: visibleCities, getPosition: (c) => [mapLon(country, c.lon), c.lat], getText: (c) => `${c.size}  ${c.name}`,
       getSize: compact ? 11 : 13, getColor: [255, 246, 220, 255], background: true, getBackgroundColor: [12, 22, 38, 225],
       backgroundPadding: [6, 3, 6, 3], getBorderColor: [217, 164, 65, 255], getBorderWidth: 1,
       fontFamily: 'system-ui, -apple-system, Segoe UI, sans-serif', fontWeight: 700, getPixelOffset: [0, -26],
-      pickable: true, characterSet: 'auto',
+      pickable: true, characterSet: 'auto', modelMatrix: shiftBy(0), parameters: ON_TOP,
     }),
   ].filter(Boolean)
 
+  // ---- picking: tiles, or the admin polygon that contains the point
+  const hexAt = (lon: number, lat: number): number | null => {
+    try { return data.hexIndex.get(latLngToCell(lat, lon, data.meta.h3_res)) ?? null } catch { return null }
+  }
+  /** Select what lies at a map point (longitude in this map's data frame). Returns a short description. */
+  const selectAt = (lon: number, lat: number, hexIdx: number | null): string | null => {
+    const st = useStore.getState()
+    const tab = st.panel === 'advisors' || st.panel === 'explorer' ? st.panel : 'tile'
+    const i = hexIdx ?? hexAt(lon, lat)
+    if (pickLv === 'hex') {
+      if (i == null) return null
+      st.select({ country, kind: 'hex', id: data.hexes.h3[i] }, tab)
+      const t = idx.terrain_codes[data.hexes.terrain[i]], f = idx.feature_codes[data.hexes.feature[i]]
+      const u = adminUnitOfHex(data, 'adm2', i)
+      return `Tile ${terrainLabel(t, f, !!data.hexes.hills[i])}${u ? `, ${u.unit.name}` : ''}`
+    }
+    let ui = -1
+    const fc = mapGeo(pickLv)
+    if (fc) {
+      const id = adminIdAt(fc, lon, lat)
+      if (id != null) ui = adminIndexOf(data, pickLv, id)
+    }
+    // boundaries not loaded yet, or a click in a gap of the simplified outlines: use the tile's main unit
+    if (ui < 0 && i != null) ui = adminUnitOfHex(data, pickLv, i)?.index ?? -1
+    if (ui < 0) return null
+    st.select({ country, kind: 'admin', id: `${pickLv}:${ui}` }, tab)
+    return `${data.admin[pickLv].label} ${data.admin[pickLv].units[ui]?.name ?? ''}`
+  }
+
+  /** Phones: pan so a tapped point is not hidden under the bottom sheet that the selection opens. */
+  const revealAboveSheet = (lonView: number, lat: number) => {
+    const el = ref.current
+    if (!el || !view || !size) return
+    const visH = visibleHeightAboveSheet(el)
+    if (visH == null) return
+    const vp = new WebMercatorViewport({ width: size.w, height: size.h, longitude: view.longitude, latitude: view.latitude, zoom: view.zoom, pitch: view.pitch ?? 0, bearing: view.bearing ?? 0 })
+    const [x, y] = vp.project([lonView, lat])
+    const m = 44
+    if (y > m && y < visH - m && x > m && x < size.w - m) return
+    const tx = x > m && x < size.w - m ? x : size.w / 2
+    const [cLon, cLat] = vp.unproject([size.w / 2 + (x - tx), size.h / 2 + (y - visH / 2)])
+    userMoved.current = true
+    markMoved(country)
+    const anim = prefersReducedMotion() ? {} : { transitionDuration: 450, transitionInterpolator: new LinearInterpolator(['longitude', 'latitude']) }
+    setView({ ...still(view), longitude: cLon, latitude: cLat, ...anim } as MapViewState)
+  }
+
   const onClick = (info: PickingInfo) => {
-    if (!info.layer) return
-    const id = info.layer.id
-    if (id.startsWith('cities-')) {
-      const c = info.object as CountryData['cities'][number]
-      useStore.getState().select({ country, kind: 'city', id: c.id }, 'city')
+    const id = info.layer?.id ?? ''
+    if (id.startsWith('cities-') && info.object) {
+      openCity(country, info.object as City) // selects, opens City View and flies (sheet-aware on phones)
       return
     }
-    if (id.startsWith('hex-') && typeof info.index === 'number' && info.index >= 0) {
-      const i = info.index
-      const cur = useStore.getState().panel
-      const tab = cur === 'advisors' || cur === 'explorer' ? cur : 'tile'
-      if (pickLevel === 'hex') useStore.getState().select({ country, kind: 'hex', id: data.hexes.h3[i] }, tab)
-      else {
-        const u = adminUnitOfHex(data, pickLevel, i)
-        if (u) useStore.getState().select({ country, kind: 'admin', id: `${pickLevel}:${u.index}` }, tab)
-      }
-    }
+    // facilities and icons select the tile they sit in; anything else the point under the cursor
+    let lonView: number, lat: number
+    if (id.startsWith('icons-') && info.object) [lonView, lat] = [(info.object as IconDatum).pos[0] + lonOffset, (info.object as IconDatum).pos[1]]
+    else if (id.startsWith('pts-') && info.object) [lonView, lat] = [mapLon(country, Number((info.object as PointRow).lon)) + lonOffset, Number((info.object as PointRow).lat)]
+    else if (info.coordinate) [lonView, lat] = info.coordinate as [number, number]
+    else return
+    const hexIdx = id.startsWith('hex-') && typeof info.object === 'number' ? info.object : null
+    if (selectAt(frameLon(country, lonView), lat, hexIdx)) revealAboveSheet(lonView, lat)
   }
 
   const getTooltip = (info: PickingInfo) => {
-    if (!info.layer) return null
-    if (info.layer.id.startsWith('hex-') && typeof info.index === 'number' && info.index >= 0) {
-      return { html: hexTooltip(data, app, info.index, lensId, lensMetricSel), className: 'deck-tip' }
+    const id = info.layer?.id ?? ''
+    if (id.startsWith('hex-') && typeof info.object === 'number') {
+      return { html: hexTooltip(data, app, info.object, lensId, lensMetricSel), className: 'deck-tip' }
     }
-    if (info.layer.id.startsWith('icons-')) return { html: `<b>${(info.object as { label: string }).label}</b>`, className: 'deck-tip' }
-    if (info.layer.id.startsWith('pts-')) {
-      const r = info.object as Record<string, unknown>
-      const extra = Object.entries(r).filter(([k]) => !['id', 'lat', 'lon', 'h3', 'name'].includes(k)).slice(0, 5)
-        .map(([k, v]) => `<div><span class="k">${k}</span> ${typeof v === 'number' ? v.toLocaleString() : v}</div>`).join('')
-      return { html: `<b>${r.name}</b>${extra}`, className: 'deck-tip' }
+    if (id.startsWith('icons-')) return { html: `<b>${escapeHtml((info.object as IconDatum).label)}</b>`, className: 'deck-tip' }
+    if (id.startsWith('pts-') && info.object) {
+      const name = id.slice(4).replace(/-ring$/, '')
+      return { html: pointTooltip(data, name, info.object as PointRow, sources), className: 'deck-tip' }
     }
-    if (info.layer.id.startsWith('cities-')) {
-      const c = info.object as CountryData['cities'][number]
-      return { html: `<b>${c.name}</b><div>City size ${c.size} · ${fmtUnit(c.pop, 'persons')} people in ${c.tiles.length} tiles</div><div class="k">Click for City View</div>`, className: 'deck-tip' }
+    if (id.startsWith('cities-') && info.object) {
+      const c = info.object as City
+      return { html: `<b>${escapeHtml(c.name)}</b><div>City size ${c.size} · ${fmtUnit(c.pop, 'persons')} people in ${c.tiles.length} tiles</div><div class="k">Click for City View</div>`, className: 'deck-tip' }
     }
     return null
   }
 
+  // ---- keyboard access: a labelled, focusable map; Enter selects what is under the centre mark
+  const [kbFocus, setKbFocus] = useState(false)
+  const [announce, setAnnounce] = useState('')
+  const keySelect = useRef<() => void>(() => {})
+  keySelect.current = () => {
+    if (!view) return
+    const lon = frameLon(country, view.longitude)
+    const what = selectAt(lon, view.latitude, null)
+    setAnnounce(what ? `Selected ${what}. Details are in the Inspect panel.` : 'Nothing to select at the centre of the map.')
+  }
+  const mounted = view !== null
+  useEffect(() => {
+    const w = ref.current?.querySelector<HTMLElement>(`#deck-${country}-wrapper`)
+    if (!w) return
+    w.setAttribute('role', 'application')
+    w.setAttribute('aria-roledescription', 'map')
+    w.setAttribute('aria-label', `${COUNTRY_META[country].name} map. Arrow keys pan, plus and minus zoom, Enter selects the tile or area under the centre mark.`)
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Enter' && e.key !== ' ') return
+      e.preventDefault()
+      keySelect.current()
+    }
+    const onFocus = () => setKbFocus(w.matches(':focus-visible'))
+    const onBlur = () => setKbFocus(false)
+    w.addEventListener('keydown', onKey)
+    w.addEventListener('focus', onFocus)
+    w.addEventListener('blur', onBlur)
+    return () => { w.removeEventListener('keydown', onKey); w.removeEventListener('focus', onFocus); w.removeEventListener('blur', onBlur) }
+  }, [mounted, country])
+
+  const notes: string[] = []
+  if (extrude) notes.push(coarsePointer() ? '3D: drag with two fingers to tilt or turn.' : '3D: right-drag, or Ctrl + drag, to tilt or turn.')
+  if (pickFallback) notes.push(`No ${pickLevel === 'adm3' ? 'DS divisions' : 'units of that level'} here: clicks select ${plural((data.admin[pickLv]?.label ?? 'unit').toLowerCase())}.`)
+  const showKey = pointSets.length > 0
+  const shortJump = compact || (size?.w ?? 1000) < 600
+
   return (
-    <div className="map-pane" ref={ref}>
+    <div className={`map-pane ${compact ? 'mp-compact' : ''}`} ref={ref}>
       {view && (
         <DeckGL
+          id={`deck-${country}`}
           viewState={view}
           onViewStateChange={onViewStateChange as never}
           controller={{ doubleClickZoom: true, touchRotate: true, dragRotate: extrude }}
@@ -306,33 +513,79 @@ export function MapPane({ country, data, app, lens, compact }: Props) {
           getTooltip={getTooltip as never}
           getCursor={({ isHovering }) => (isHovering ? 'pointer' : 'grab')}
         >
-          {basemap !== 'none' && <BaseMap mapStyle={BASEMAPS[basemap]} reuseMaps attributionControl={false} />}
+          {basemap !== 'none' && <BaseMap mapStyle={BASEMAPS[basemap]} />}
         </DeckGL>
       )}
+      {kbFocus && <div className="mp-crosshair" aria-hidden />}
+      <div className="mp-sr" role="status" aria-live="polite">{announce}</div>
       <div className="pane-label">
         <span className="dot" style={{ background: COUNTRY_META[country].accent }} />
         <strong>{data.meta.name}</strong>
         <span className="muted"> · H3 r{data.meta.h3_res} · ~{Math.round(data.meta.avg_hex_km2)} km² tiles</span>
       </div>
-      {view && <ScaleBar zoom={view.zoom} lat={view.latitude} />}
-      {country === 'usa' && !compact && (
-        <div className="jump">
-          {([['CONUS', -98.5, 39.5, 3.4], ['Alaska', -152, 63.5, 3.2], ['Hawaii', -157.5, 20.6, 5.8]] as const).map(([n, lo, la, z]) => (
-            <button key={n} onClick={() => useStore.getState().fly('usa', lo, la, z)}>{n}</button>
+      {view && <ScaleBar zoom={view.zoom} lat={view.latitude} className={country === 'usa' ? 'mp-below-jump' : undefined} />}
+      {country === 'usa' && (
+        <div className={`jump ${shortJump ? 'mp-jump-compact' : ''}`} role="group" aria-label="Show part of the United States">
+          {US_JUMPS.map((j) => (
+            <button
+              key={j.name}
+              title={`Show ${j.name}`}
+              aria-label={`Show ${j.name}`}
+              onClick={() => {
+                if (!size) return
+                const vp = new WebMercatorViewport({ width: size.w, height: size.h })
+                const f = vp.fitBounds(j.bounds, { padding: Math.min(30, size.w / 12) })
+                useStore.getState().fly('usa', f.longitude, f.latitude, f.zoom)
+              }}
+            >
+              {shortJump ? j.short : j.name}
+            </button>
           ))}
+        </div>
+      )}
+      {(notes.length > 0 || showKey || basemap !== 'none') && (
+        <div className="mp-tr">
+          {notes.map((n) => <div key={n} className="mp-note">{n}</div>)}
+          {showKey && (
+            <div className="mp-key" role="note" aria-label="Facility circles">
+              {pointSets.map(({ name, sized, unsized, total }) => {
+                const st = pointStyle(name)
+                const m = data.metricByKey.get(st.metric)
+                const shown = sized.length + unsized.length
+                const minV = sized.length ? pointValue(name, sized[sized.length - 1]) : NaN
+                const noValue = sized.length === 0 && st.noValue?.[country]
+                return (
+                  <div key={name} className="mp-key-row">
+                    <span className={`mp-key-dot ${noValue ? 'ring' : ''}`} style={{ '--c': `rgb(${st.color.join(',')})` } as CSSProperties} aria-hidden />
+                    <span>
+                      <b>{st.plural}</b>{' '}
+                      {noValue ? noValue : <>circle area = {st.sizeLabel}{shown < total ? ` · ${fmtInt(shown)} of ${fmtInt(total)} shown, all ≥ ${fmtUnit(minV, st.unit)}` : ''}</>}
+                      {!noValue && m?.sources?.length ? <> <SourceChips ids={m.sources} /></> : null}
+                    </span>
+                  </div>
+                )
+              })}
+              <div className="mp-key-note">Same size rule on both maps; circles grow more slowly than the map as you zoom in.</div>
+            </div>
+          )}
+          {basemap !== 'none' && (
+            <div className="mp-attrib">
+              Basemap © <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noreferrer">OpenStreetMap</a> contributors © <a href="https://carto.com/attributions" target="_blank" rel="noreferrer">CARTO</a>
+            </div>
+          )}
         </div>
       )}
     </div>
   )
 }
 
-const centreCache = new WeakMap<CountryData, Float64Array>()
-import { cellToLatLng } from 'h3-js'
+// tile centres, cached per hexes table (kept across the metric-matrix arrival, which swaps CountryData)
+const centreCache = new WeakMap<CountryData['hexes'], Float64Array>()
 function hexCenter(d: CountryData, i: number): [number, number] {
-  let c = centreCache.get(d)
+  let c = centreCache.get(d.hexes)
   if (!c) {
     c = new Float64Array(d.n * 2).fill(NaN)
-    centreCache.set(d, c)
+    centreCache.set(d.hexes, c)
   }
   if (Number.isNaN(c[i * 2])) {
     const [la, lo] = cellToLatLng(d.hexes.h3[i])
@@ -347,7 +600,7 @@ function hexTooltip(d: CountryData, app: AppData, i: number, lensId: string, len
   const f = idx.feature_codes[d.hexes.feature[i]]
   const dist = idx.districts[d.hexes.district[i]]?.code ?? ''
   const unit = adminUnitOfHex(d, 'adm2', i)
-  const y = YIELDS.map((k) => `<span class="y" style="color:${YIELD_META[k].color}">${d.hexes.yields[k][i]}</span>`).join(' ')
+  const y = YIELDS.map((k) => `<span class="y" style="color:${YIELD_META[k].color}" title="${YIELD_META[k].label}">${d.hexes.yields[k][i]}</span>`).join(' ')
   const lens = LENS_BY_ID.get(lensId)
   let lensLine = ''
   if (lens?.kind === 'metric') {
@@ -355,12 +608,16 @@ function hexTooltip(d: CountryData, app: AppData, i: number, lensId: string, len
     if (key) {
       const m = d.metricByKey.get(key)!
       const v = value(d, key, i)
-      lensLine = `<div><span class="k">${m.label}</span> ${fmtUnit(v, m.unit)}${isDensity(d, key) ? ` <span class="k">(${fmtUnit(v / d.hexArea[i], m.unit)}/km²)</span>` : ''}</div>`
+      const shown = key === 'pop_density' ? `${fmtNumber(v)} people per km² of land` : fmtUnit(v, m.unit)
+      const dens = isDensity(d, key) && Number.isFinite(v) ? ` <span class="k">(${fmtUnit(v / d.hexArea[i], m.unit)} per km² of tile)</span>` : ''
+      lensLine = `<div><span class="k">${escapeHtml(m.label)}</span> ${shown}${dens}</div>`
     }
   }
   const pop = value(d, 'pop', i)
+  // "District" is also a Civ concept (the icon in the title), so name the admin unit explicitly
+  const unitLabel = d.admin.adm2.label === 'District' ? 'Admin district' : d.admin.adm2.label
   return `<div class="tt-title">${terrainLabel(t, f, !!d.hexes.hills[i])}${dist ? ` · ${DISTRICT_META[dist]?.icon ?? ''} ${DISTRICT_META[dist]?.label ?? ''}` : ''}</div>
     <div class="tt-yields">${y}</div>
-    ${unit ? `<div><span class="k">${d.admin.adm2.label}</span> ${unit.unit.name}</div>` : ''}
+    ${unit ? `<div><span class="k">${unitLabel}</span> ${escapeHtml(unit.unit.name)}</div>` : ''}
     <div><span class="k">Population</span> ${fmtUnit(pop, 'persons')}</div>${lensLine}`
 }

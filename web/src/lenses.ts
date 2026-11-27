@@ -305,14 +305,28 @@ const domainCache = new Map<string, DomainInfo>()
 const DOMAIN_CACHE_MAX = 48
 const byCountryOrder = (a: CountryId, b: CountryId) => COUNTRIES.indexOf(a) - COUNTRIES.indexOf(b)
 
-/** Should a skewed positive metric go on a log ramp? (only for lenses with autoLog) */
-function autoLog(sorted: Float64Array, unit: string): boolean {
-  if (LINEAR_UNITS.has(unit.trim().toLowerCase()) || !sorted.length || sorted[0] < 0) return false
+/** The strictly positive tail of an ascending-sorted array. */
+function positivePart(sorted: Float64Array): Float64Array {
   let lo = 0, hi = sorted.length
   while (lo < hi) { const mid = (lo + hi) >> 1; if (sorted[mid] > 0) hi = mid; else lo = mid + 1 }
-  const pos = sorted.subarray(lo)
-  if (pos.length < 10) return false
-  return sortedQuantile(pos, 0.98) / sortedQuantile(pos, 0.02) >= 20
+  return sorted.subarray(lo)
+}
+
+/**
+ * Should a skewed positive metric go on a log ramp? (only for lenses with autoLog): no negatives,
+ * not a bounded unit (%, share, index…), and the union of the countries' positive 2-98% ranges
+ * spans at least 20x (e.g. household income: ~$2.3k in Sri Lanka to ~$110k in the US).
+ */
+function autoLog(sortedBy: Float64Array[], unit: string): boolean {
+  if (LINEAR_UNITS.has(unit.trim().toLowerCase()) || !sortedBy.length) return false
+  let lo = Infinity, hi = -Infinity
+  for (const sorted of sortedBy) {
+    if (sorted[0] < 0) return false
+    const pos = positivePart(sorted)
+    if (pos.length < 10) continue
+    lo = Math.min(lo, sortedQuantile(pos, 0.02)); hi = Math.max(hi, sortedQuantile(pos, 0.98))
+  }
+  return Number.isFinite(lo) && hi / lo >= 20
 }
 
 function lensDomain(lens: LensDef, key: string, pool: CountryData[], pendingIds: CountryId[]): DomainInfo {
@@ -321,39 +335,39 @@ function lensDomain(lens: LensDef, key: string, pool: CountryData[], pendingIds:
   if (hit) return hit
   const pooled: CountryId[] = [], pending = [...pendingIds], missing: CountryId[] = []
   const parts: { c: CountryData; v: Float32Array; m: Metric }[] = []
-  let total = 0
   for (const c of pool) {
     const m = c.metricByKey.get(key)
     if (!m) { missing.push(c.id); continue }
     if (!c.matrixReady) { pending.push(c.id); continue }
     parts.push({ c, v: lensValues(c, key)!, m })
-    total += c.n
   }
-  // land tiles only (sea rings carry zeros for most metrics), except coastal-sea metrics
-  const buf = new Float64Array(total)
-  let k = 0
+  // Land tiles only (sea rings carry zeros for most metrics), except coastal-sea metrics. Each
+  // country's values are sorted on their own: the shared domain is the union of the countries' own
+  // robust (2-98%) ranges, so Sri Lanka's ~2k tiles are not clipped by the US's ~38k.
+  const sortedBy: Float64Array[] = []
   for (const { c, v, m } of parts) {
     const coast = m.weight === 'coast', ring = c.hexes.ring
-    const k0 = k
+    const buf = new Float64Array(c.n)
+    let k = 0
     for (let i = 0; i < c.n; i++) {
       const x = v[i]
       if (Number.isFinite(x) && (coast || ring[i] === 0)) buf[k++] = x
     }
-    if (k > k0) pooled.push(c.id)
-    else missing.push(c.id)
+    if (k) { pooled.push(c.id); sortedBy.push(buf.subarray(0, k).sort()) } else missing.push(c.id)
   }
-  const sorted = buf.subarray(0, k).sort()
   const m0 = parts[0]?.m
   const basis = m0 ? lensBasis(m0) : 'raw'
-  const log = basis === 'density' || lens.log === true || (!!lens.autoLog && basis === 'raw' && !!m0 && autoLog(sorted, m0.unit))
-  let vals: Float64Array = sorted
-  if (log) {
-    let lo = 0, hi = sorted.length
-    while (lo < hi) { const mid = (lo + hi) >> 1; if (sorted[mid] > 0) hi = mid; else lo = mid + 1 }
-    vals = sorted.subarray(lo)
+  const log = basis === 'density' || lens.log === true || (!!lens.autoLog && basis === 'raw' && !!m0 && autoLog(sortedBy, m0.unit))
+  let lo = Infinity, hi = -Infinity
+  for (const sorted of sortedBy) {
+    const vals = log ? positivePart(sorted) : sorted
+    if (!vals.length) continue
+    const [a, b] = sortedDomain(vals, log)
+    lo = Math.min(lo, a); hi = Math.max(hi, b)
   }
+  const domain: [number, number] = Number.isFinite(lo) ? [lo, hi] : [0, 1]
   const info: DomainInfo = {
-    domain: sortedDomain(vals, log), log,
+    domain, log,
     pooled: pooled.sort(byCountryOrder), pending: [...new Set(pending)].sort(byCountryOrder), missing: missing.sort(byCountryOrder),
   }
   if (domainCache.size >= DOMAIN_CACHE_MAX) domainCache.delete(domainCache.keys().next().value!)
@@ -363,12 +377,13 @@ function lensDomain(lens: LensDef, key: string, pool: CountryData[], pendingIds:
 
 function lensTitle(m: Metric, basis: LensBasis): { title: string; hint: string } {
   if (basis === 'density') {
+    // the unit caption ("… per km² of tile") is shown next to the title
     return {
-      title: `${m.label} per km² of tile`,
-      hint: 'Divided by each tile’s total area (km² of tile), the basis the yields use. Tiles are ~36 km² in Sri Lanka and ~253 km² in the US.',
+      title: m.label,
+      hint: `${m.label}, divided by each tile’s total area (per km² of tile), the basis the yields use. Tiles are ~36 km² in Sri Lanka and ~253 km² in the US.`,
     }
   }
-  if (basis === 'share') return { title: `${m.label} (% of tile area)`, hint: 'Share of each tile’s total area.' }
+  if (basis === 'share') return { title: m.label, hint: `${m.label} as a share of each tile’s total area.` }
   if (LAND_DENSITY_UNITS.has(m.unit.trim().toLowerCase())) {
     return { title: m.label, hint: 'Residents per km² of land in the tile (water excluded).' }
   }

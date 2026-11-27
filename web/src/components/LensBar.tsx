@@ -50,7 +50,8 @@ export function LensBar({ countries }: { countries: CountryData[] }) {
   }, [lensId, showSelect, measure])
   const page = (dir: 1 | -1) => {
     const el = scroller.current
-    if (el) el.scrollBy({ left: dir * el.clientWidth * 0.7, behavior: 'smooth' })
+    const calm = typeof matchMedia !== 'undefined' && matchMedia('(prefers-reduced-motion: reduce)').matches
+    if (el) el.scrollBy({ left: dir * el.clientWidth * 0.7, behavior: calm ? 'auto' : 'smooth' })
   }
 
   // ---- toolbar keyboard model: one Tab stop, arrow keys move between lenses

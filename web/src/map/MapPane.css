@@ -1,0 +1,63 @@
+/* Map pane overlays owned by MapPane.tsx (classes prefixed mp-). Base pane styles live in styles.css. */
+
+.map-pane { container: mappane / inline-size; }
+
+/* keyboard focus on the deck.gl wrapper (mjolnir sets an inline outline:none, hence !important) */
+.map-pane [id$='-wrapper']:focus-visible {
+  outline: 2px solid var(--brass2) !important;
+  outline-offset: -3px;
+}
+
+/* centre mark while the map has keyboard focus: Enter selects what is under it */
+.mp-crosshair {
+  position: absolute; left: 50%; top: 50%; width: 26px; height: 26px; margin: -13px 0 0 -13px;
+  pointer-events: none; z-index: 2;
+}
+.mp-crosshair::before, .mp-crosshair::after {
+  content: ''; position: absolute; background: var(--brass2); box-shadow: 0 0 0 1.5px #0b1422;
+}
+.mp-crosshair::before { left: 12px; top: 0; width: 2px; height: 26px; }
+.mp-crosshair::after { top: 12px; left: 0; height: 2px; width: 26px; }
+
+.mp-sr {
+  position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0);
+  clip-path: inset(50%); white-space: nowrap;
+}
+
+/* compact US jump buttons (side by side) */
+.jump.mp-jump-compact button { padding: 2px 6px; font-size: 11.5px; }
+
+/* top-right stack: gesture / picking notes, facility key, basemap attribution */
+.mp-tr {
+  position: absolute; top: 8px; right: 8px; z-index: 1;
+  display: flex; flex-direction: column; align-items: flex-end; gap: 4px;
+  max-width: min(330px, calc(100% - 300px)); pointer-events: none;
+}
+.mp-note, .mp-key, .mp-attrib {
+  background: #0b1422e0; border: 1px solid var(--line2); border-radius: 8px;
+  padding: 4px 8px; font-size: 11.5px; line-height: 1.35; color: var(--text);
+}
+.mp-note { color: var(--brass2); }
+.mp-key { pointer-events: auto; display: flex; flex-direction: column; gap: 4px; }
+.mp-key-row { display: flex; gap: 6px; align-items: baseline; }
+.mp-key-row .row { display: inline-flex; flex-wrap: wrap; vertical-align: middle; }
+.mp-key-dot {
+  flex: none; width: 10px; height: 10px; border-radius: 50%; position: relative; top: 1px;
+  background: color-mix(in srgb, var(--c) 55%, transparent); border: 1px solid #0a0f19;
+}
+.mp-key-dot.ring { background: transparent; border: 1.5px solid var(--c); }
+.mp-key-note { color: var(--muted); font-size: 11px; }
+.mp-attrib { pointer-events: auto; color: var(--muted); font-size: 10.5px; padding: 2px 6px; }
+.mp-attrib a { color: var(--muted); }
+
+.deck-tip .mp-tip-src { font-size: 11px; margin-top: 2px; }
+
+/* narrow panes (side by side on smaller screens, phones): move the stack below the pane label */
+@container mappane (max-width: 600px) {
+  .mp-tr { top: 40px; max-width: calc(100% - 136px); }
+}
+
+@media (max-width: 900px) {
+  /* the scale bar sits under the pane label on phones; leave room for the US jump buttons */
+  .map-pane .scalebar.mp-below-jump { top: 72px; }
+}

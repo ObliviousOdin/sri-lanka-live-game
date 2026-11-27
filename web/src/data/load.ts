@@ -39,7 +39,7 @@ function setProgress(id: CountryId, p: Partial<MatrixProgress>) {
 
 /** Streams a binary file, reporting progress at most every ~200 ms. */
 async function binary(path: string, onProgress?: (loaded: number, total: number) => void): Promise<ArrayBuffer> {
-  // low priority: the map-critical JSON (meta, hexes) should win the bandwidth on HTTP/2
+  // low priority: on HTTP/2 the admin outlines and other small JSON requested meanwhile go first
   const r = await fetch(url(path), { priority: 'low' } as RequestInit)
   if (!r.ok) throw new Error(`${path}: HTTP ${r.status}`)
   if (!r.body || !onProgress) return r.arrayBuffer()
@@ -135,19 +135,17 @@ async function tileAreas(hexes: HexesJson): Promise<Float32Array> {
 }
 
 /**
- * Loads one country. Everything is requested at once — meta, hexes, points, wonders, cities, the
- * admin tables (levels from index.json) and the metric matrix — instead of as a waterfall.
- * Resolves as soon as the map data is ready; when metrics.bin is still downloading the result is a
- * placeholder (matrixReady false) and loadMatrix() resolves the full object later.
+ * Loads one country. All map-critical JSON is requested at once — meta, hexes, points, wonders,
+ * cities and the admin tables (levels from index.json) — instead of as a waterfall, and the metric
+ * matrix right after it. Resolves as soon as the map data is ready; when metrics.bin is still
+ * downloading the result is a placeholder (matrixReady false) and loadMatrix() resolves the full
+ * object later.
  */
 export function loadCountry(id: CountryId): Promise<CountryData> {
   let p = countryCache.get(id)
   if (!p) {
     p = (async () => {
       const index = await loadIndex().catch(() => null)
-      const binP = fetchMatrix(id)
-      let bin: ArrayBuffer | null = null
-      binP.then((b) => { bin = b }, () => {})
       const idxLevels = Object.keys(index?.countries.find((c) => c.id === id)?.admin_levels ?? {})
       const adminP = new Map(idxLevels.map((lvl) => [lvl, json<AdminTable>(`${id}/admin_${lvl}.json`)] as const))
       adminP.forEach((a) => a.catch(() => {}))
@@ -166,6 +164,11 @@ export function loadCountry(id: CountryId): Promise<CountryData> {
           admin[lvl] = await (adminP.get(lvl) ?? json<AdminTable>(`${id}/admin_${lvl}.json`))
         }),
       )
+      // The map-critical JSON is in: start the matrix now, before the tile-area pass (and without
+      // waiting for the caller). Starting it earlier would only split a slow link's bandwidth with
+      // hexes/admin and delay the map, since browsers do not prioritise fetches over HTTP/1.1.
+      let bin: ArrayBuffer | null = null
+      fetchMatrix(id).then((b) => { bin = b }, () => {})
       const hexIndex = new Map<string, number>()
       hexes.h3.forEach((h, i) => hexIndex.set(h, i))
       const hexArea = await tileAreas(hexes)
