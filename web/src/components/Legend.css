@@ -1,46 +1,29 @@
-/* Map legend additions (base .legend styles live in styles.css). Classes are prefixed lgx-. */
+/* Map legend additions (base .legend styles live in styles.css). Classes are prefixed lgx-.
+   Budget: an open continuous legend must stay within ~80 px tall in a split-screen pane, or the
+   LegendDock (App.tsx) starts it collapsed. */
 
-/* .legend-wrap is pointer-events:none so the map stays draggable under it; re-enable the links */
-.lgx-prov {
-  pointer-events: auto;
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 3px 4px;
-  margin-top: 5px;
-  font-size: 10.5px;
-  color: var(--muted);
-  max-height: 42px;
-  overflow: hidden;
+/* title row: name + muted unit / vintage, wrapping only when the name is long */
+.lgx-title { flex-wrap: wrap; column-gap: 6px; row-gap: 0; }
+.lgx-unit { font-weight: 400; font-size: 10.5px; color: var(--muted); }
+
+/* footer: scale note + vintage (ellipsised, full text in the title) and source chips, one line */
+.lgx-foot { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.lgx-meta { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* chips are links: the legend card is pointer-events:auto (LegendDock), keep them clickable */
+.lgx-chips { flex: none; display: inline-flex; align-items: center; gap: 3px; pointer-events: auto; font-weight: 400; }
+.lgx-chips .row { gap: 3px !important; flex-wrap: nowrap; }
+.lgx-chips .chip {
+  display: inline-block; max-width: 112px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  vertical-align: middle; font-size: 10px; line-height: 15px; padding: 0 6px;
 }
-.lgx-prov .row { flex-wrap: wrap; }
-.lgx-prov .chip { font-size: 10px; padding: 0 6px; }
-.lgx-vintage { margin-right: 2px; }
-.lgx-more { cursor: pointer; font: inherit; font-size: 10px; line-height: inherit; }
+.lgx-more { cursor: pointer; font: inherit; font-size: 10px; line-height: 15px; }
 .lgx-more:hover, .lgx-more:focus-visible { color: var(--text); border-color: currentColor; }
 
-.lgx-scale { display: flex; flex-wrap: wrap; column-gap: 0; }
+.lgx-nodata .legend-note { max-width: 320px; }
 
-.lgx-nodata .legend-note { max-width: 300px; }
-
-.lgx-bar {
-  margin-top: 5px;
-  height: 4px;
-  min-width: 200px;
-  border-radius: 2px;
-  background: var(--line2);
-  overflow: hidden;
-}
-.lgx-bar i {
-  display: block;
-  height: 100%;
-  background: var(--brass);
-  transition: width 0.2s linear;
-}
+.lgx-bar { margin-top: 5px; height: 4px; min-width: min(200px, 100%); border-radius: 2px; background: var(--line2); overflow: hidden; }
+.lgx-bar i { display: block; height: 100%; background: var(--brass); transition: width 0.2s linear; }
 @media (prefers-reduced-motion: reduce) {
   .lgx-bar i { transition: none; }
-}
-
-@media (max-width: 900px) {
-  .lgx-prov { max-height: 20px; }
 }
