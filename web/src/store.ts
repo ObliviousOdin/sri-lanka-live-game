@@ -30,7 +30,7 @@ interface State {
     logX: boolean
     logY: boolean
     brushed: Partial<Record<CountryId, Set<number>>>
-    adminLevel?: 'adm1' | 'adm2'
+    adminLevel?: 'adm1' | 'adm2' | 'adm3'
     norm?: 'total' | 'density' | 'capita'
     colorBy?: 'country' | 'lens'
   }

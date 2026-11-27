@@ -400,13 +400,13 @@ function zeroShare(d: CountryData, y: YieldKey): number {
  * National density of the quantity a yield is scored from: its national total ÷ the land tiles' area
  * (per km² of tile, the yield basis). GDP uses the unrounded national total from meta.json.
  */
-function yieldDensity(ctx: NatCtx, d: CountryData, y: YieldKey): { v: number; metric: string; unit: string } | null {
+function yieldDensity(ctx: NatCtx, d: CountryData, y: YieldKey): number {
   const b = ctx.idx?.yield_scale.bases[y]
   const m = b ? d.metricByKey.get(b.metric) : undefined
-  if (!b || !m || m.kind !== 'extensive') return null
+  if (!b || !m || m.kind !== 'extensive') return NaN
   const tot = b.metric === 'gdp_usd' && ok(d.meta.totals?.gdp_usd) ? d.meta.totals.gdp_usd! : natAgg(d, b.metric)
   const area = landTileArea(d)
-  return ok(tot) && area > 0 ? { v: tot / area, metric: b.metric, unit: m.unit } : null
+  return ok(tot) && area > 0 ? tot / area : NaN
 }
 
 /**
@@ -424,26 +424,26 @@ function yieldTileComment(ctx: NatCtx, y: YieldKey, o: { id: string; icon: strin
   if (!ok(ma) || !ok(mb)) return null
   const sources = yieldSources(ctx, y)
   const meanSegs: Seg[] = [`${SHORT[home]} `, fig(ma.toFixed(2), home), ` vs ${SHORT[rival]} `, fig(mb.toFixed(2), rival)]
-  if (!da || !db || !(da.v > 0 && db.v > 0)) {
+  if (!(da > 0 && db > 0)) {
     // no density to compare: quote the means without ranking the countries on them
     return { id: o.id, icon: o.icon, segs: [`Mean ${o.name} per land tile on the shared scale: `, ...meanSegs, '.'], sources, meta: o.meta }
   }
-  const k = Math.max(da.v, db.v) / Math.min(da.v, db.v)
+  const k = Math.max(da, db) / Math.min(da, db)
   const segs: Seg[] = [`${o.name} is scored from ${o.what} per km² of tile${o.bonus ? ` (${o.bonus})` : ''}: ${SHORT[home]} `,
-    fig(o.fmt(da.v), home), ` vs ${SHORT[rival]} `, fig(o.fmt(db.v), rival), k >= 1.5 ? ` (${times(k)})` : '', '. ']
-  const densHi = da.v >= db.v ? home : rival
+    fig(o.fmt(da), home), ` vs ${SHORT[rival]} `, fig(o.fmt(db), rival), k >= 1.5 ? ` (${times(k)})` : '', '. ']
+  const densHi = da >= db ? home : rival
   const meanHi = ma >= mb ? home : rival
   const meanGap = Math.abs(ma - mb) / Math.max(ma, mb, 1e-9)
   if (meanHi !== densHi && meanGap >= 0.03) {
-    // the denser country has the lower mean: many of its tiles fall below the base and score 0
-    const lo = densHi, hi = meanHi
+    // the denser country has the lower mean: more of its tiles fall below the base and score 0
+    const denser = densHi, spread = meanHi
     const mean = (c: CountryId) => (c === home ? ma : mb)
-    const zLo = zeroShare(d[lo]!, y), zHi = zeroShare(d[hi]!, y)
-    segs.push(`The mean ${o.name} per land tile is still higher in ${nm(hi)} (`, fig(mean(hi).toFixed(2), hi), ' vs ', fig(mean(lo).toFixed(2), lo),
-      `) only because the log scale rewards activity spread over more of the land`)
-    segs.push(ok(zLo) && ok(zHi) ? `: ${pct(zLo * 100)} of ${ADJ[lo]} land tiles score 0 ${o.name}, against ${pct(zHi * 100)} in ${SHORT[hi]}.` : '.')
+    const zD = zeroShare(d[denser]!, y), zS = zeroShare(d[spread]!, y)
+    segs.push(`The mean ${o.name} per land tile is still higher in ${nm(spread)} (`, fig(mean(spread).toFixed(2), spread), ' vs ', fig(mean(denser).toFixed(2), denser),
+      `) because the log scale rewards activity spread over more of the land`)
+    segs.push(ok(zD) && ok(zS) ? `: ${pct(zD * 100)} of ${ADJ[denser]} land tiles score 0 ${o.name}, against ${pct(zS * 100)} in ${SHORT[spread]}.` : '.')
   } else segs.push(`Mean ${o.name} per land tile: `, ...meanSegs, '.')
-  return { id: o.id, icon: o.icon, segs, sources, meta: o.meta, status: statusOf('higher', da.v, db.v) }
+  return { id: o.id, icon: o.icon, segs, sources, meta: o.meta, status: statusOf('higher', da, db) }
 }
 
 function yieldSources(ctx: NatCtx, ...ys: string[]) {

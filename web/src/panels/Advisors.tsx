@@ -184,6 +184,7 @@ function useNationalRows(): NationalIndicator[] | null {
 function NationalCouncil({ app, rows, rowsLoaded, home, setHome }: { app: AppData; rows: NationalIndicator[]; rowsLoaded: boolean; home: CountryId; setHome: (c: CountryId) => void }) {
   const { lka, usa } = app.countries
   const natLoading = [lka, usa].some((d) => d && statsState(d, app.errors) === 'loading')
+  const natFailed = ([lka, usa].filter((d) => d && statsState(d, app.errors) === 'failed') as CountryData[]).map((d) => COUNTRY_META[d.id].name)
   const ctx = useMemo<NatCtx>(() => ({ rows, byKey: indexRows(rows), home, rival: otherOf(home), data: { lka, usa }, idx: app.index }), [rows, home, lka, usa, app.index])
   const groups = useMemo(() => ADVISORS.map((a) => ({
     a, comments: nationalComments(a.id, ctx), spark: sparkRows(rows, a.id), ledger: advisorRows(rows, a.id),
@@ -220,7 +221,8 @@ function NationalCouncil({ app, rows, rowsLoaded, home, setHome }: { app: AppDat
         <AdvisorCard key={g.a.id} advisor={g.a} comments={g.comments} home={home}
           waiting={!rowsLoaded ? 'Loading national indicators…'
             : !rows.length && (!lka || !usa) ? `Waiting for ${!lka ? 'Sri Lanka' : 'United States'} data to load…`
-              : natLoading ? 'Loading statistics…' : undefined}
+              : natLoading ? 'Loading statistics…'
+                : natFailed.length ? `${natFailed.join(' and ')} statistics did not load, so the map’s own figures cannot be compared.` : undefined}
           extra={<>
             {g.spark.length > 0 && <div className="advisors-sparks">{g.spark.map((r) => <Sparkline key={r.code} row={r} />)}</div>}
             {g.ledger.length > 0 && <Ledger rows={g.ledger} home={home} />}
@@ -569,12 +571,12 @@ function AdvisorCard({ advisor, comments, home, extra, local, waiting }: {
 
 /** Shown when an advisor has nothing to say: the published data has no value for any of its remarks. */
 const EMPTY: Record<AdvisorId, (local?: boolean) => string> = {
-  economic: (l) => `No GDP, income or jobs figures are published ${l ? 'for this place' : 'for both countries'}.`,
+  economic: (l) => `No GDP, income or jobs figures are published ${l ? 'for this place' : 'for either country'}.`,
   military: (l) => (l ? 'Nothing to report here: no military, population or hazard figures are published for this place.'
-    : 'Nothing to report: no military, population or hazard figures are published for both countries.'),
-  cultural: (l) => `No tourism, heritage or religion figures are published ${l ? 'for this place' : 'for both countries'}.`,
-  scientific: (l) => `No research or education figures are published ${l ? 'for this place' : 'for both countries'}.`,
-  environmental: (l) => `No land-cover, climate or emissions figures are published ${l ? 'for this place' : 'for both countries'}.`,
+    : 'Nothing to report: no military, population or hazard figures are published for either country.'),
+  cultural: (l) => `No tourism, heritage or religion figures are published ${l ? 'for this place' : 'for either country'}.`,
+  scientific: (l) => `No research or education figures are published ${l ? 'for this place' : 'for either country'}.`,
+  environmental: (l) => `No land-cover, climate or emissions figures are published ${l ? 'for this place' : 'for either country'}.`,
 }
 
 function CommentItem({ c, home }: { c: Comment; home: CountryId }) {

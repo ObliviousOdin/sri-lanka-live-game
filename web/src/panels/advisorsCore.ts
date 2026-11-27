@@ -372,7 +372,27 @@ export function yieldSums(d: CountryData, level: string): Record<YieldKey, Float
   return r
 }
 
-/** Yield of a place (tile value or unit sum) and the rank pool for it. */
+const yieldMeanCache = new WeakMap<CountryData, Map<string, Record<YieldKey, Float32Array>>>()
+/**
+ * Mean tile yield per admin unit (over the land tiles whose dominant unit it is; NaN for a unit with
+ * none). Yields are per-tile intensity indices, so units compare by their mean, not their sum.
+ */
+export function yieldMeans(d: CountryData, level: string): Record<YieldKey, Float32Array> | null {
+  const arr = (d.hexes as unknown as Record<string, number[]>)[level]
+  const sums = yieldSums(d, level)
+  if (!arr || !sums) return null
+  const cache = cacheFor(yieldMeanCache, d)
+  let r = cache.get(level)
+  if (r) return r
+  const N = d.admin[level]?.units.length ?? 0
+  const n = new Uint32Array(N)
+  for (let i = 0; i < d.n; i++) { const u = arr[i]; if (u >= 0 && u < N && d.hexes.ring[i] === 0) n[u]++ }
+  r = Object.fromEntries(YK.map((y) => [y, sums[y].map((v, u) => (n[u] ? v / n[u] : NaN))])) as Record<YieldKey, Float32Array>
+  cache.set(level, r)
+  return r
+}
+
+/** Yield of a place (tile value, or the mean over a unit's land tiles) and the rank pool for it. */
 export function yieldColumn(d: CountryData, level: Level, y: YieldKey): Float32Array | null {
   if (level === 'hex') {
     const ys = d.hexes.yields?.[y]
@@ -387,7 +407,7 @@ export function yieldColumn(d: CountryData, level: Level, y: YieldKey): Float32A
     }
     return c
   }
-  return yieldSums(d, level)?.[y] ?? null
+  return yieldMeans(d, level)?.[y] ?? null
 }
 
 // ---------------------------------------------------------------------------------------------

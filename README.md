@@ -84,6 +84,25 @@ download records (URL, size, time, SHA-256 prefix).
 The app's **Sources** tab lists every dataset with publisher, vintage, licence, access date and the
 metrics (or City View, Wonders, Advisors) it feeds.
 
+## Coverage notes: requested sources and substitutes
+
+Some sources named in the original brief could not be reached from the build environment or have
+no open machine-readable equivalent; each gap is filled by the closest official or open source:
+
+| Requested | Status | Used instead |
+|---|---|---|
+| Central Bank of Sri Lanka | site blocked from the build network | DCS Statistical Abstract / provincial GDP tables; CBSL figures only where quoted in fetched documents |
+| Sri Lanka NSDI / Survey Department geoportal (WMS) | geoportal unreachable | OCHA COD-AB boundaries (derived from Survey Department / DCS data); Copernicus DEM and ESA WorldCover for elevation and land use |
+| Lanka Data Foundation | unreachable | HDX datasets (COD-AB, COD-PS, DesInventar, HOT OSM, Meta RWI) and DCS publications |
+| BLS | blocked | ACS 5-year tables (occupation, industry, unemployment) |
+| FEMA (main site) | blocked | FEMA National Risk Index via its public ArcGIS feature service |
+| CDC | not used | health is not one of the requested lenses |
+| Sri Lankan airport passengers | no open airport-level statistics | none; the app says so instead of ranking airports |
+
+All data downloads are cached with SHA-256 sidecars; nothing in `web/public/data` is typed in from
+memory. Where a figure exists only in a PDF, the domain module transcribes it with the URL and table
+cited in the metric's method text.
+
 ## Repository layout
 
 ```

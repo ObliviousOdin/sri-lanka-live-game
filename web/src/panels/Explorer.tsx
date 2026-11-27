@@ -133,9 +133,8 @@ export const Explorer = memo(function Explorer({ app }: { app: AppData }) {
 
   if (!ds.length) return <div className="loading">Loading {wanted.map((c) => COUNTRY_META[c].name).join(' and ')}…</div>
   const waitText = (d: CountryData) => (statsState(d, app.errors) === 'failed' ? 'statistics did not load' : 'loading statistics…')
-  // a wanted metric that only the still-loading matrix can provide: say so rather than plotting a stand-in
-  const wantedMissing = [ex.x, ex.y].some((k) => !yieldOfKey(k) && !opts.byKey.has(k))
-  const statsBlock = statsWait.length > 0 && statsWait.length === ds.length && wantedMissing
+  // every country's tile metrics are still downloading and an axis needs them: say so instead of an empty plot
+  const statsBlock = statsWait.length > 0 && statsWait.length === ds.length && [xKey, yKey].some((k) => !yieldOfKey(k))
 
   const nounAll = levelNoun(ds, level)
   const anyExtensive = xInfo?.metric.kind === 'extensive' || yInfo?.metric.kind === 'extensive'
@@ -173,9 +172,9 @@ export const Explorer = memo(function Explorer({ app }: { app: AppData }) {
             { v: 'adm1', label: levelNoun(ds, 'adm1') },
           ]} />
 
-        <AxisRow axis="X" k={xKey} opts={opts} log={plot.logX} blocked={plot.logBlocked.x}
+        <AxisRow axis="X" k={xKey} opts={opts} log={statsBlock ? ex.logX : plot.logX} blocked={statsBlock ? null : plot.logBlocked.x}
           onKey={(k) => setEx(yieldOfKey(k) ? { x: k, logX: false } : { x: k })} onLog={(b) => setEx({ logX: b })} lensActive={isOnMap(xKey, lensId, lensMetric)} />
-        <AxisRow axis="Y" k={yKey} opts={opts} log={plot.logY} blocked={plot.logBlocked.y}
+        <AxisRow axis="Y" k={yKey} opts={opts} log={statsBlock ? ex.logY : plot.logY} blocked={statsBlock ? null : plot.logBlocked.y}
           onKey={(k) => setEx(yieldOfKey(k) ? { y: k, logY: false } : { y: k })} onLog={(b) => setEx({ logY: b })} lensActive={isOnMap(yKey, lensId, lensMetric)} />
 
         {level !== 'hex' && anyExtensive && (

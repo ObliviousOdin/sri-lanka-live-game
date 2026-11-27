@@ -561,7 +561,7 @@ export function explainYields(d: CountryData, idx: IndexJson, i: number, failed 
     basePart('culture'),
     bonusPart('World Heritage sites', tileAmount('whs', null, ['heritage'], 'count'), 'sites',
       (v) => cr.per_whs * Math.min(v, cr.max_whs), `+${cr.per_whs} per site (max ${cr.max_whs})`),
-    bonusPart('Museums', tileAmount('museums', 'museums', ['museums'], 'count'), '',
+    bonusPart('Museums', tileAmount('museums', 'museums', ['museums'], 'count'), 'museums',
       (v) => (v >= cr.museums_min ? cr.museums_bonus : 0), `≥ ${fmtNumber(cr.museums_min)} museums +${cr.museums_bonus}`),
     bonusPart('National park visitors', tileAmount('park_visitors', 'park_visitors', ['parks'], 'value'), 'visitors / yr',
       (v) => (v >= cr.park_visitors_min ? cr.park_bonus : 0), `≥ ${fmtNumber(cr.park_visitors_min)} visitors +${cr.park_bonus}`),

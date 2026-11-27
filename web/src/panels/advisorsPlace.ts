@@ -2,6 +2,7 @@
 // its own country, comparison with the other country's median unit, industry location quotients,
 // yields, hazards, land cover. Only loaded values are used; missing inputs skip the comment.
 import { adminUnitOfHex } from '../data/load'
+import { landYieldMeans } from './tilePanelStats'
 import { terrainLabel } from '../civ'
 import type { CountryData, CountryId, IndexJson, YieldKey } from '../types'
 import {
@@ -105,9 +106,9 @@ function yieldRank(place: Place, y: YieldKey) {
     sortedYield.set(col, s)
   }
   const v = col[place.index]
-  const tot = place.d.meta.yield_totals?.[y] ?? 0
-  if (!ok(v) || !(tot > 0)) return null
-  return { v, p: percentileOf(s, v), n: s.length, share: (100 * v) / tot, tot }
+  const nat = landYieldMeans(place.d).mean[y]
+  if (!ok(v) || !ok(nat)) return null
+  return { v, p: percentileOf(s, v), n: s.length, nat }
 }
 
 function yieldSources(place: Place, y: YieldKey, extra: string[] = []) {
@@ -118,20 +119,25 @@ function yieldSources(place: Place, y: YieldKey, extra: string[] = []) {
   return [...base[y], ...extra].flatMap((k) => place.d.metricByKey.get(k)?.sources ?? [])
 }
 
+/** Tile yields (or a unit's mean tile yield) against the country's mean per land tile — means, never sums. */
 function yieldComment(place: Place, ys: YieldKey[]): Comment | null {
   const parts: Seg[] = []
   let p0: number | undefined
   const home = place.country
+  const hex = place.level === 'hex'
   for (const y of ys) {
     const r = yieldRank(place, y)
     if (!r || !(r.v > 0)) continue
     if (parts.length) parts.push('; ')
-    parts.push(`${YLABEL[y]} `, fig(count(r.v), home), ` (${pct(r.share)} of ${poss(home)} ${count(r.tot)})`)
+    parts.push(`${YLABEL[y]} `, fig(hex ? count(r.v) : r.v.toFixed(2), home), ` (${SHORT[home]} mean ${r.nat.toFixed(2)})`)
     p0 ??= r.p
   }
   if (!parts.length) return null
-  const segs: Seg[] = [place.level === 'hex' ? 'Tile yields: ' : 'Yields of its tiles: ', ...parts, '.']
-  return { id: `yield:${ys.join('+')}`, icon: `y:${ys[0]}`, segs, sources: ys.flatMap((y) => yieldSources(place, y)), pct: p0, pctBetter: 'higher', meta: 'Map yields on the shared scale (see Methodology)' }
+  const segs: Seg[] = [hex ? 'Tile yields: ' : 'Mean yields of its land tiles: ', ...parts, '.']
+  return {
+    id: `yield:${ys.join('+')}`, icon: `y:${ys[0]}`, segs, sources: ys.flatMap((y) => yieldSources(place, y)), pct: p0, pctBetter: 'higher',
+    meta: `Map yields on the shared scale, compared with the mean per land tile (see Methodology)${hex ? '' : '; percentile among units by mean tile yield'}`,
+  }
 }
 
 // ---------------------------------------------------------------------------------------------

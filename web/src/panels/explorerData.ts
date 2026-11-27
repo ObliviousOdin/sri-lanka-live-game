@@ -151,7 +151,11 @@ export function availableKeys(d: CountryData, level: ExLevel): Set<string> {
   s = new Set()
   // game yields come with the map (hexes.json), so they can be plotted before metrics.bin arrives
   for (const y of YIELDS) if (yieldValues(d, level, y)?.some((v) => Number.isFinite(v))) s.add(yieldKey(y))
-  if (level === 'hex') {
+  if (level === 'hex' && !d.matrixReady) {
+    // metrics.bin still downloading: list what meta.json says has tile values, so the pickers keep
+    // the user's choice while the panel says "loading statistics"
+    for (const m of d.meta.metrics) if ((m.stats?.n ?? 0) > 0) s.add(m.key)
+  } else if (level === 'hex') {
     for (const m of d.meta.metrics) {
       const col = column(d, m.key)
       if (!col) continue

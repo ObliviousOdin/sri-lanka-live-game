@@ -100,6 +100,8 @@ export function twinModel(lka: CountryData, usa: CountryData, lkaLevel: string, 
 function build(lka: CountryData, usa: CountryData, lkaLevel: string, usaLevel: string): TwinModel | string {
   if (!lka.admin[lkaLevel] && lkaLevel !== 'hex') return `No ${lkaLevel} table for Sri Lanka`
   if (!usa.admin[usaLevel] && usaLevel !== 'hex') return `No ${usaLevel} table for the United States`
+  // tile features come from metrics.bin: while it downloads every value is NaN, which is not "too few units"
+  if ((lkaLevel === 'hex' && !lka.matrixReady) || (usaLevel === 'hex' && !usa.matrixReady)) return 'Loading statistics…'
   const cand: Record<CountryId, Int32Array> = { lka: candidates(lka, lkaLevel), usa: candidates(usa, usaLevel) }
   if (cand.lka.length < 2 || cand.usa.length < 2) return 'Too few populated units to compare'
 
