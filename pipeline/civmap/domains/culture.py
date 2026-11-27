@@ -4,9 +4,10 @@ Feeds the Culture yield (World Heritage sites, museums, park visitors), the Thea
 Preserve districts, and the 'Natural Wonder' / 'World Heritage' Wonders.
 
 Outputs (data/interim/<country>/culture/):
-  points_heritage.csv   id,name,lat,lon,kind(cultural|natural|mixed),whs_id,inscribed,criteria,sitelinks,
-                        wikidata,components,heritage_sites(=1)
-  points_parks.csv      id,name,lat,lon,kind,visitors,park_visitors,visitors_year,area_km2,wikidata[,local/foreign]
+  points_heritage.csv   id,name,lat,lon,kind(cultural|natural|mixed),whs_id,whs_ref,extended_or_modified,inscribed,
+                        criteria,sitelinks,wikidata,components,location,orig_lat,orig_lon,heritage_sites(=1)
+  points_parks.csv      id,name,lat,lon,kind,visitors,park_visitors,visitors_year,area_km2,wikidata,location
+                        [,orig_lat,orig_lon (USA)][,local/foreign visitors, revenue, wdpa_id (LKA)]
   points_museums.csv    id,name,lat,lon,kind(museum type),sitelinks,wikidata,count(=1),museums(=1)
   hex.csv               h3,protected_pct,protected_strict_pct,protected_km2   (every grid hex, land + water)
   admin_adm2.csv        admin_id,hotel_rooms                                    (Sri Lanka only)
@@ -474,8 +475,8 @@ def heritage(country: str, loc: _Locator, whs_polys: gpd.GeoDataFrame | None = N
         if mv is not None:
             p = loc.locate(mv[0], mv[1], max_km=250.0)
             if p is not None:
-                why = (f"{mv[2]:.0f} km outside the WDPA World Heritage polygon" if mv[2] > 2.0
-                       else "Wikidata coordinate outside the country")
+                why = (f"Wikidata point {mv[2]:.0f} km outside it" if mv[2] > 2.0
+                       else "Wikidata point outside the country")
                 la, lo, how = p[0], p[1], f"moved into the WDPA World Heritage polygon ({why})"
         roman = ["i", "ii", "iii", "iv", "v", "vi", "vii", "viii", "ix", "x"]
         starts = [m["start"] for m in mem if np.isfinite(m["start"])]
