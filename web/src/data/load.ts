@@ -92,7 +92,7 @@ function fetchMatrix(id: CountryId): Promise<ArrayBuffer> {
 function withMatrix(base: CountryBase, buf: ArrayBuffer): CountryData {
   const want = base.n * base.meta.metrics.length * 4
   if (buf.byteLength !== want) {
-    throw new Error(`${base.id}/metrics.bin has ${buf.byteLength} bytes but meta.json describes ${base.n} tiles × ${base.meta.metrics.length} metrics (${want} bytes). The data files come from different exports — reload the page.`)
+    throw new Error(`${base.id}/metrics.bin has ${buf.byteLength} bytes but meta.json describes ${base.n} tiles × ${base.meta.metrics.length} metrics (${want} bytes). The data files come from different exports; reload the page`)
   }
   setProgress(base.id, { loaded: buf.byteLength, total: buf.byteLength, done: true })
   return { ...base, matrix: new Float32Array(buf), matrixReady: true }

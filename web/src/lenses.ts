@@ -329,8 +329,10 @@ function autoLog(sortedBy: Float64Array[], unit: string): boolean {
   return Number.isFinite(lo) && hi / lo >= 20
 }
 
-function lensDomain(lens: LensDef, key: string, pool: CountryData[], pendingIds: CountryId[]): DomainInfo {
-  const ck = `${lens.id}|${key}|${pool.map((c) => `${c.id}:${objId(c)}`).join(',')}|${pendingIds.join(',')}`
+function lensDomain(lens: LensDef, key: string, poolIn: CountryData[], pendingIds: CountryId[]): DomainInfo {
+  // order-independent key: both panes and the Explorer share one entry
+  const pool = [...poolIn].sort((a, b) => byCountryOrder(a.id, b.id))
+  const ck = `${lens.id}|${key}|${pool.map((c) => `${c.id}:${objId(c)}`).join(',')}|${[...pendingIds].sort(byCountryOrder).join(',')}`
   const hit = domainCache.get(ck)
   if (hit) return hit
   const pooled: CountryId[] = [], pending = [...pendingIds], missing: CountryId[] = []
@@ -406,6 +408,8 @@ export interface LensContext {
   pending?: CountryId[]
   /** every loaded country (labels and the default metric); defaults to the pool */
   all?: CountryData[]
+  /** countries whose data failed to load (never "loading"; left out of the shared scale) */
+  failed?: CountryId[]
 }
 
 export function computeLens(
@@ -469,6 +473,7 @@ export function computeLens(
     }
     if (!d.matrixReady) {
       dimAll()
+      if (ctx.failed?.includes(d.id)) return { colors, elevation, legend: { kind: 'nodata', title: lens.label, detail: `${name} statistics failed to load`, country: d.id } }
       return { colors, elevation, legend: { kind: 'loading', title: lens.label, country: d.id } }
     }
     const cols = keys.map((k) => column(d, k)!)
@@ -526,12 +531,14 @@ export function computeLens(
     }
   }
   const m = d.metricByKey.get(key)!
+  const failed = new Set(ctx.failed ?? [])
   if (!d.matrixReady) {
     dimAll()
+    if (failed.has(d.id)) return { colors, elevation, legend: { kind: 'nodata', title: m.label, detail: `${name} statistics failed to load`, country: d.id } }
     return { colors, elevation, legend: { kind: 'loading', title: m.label, country: d.id } }
   }
   const shared = ctx.shared ?? pool.length > 1
-  const domPool = shared ? [d, ...pool.filter((c) => c.id !== d.id)] : [d]
+  const domPool = shared ? [d, ...pool.filter((c) => c.id !== d.id && !(failed.has(c.id) && !c.matrixReady))] : [d]
   const info = lensDomain(lens, key, domPool, shared ? (ctx.pending ?? []).filter((c) => c !== d.id) : [])
   if (!info.pooled.includes(d.id)) {
     dimAll()

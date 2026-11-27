@@ -26,6 +26,11 @@ export function markMoved(country: CountryId) {
   movedAt[country] = ++moveTick
 }
 
+/** A freshly mounted pane starts from its fitted view, so it has not been moved yet. */
+export function resetMoved(country: CountryId) {
+  delete movedAt[country]
+}
+
 /** The pane the other one follows while "True size" is on. */
 export function scaleLeader(): CountryId {
   return (movedAt.usa ?? 0) > (movedAt.lka ?? 0) ? 'usa' : 'lka'

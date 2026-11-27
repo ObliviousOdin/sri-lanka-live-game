@@ -31,7 +31,7 @@
 .mp-tr {
   position: absolute; top: 8px; right: 8px; z-index: 1;
   display: flex; flex-direction: column; align-items: flex-end; gap: 4px;
-  max-width: min(330px, calc(100% - 300px)); pointer-events: none;
+  max-width: min(300px, calc(100% - 300px)); pointer-events: none;
 }
 .mp-note, .mp-key, .mp-attrib {
   background: #0b1422e0; border: 1px solid var(--line2); border-radius: 8px;
@@ -46,7 +46,7 @@
   background: color-mix(in srgb, var(--c) 55%, transparent); border: 1px solid #0a0f19;
 }
 .mp-key-dot.ring { background: transparent; border: 1.5px solid var(--c); }
-.mp-key-note { color: var(--muted); font-size: 11px; }
+.mp-key-sub { color: var(--muted); }
 .mp-attrib { pointer-events: auto; color: var(--muted); font-size: 10.5px; padding: 2px 6px; }
 .mp-attrib a { color: var(--muted); }
 
@@ -54,10 +54,5 @@
 
 /* narrow panes (side by side on smaller screens, phones): move the stack below the pane label */
 @container mappane (max-width: 600px) {
-  .mp-tr { top: 40px; max-width: calc(100% - 136px); }
-}
-
-@media (max-width: 900px) {
-  /* the scale bar sits under the pane label on phones; leave room for the US jump buttons */
-  .map-pane .scalebar.mp-below-jump { top: 72px; }
+  .mp-tr { top: 40px; max-width: min(250px, calc(100% - 136px)); }
 }

@@ -69,8 +69,9 @@ export function useLens(d: CountryData | undefined, all: AppData): LensResult | 
     const loaded = COUNTRIES.map((id) => all.countries[id]).filter(Boolean) as CountryData[]
     const pool = shared ? loaded : [d]
     // countries still loading join the shared scale when they land; after a load error they never will
+    const failed = COUNTRIES.filter((id) => all.error?.startsWith(`${id}:`))
     const pending = shared && !all.error ? COUNTRIES.filter((id) => !all.countries[id]) : []
-    return computeLens(lens, lensMetric ?? null, d, all.index, pool, { shared, pending, all: loaded })
+    return computeLens(lens, lensMetric ?? null, d, all.index, pool, { shared, pending, failed, all: loaded })
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [d, all.index, lensId, lensMetric, shared, shared ? lka : null, shared ? usa : null, loadedKey, !!all.error])
+  }, [d, all.index, lensId, lensMetric, shared, shared ? lka : null, shared ? usa : null, loadedKey, all.error])
 }

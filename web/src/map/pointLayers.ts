@@ -21,8 +21,9 @@ export interface PointStyle {
   ref: number
   /** metric whose sources / vintage describe the size measure */
   metric: string
-  /** what to say when a country publishes no size measure for this layer */
+  /** what to say when a country publishes no size measure for this layer (tooltip / map key) */
   noValue?: Partial<Record<CountryId, string>>
+  noValueKey?: Partial<Record<CountryId, string>>
 }
 
 export const POINT_STYLE: Record<string, PointStyle> = {
@@ -38,6 +39,7 @@ export const POINT_STYLE: Record<string, PointStyle> = {
     label: 'Airport', plural: 'Airports', color: [205, 225, 255], value: ['airport_pax', 'enplanements', 'passengers'], unit: 'enplanements',
     sizeLabel: 'enplanements (boardings)/yr', ref: 10e6, metric: 'airport_pax',
     noValue: { lka: 'Sri Lanka publishes no open airport-level passenger statistics: airports are shown as rings, without a size.' },
+    noValueKey: { lka: 'rings, no size: Sri Lanka publishes no open airport-level passenger statistics' },
   },
 }
 
@@ -105,7 +107,8 @@ function shortPublisher(s: Source) {
 
 export function pointTooltip(d: CountryData, name: string, r: PointRow, sources: Source[]): string {
   const st = pointStyle(name)
-  const kind = typeof r.kind === 'string' && r.kind ? (KIND_LABEL[r.kind] ?? r.kind) : ''
+  const kindRaw = typeof r.kind === 'string' && r.kind ? (KIND_LABEL[r.kind] ?? r.kind) : ''
+  const kind = kindRaw.toLowerCase() === st.label.toLowerCase() ? '' : kindRaw
   const fuel = typeof r.primary_fuel === 'string' && r.primary_fuel && r.primary_fuel !== r.kind ? ` (${r.primary_fuel})` : ''
   const lines: string[] = []
   for (const [k, f] of Object.entries(FIELDS)) {

@@ -11,7 +11,7 @@ import { adminUnitOfHex, finestLevel, hexesOfAdmin, loadAdminGeo, value } from '
 import { useSources, type AppData } from '../data/useData'
 import { fmtInt, fmtNumber, fmtUnit } from '../format'
 import { LENS_BY_ID, isDensity, type LensResult } from '../lenses'
-import { openCity } from '../panels/cityViewNav'
+import { CITY_ZOOM, openCity } from '../panels/cityViewNav'
 import { useStore } from '../store'
 import { YIELDS, type City, type CountryData, type CountryId, type PointRow } from '../types'
 import { adminFeature, adminIdAt, adminIndexOf, frameLon, geoForMap, mapLon } from './adminPick'
@@ -19,7 +19,7 @@ import { BaseMap } from './BaseMap'
 import { emojiAtlas } from './emojiAtlas'
 import { coarsePointer, prefersReducedMotion } from './motion'
 import { escapeHtml, pointRadiusScale, pointStyle, pointTooltip, pointValue, splitRows } from './pointLayers'
-import { markMoved, metersPerPixel, publishScale, scaleLeader, useScaleLink, zoomForMpp } from './scaleLink'
+import { markMoved, metersPerPixel, publishScale, resetMoved, scaleLeader, useScaleLink, zoomForMpp } from './scaleLink'
 import { visibleHeightAboveSheet } from './sheet'
 import './MapPane.css'
 
@@ -145,6 +145,7 @@ export function MapPane({ country, data, app, lens, compact }: Props) {
   // ---- "True size": the most recently moved pane leads, the other adopts its metres per pixel
   const linking = sameScale && mode === 'split'
   const link = useScaleLink((s) => (linking && s.link && s.link.from !== country ? s.link : null))
+  useEffect(() => resetMoved(country), [country])
   useEffect(() => {
     if (!linking) useScaleLink.setState({ link: null })
   }, [linking])
@@ -434,7 +435,22 @@ export function MapPane({ country, data, app, lens, compact }: Props) {
   const onClick = (info: PickingInfo) => {
     const id = info.layer?.id ?? ''
     if (id.startsWith('cities-') && info.object) {
-      openCity(country, info.object as City) // selects, opens City View and flies (sheet-aware on phones)
+      const c = info.object as City
+      const el = ref.current
+      const visH = el ? visibleHeightAboveSheet(el) : null
+      if (visH == null || !size) {
+        openCity(country, c) // selects, opens the City View and flies there
+        return
+      }
+      // phones: the City View opens in the bottom sheet, which is still closed at this moment, so
+      // aim the fly-to at the middle of the map area that stays visible above the open sheet
+      useStore.getState().select({ country, kind: 'city', id: c.id }, 'city')
+      let lat = c.lat, lon = c.lon
+      try { [lat, lon] = cellToLatLng(c.centre) } catch { /* keep the metro coordinates */ }
+      const z = CITY_ZOOM[country]
+      const [cLon, cLat] = new WebMercatorViewport({ width: size.w, height: size.h, longitude: lon, latitude: lat, zoom: z })
+        .unproject([size.w / 2, size.h / 2 + (size.h - visH) / 2])
+      useStore.getState().fly(country, cLon, cLat, z)
       return
     }
     // facilities and icons select the tile they sit in; anything else the point under the cursor
@@ -498,6 +514,7 @@ export function MapPane({ country, data, app, lens, compact }: Props) {
   if (extrude) notes.push(coarsePointer() ? '3D: drag with two fingers to tilt or turn.' : '3D: right-drag, or Ctrl + drag, to tilt or turn.')
   if (pickFallback) notes.push(`No ${pickLevel === 'adm3' ? 'DS divisions' : 'units of that level'} here: clicks select ${plural((data.admin[pickLv]?.label ?? 'unit').toLowerCase())}.`)
   const showKey = pointSets.length > 0
+  const lensKey = lensMetricSel && data.metricByKey.has(lensMetricSel) ? lensMetricSel : (lensDef.metrics ?? []).find((k) => data.metricByKey.has(k))
   const shortJump = compact || (size?.w ?? 1000) < 600
 
   return (
@@ -547,30 +564,31 @@ export function MapPane({ country, data, app, lens, compact }: Props) {
         <div className="mp-tr">
           {notes.map((n) => <div key={n} className="mp-note">{n}</div>)}
           {showKey && (
-            <div className="mp-key" role="note" aria-label="Facility circles">
+            <div className="mp-key" role="note" aria-label="Facility circles" title="Same size rule on both maps: circle area is proportional to the facility's size. Circles grow more slowly than the map as you zoom in.">
               {pointSets.map(({ name, sized, unsized, total }) => {
                 const st = pointStyle(name)
                 const m = data.metricByKey.get(st.metric)
                 const shown = sized.length + unsized.length
                 const minV = sized.length ? pointValue(name, sized[sized.length - 1]) : NaN
-                const noValue = sized.length === 0 && st.noValue?.[country]
+                const noValue = sized.length === 0 && (st.noValueKey?.[country] ?? st.noValue?.[country])
                 return (
                   <div key={name} className="mp-key-row">
                     <span className={`mp-key-dot ${noValue ? 'ring' : ''}`} style={{ '--c': `rgb(${st.color.join(',')})` } as CSSProperties} aria-hidden />
                     <span>
-                      <b>{st.plural}</b>{' '}
-                      {noValue ? noValue : <>circle area = {st.sizeLabel}{shown < total ? ` · ${fmtInt(shown)} of ${fmtInt(total)} shown, all ≥ ${fmtUnit(minV, st.unit)}` : ''}</>}
-                      {!noValue && m?.sources?.length ? <> <SourceChips ids={m.sources} /></> : null}
+                      <b>{st.plural}</b>
+                      {noValue ? <>: {noValue}</> : <>: circle area = {st.sizeLabel}</>}
+                      {!noValue && shown < total && <span className="mp-key-sub"> · {fmtInt(shown)} of {fmtInt(total)} shown, all ≥ {fmtUnit(minV, st.unit)}</span>}
+                      {/* the legend already cites the lens metric's sources; cite the others here */}
+                      {!noValue && m?.sources?.length && st.metric !== lensKey ? <> <SourceChips ids={m.sources} /></> : null}
                     </span>
                   </div>
                 )
               })}
-              <div className="mp-key-note">Same size rule on both maps; circles grow more slowly than the map as you zoom in.</div>
             </div>
           )}
           {basemap !== 'none' && (
             <div className="mp-attrib">
-              Basemap © <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noreferrer">OpenStreetMap</a> contributors © <a href="https://carto.com/attributions" target="_blank" rel="noreferrer">CARTO</a>
+              © <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noreferrer">OpenStreetMap</a> contributors © <a href="https://carto.com/attributions" target="_blank" rel="noreferrer">CARTO</a>
             </div>
           )}
         </div>
