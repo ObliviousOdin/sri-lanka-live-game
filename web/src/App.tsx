@@ -28,6 +28,10 @@ const HINTS = {
   same: 'Lock both maps to the same kilometres per pixel, so areas compare at true size.',
   extrude: 'Raise tiles by the lens value.',
 }
+/** Why an option is unavailable in the current layout (shown instead of its hint). */
+const OFF_HINTS: Partial<Record<keyof typeof HINTS, string>> = {
+  same: 'Only for Side by side: it locks the two maps to the same kilometres per pixel.',
+}
 
 /** Keys typed into a form field belong to that field, not to the app-wide shortcuts. */
 function inField(t: EventTarget | null) {
@@ -124,7 +128,7 @@ export default function App() {
           onKeyDown={(e) => { if (e.key === 'Escape' && optsOpen) { e.preventDefault(); setOptsOpen(false) } }}
         >
           <ToggleItem id="shared" label="Shared scale" checked={st.sharedScale} onChange={(v) => st.set({ sharedScale: v })} />
-          <ToggleItem id="same" label="True size" checked={st.sameScale} onChange={(v) => st.set({ sameScale: v })} />
+          <ToggleItem id="same" label="True size" checked={st.sameScale} disabled={mode !== 'split'} onChange={(v) => st.set({ sameScale: v })} />
           <ToggleItem id="extrude" label="3D" checked={st.extrude} onChange={(v) => st.set({ extrude: v })} />
           <select value={st.pickLevel} onChange={(e) => st.set({ pickLevel: e.target.value as never })} aria-label="Click selects">
             <option value="hex">Click: tile</option>
@@ -155,8 +159,10 @@ export default function App() {
         {shown.map((c) => {
           const d = app.countries[c]
           const lr = c === 'lka' ? lensLka : lensUsa
+          // busy until this country's statistics (metrics.bin) have arrived, unless its load failed
+          const busy = !app.error?.startsWith(`${c}:`) && !d?.matrixReady
           return (
-            <section key={c} className="map-cell" aria-label={`${COUNTRY_META[c].name} map`}>
+            <section key={c} className="map-cell" aria-label={`${COUNTRY_META[c].name} map`} aria-busy={busy}>
               {d && app.index ? <MapPane country={c} data={d} app={app} lens={lr} compact={shown.length > 1} /> : <div className="loading">Loading {COUNTRY_META[c].name}…</div>}
               {lr && (
                 <LegendDock
@@ -209,14 +215,18 @@ export default function App() {
   )
 }
 
-/** Map option checkbox; its explanation is a hover title on desktop and visible text in the phone popover. */
-function ToggleItem({ id, label, checked, onChange }: { id: keyof typeof HINTS; label: string; checked: boolean; onChange: (v: boolean) => void }) {
+/**
+ * Map option checkbox; its explanation is a hover title on desktop and visible text in the phone
+ * popover. A disabled option keeps its stored value and says why it does not apply.
+ */
+function ToggleItem({ id, label, checked, disabled, onChange }: { id: keyof typeof HINTS; label: string; checked: boolean; disabled?: boolean; onChange: (v: boolean) => void }) {
+  const hint = disabled ? OFF_HINTS[id] ?? HINTS[id] : HINTS[id]
   return (
-    <div className="toggle-item">
-      <label title={HINTS[id]}>
-        <input type="checkbox" checked={checked} onChange={(e) => onChange(e.target.checked)} aria-describedby={`hint-${id}`} /> {label}
+    <div className={`toggle-item ${disabled ? 'disabled' : ''}`}>
+      <label title={hint}>
+        <input type="checkbox" checked={checked} disabled={disabled} onChange={(e) => onChange(e.target.checked)} aria-describedby={`hint-${id}`} /> {label}
       </label>
-      <small className="toggle-hint" id={`hint-${id}`}>{HINTS[id]}</small>
+      <small className="toggle-hint" id={`hint-${id}`}>{hint}</small>
     </div>
   )
 }

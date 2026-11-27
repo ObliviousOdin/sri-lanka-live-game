@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState, useSyncExternalStore } from 'react'
-import { computeLens, LENS_BY_ID, type LensResult } from '../lenses'
+import { computeLens, LENS_BY_ID, reliefElevation, type LensResult } from '../lenses'
 import { useStore } from '../store'
 import { COUNTRIES, type CountryData, type CountryId, type IndexJson, type NationalIndicator, type Source } from '../types'
 import {
@@ -53,19 +53,26 @@ export function useNational() {
 }
 
 /**
- * Lens colours for one country, recomputed when the lens / metric / pool changes. With the shared
- * scale on, the memo depends on every pooled CountryData object, so the colour domain is rebuilt
- * when another country's metric matrix arrives (not only when the set of country ids changes).
+ * Lens colours for one country, recomputed when the lens / metric / pool changes.
+ *
+ * CountryData is replaced when metrics.bin arrives (its hexes table keeps its identity). Only metric
+ * and dominant lenses read the metric matrix, so only they depend on the CountryData objects; with
+ * the shared scale on they depend on every pooled one, so the colour domain is rebuilt when another
+ * country's matrix arrives. Terrain, district and yield lenses depend on the hexes table alone; the
+ * relief heights of terrain and district lenses (from the matrix) are refreshed separately, so the
+ * colours are not recomputed when the matrix lands.
  */
 export function useLens(d: CountryData | undefined, all: AppData): LensResult | null {
   const lensId = useStore((s) => s.lensId)
   const lensMetric = useStore((s) => s.lensMetric[s.lensId])
   const shared = useStore((s) => s.sharedScale)
+  const lens = LENS_BY_ID.get(lensId) ?? LENS_BY_ID.get('terrain')!
+  const readsMatrix = lens.kind === 'metric' || lens.kind === 'dominant'
+  const reliefOnly = lens.kind === 'terrain' || lens.kind === 'district'
   const { lka, usa } = all.countries
   const loadedKey = COUNTRIES.filter((id) => all.countries[id]).join(',')
-  return useMemo(() => {
+  const base = useMemo(() => {
     if (!d || !all.index) return null
-    const lens = LENS_BY_ID.get(lensId) ?? LENS_BY_ID.get('terrain')!
     const loaded = COUNTRIES.map((id) => all.countries[id]).filter(Boolean) as CountryData[]
     const pool = shared ? loaded : [d]
     // countries still loading join the shared scale when they land; after a load error they never will
@@ -73,5 +80,13 @@ export function useLens(d: CountryData | undefined, all: AppData): LensResult | 
     const pending = shared && !all.error ? COUNTRIES.filter((id) => !all.countries[id]) : []
     return computeLens(lens, lensMetric ?? null, d, all.index, pool, { shared, pending, failed, all: loaded })
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [d, all.index, lensId, lensMetric, shared, shared ? lka : null, shared ? usa : null, loadedKey, all.error])
+  }, [
+    readsMatrix ? d : d?.hexes, all.index, lens,
+    readsMatrix ? lensMetric : null, readsMatrix ? shared : null,
+    readsMatrix && shared ? lka : null, readsMatrix && shared ? usa : null,
+    readsMatrix ? loadedKey : '', readsMatrix ? all.error : null,
+  ])
+  // terrain / district columns: mean elevation, from the matrix once it has arrived
+  const relief = useMemo(() => (reliefOnly && d?.matrixReady ? reliefElevation(d) : null), [reliefOnly, d])
+  return useMemo(() => (base && relief ? { ...base, elevation: relief } : base), [base, relief])
 }

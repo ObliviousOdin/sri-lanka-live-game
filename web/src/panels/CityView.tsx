@@ -10,6 +10,7 @@ import { fmtArea, fmtNumber, fmtPct, fmtUsd } from '../format'
 import { WONDER_ICON } from '../map/MapPane'
 import { useStore } from '../store'
 import { COUNTRIES, YIELDS, type City, type CityTile, type CountryData, type CountryId, type IndexJson, type NationalIndicator, type Selection, type Wonder, type YieldKey } from '../types'
+import { citiesByPop } from './advisorsCore'
 import { countryVintage } from './explorerData'
 import { HEX_R, hexPoints, layoutRing } from './cityViewLayout'
 import { openCity } from './cityViewNav'
@@ -47,15 +48,16 @@ const YIELD_SLOTS: { y: YieldKey; dx: number; dy: number }[] = [
 // Data helpers (memoised per CountryData)
 // ---------------------------------------------------------------------------------------------
 
-const sortedCache = new WeakMap<CountryData, City[]>()
-function citiesByPop(d: CountryData): City[] {
-  let s = sortedCache.get(d)
-  if (!s) {
-    s = [...d.cities].sort((a, b) => (b.pop || 0) - (a.pop || 0))
-    sortedCache.set(d, s)
-  }
-  return s
+/**
+ * Citizen classes whose figure means something different in one country, so the class is not
+ * compared across countries (the city-vs-national bar stays: both sides use the same survey).
+ * Sri Lanka's LFS covers the household population only, so soldiers living in barracks are
+ * missing (≈41K vs ≈317K personnel, World Bank); the US ACS count includes group quarters.
+ */
+const NOT_COMPARABLE: Partial<Record<CountryId, Record<string, string>>> = {
+  lka: { cit_soldiers: 'Household-resident armed forces only (LFS); not comparable with the US' },
 }
+const CROSS_COUNTRY_SKIP = new Set(['cit_soldiers'])
 
 /** h3 → city whose ring contains it (closest centre wins where rings overlap). */
 const ringCache = new WeakMap<CountryData, Map<string, { city: City; dist: number }>>()
@@ -120,11 +122,12 @@ function sumValues(r: Record<string, number> | null | undefined) {
   return r ? Object.values(r).reduce((a, v) => a + (Number.isFinite(v) && v > 0 ? v : 0), 0) : 0
 }
 
+/** Largest citizen class, ignoring classes that are not comparable across the two countries. */
 function topCitizen(city: City) {
   const tot = sumValues(city.citizens)
   if (!tot) return null
-  const [k, v] = Object.entries(city.citizens).sort((a, b) => b[1] - a[1])[0]
-  return { key: k, share: v / tot }
+  const top = Object.entries(city.citizens).filter(([k]) => !CROSS_COUNTRY_SKIP.has(k)).sort((a, b) => b[1] - a[1])[0]
+  return top ? { key: top[0], share: top[1] / tot } : null
 }
 
 function tileRGB(t: CityTile): RGB {
@@ -141,10 +144,8 @@ function metricSources(d: CountryData, keys: string[]): string[] {
   return out
 }
 
-/** Optional provenance fields a newer cities.json may carry (pipeline: domains/national.py metros_*). */
+/** Further provenance fields a cities.json may carry (pipeline: domains/national.py metros_*). */
 interface CityProvenance {
-  population_scope?: string | null
-  population_note?: string | null
   official_pop_scope?: string | null
   official_pop_note?: string | null
   official_pop_sources?: string[] | null
@@ -167,22 +168,47 @@ interface OfficialPop {
  * (metro) estimates; Sri Lankan cities only a Wikidata P1082 statement for the city proper
  * (municipal / urban council area, various years), which for Colombo is the UN WUP projection.
  */
+/**
+ * Row label and list badge from the exported `population_scope` ("metro area (Census MSA)" →
+ * "Metro area (Census MSA, 2025)" / "metro area"), or null when the export has none.
+ */
+function scopeLabels(scope: string | null | undefined, yr: number | null | undefined): { label: string; short: string } | null {
+  const t = scope?.trim()
+  if (!t) return null
+  const m = t.match(/^(.*?)\s*\((.*)\)\s*$/)
+  const head = (m ? m[1] : t).trim()
+  const cap = head.charAt(0).toUpperCase() + head.slice(1)
+  return { label: m ? `${cap} (${m[2]}${yr ? `, ${yr}` : ''})` : `${cap}${yr ? ` (${yr})` : ''}`, short: head.toLowerCase() }
+}
+
 function officialPop(d: CountryData, city: City, national: NationalIndicator[]): OfficialPop | null {
   if (!city.official_pop) return null
   const x = city as City & CityProvenance
   const yr = city.official_pop_year
-  const exportedScope = x.official_pop_scope ?? x.population_scope ?? null
+  const exported = scopeLabels(city.population_scope, yr)
+  const exportedSources = x.official_pop_sources ?? city.population_sources ?? null
+  // the exported population_note is a full description of the figure: it replaces the built-in one
+  const exportedNote = city.population_note?.trim() || null
   if (d.id === 'usa') {
     return {
-      label: `Metro area (Census MSA${yr ? `, ${yr}` : ''})`,
-      short: 'metro',
-      scope: exportedScope ?? 'Metropolitan Statistical Area population, Census Bureau population estimates (OMB 2023 delineation).',
-      note: x.official_pop_note ?? x.population_note ?? null,
-      sources: x.official_pop_sources ?? ['census_pep_cbsa_2025', 'census_delineation_2023'],
+      label: exported?.label ?? `Metro area (Census MSA${yr ? `, ${yr}` : ''})`,
+      short: exported?.short ?? 'metro',
+      scope: x.official_pop_scope ?? exportedNote ?? 'Metropolitan Statistical Area population, Census Bureau population estimates (OMB 2023 delineation).',
+      note: x.official_pop_note ?? null,
+      sources: exportedSources?.length ? exportedSources : ['census_pep_cbsa_2025', 'census_delineation_2023'],
     }
   }
-  let note = x.official_pop_note ?? x.population_note ?? null
-  const sources = x.official_pop_sources ? [...x.official_pop_sources] : ['wikidata']
+  if (exportedNote) {
+    return {
+      label: exported?.label ?? `City proper (Wikidata${yr ? `, ${yr}` : ''})`,
+      short: exported?.short ?? 'city proper',
+      scope: x.official_pop_scope ?? exportedNote,
+      note: x.official_pop_note ?? null,
+      sources: exportedSources?.length ? [...exportedSources] : ['wikidata'],
+    }
+  }
+  let note = x.official_pop_note ?? null
+  const sources = exportedSources?.length ? [...exportedSources] : ['wikidata']
   if (!note && yr != null) {
     // Wikidata often repeats the UN World Urbanization Prospects projection for the largest city
     const s = national.find((r) => r.code === 'EN.URB.LCTY')?.LKA?.series
@@ -193,9 +219,9 @@ function officialPop(d: CountryData, city: City, national: NationalIndicator[]):
     }
   }
   return {
-    label: `City proper (Wikidata${yr ? `, ${yr}` : ''})`,
-    short: 'city proper',
-    scope: exportedScope ?? 'Population statement on the city’s Wikidata item (P1082), usually the municipal / urban council area (Wikidata does not record which); not a metro area, and years differ by city. Not comparable with US metro figures — compare the tile-ring populations instead.',
+    label: exported?.label ?? `City proper (Wikidata${yr ? `, ${yr}` : ''})`,
+    short: exported?.short ?? 'city proper',
+    scope: x.official_pop_scope ?? 'Population statement on the city’s Wikidata item (P1082), usually the municipal / urban council area (Wikidata does not record which); not a metro area, and years differ by city. Not comparable with US metro figures — compare the tile-ring populations instead.',
     note,
     sources,
   }
@@ -286,7 +312,8 @@ function CityList({ app }: { app: AppData }) {
     <>
       <h2 className="section-title cityview-title">Cities</h2>
       <p className="cityview-lede">
-        Each metro is a Civ city: its most populous tile plus a ring of radius {radius} ({nTiles} tiles).
+        Each metro is a Civ city: its most populous tile plus a ring of radius {radius} ({nTiles} tiles). Where two rings
+        overlap, each shared tile belongs only to the nearer centre, so nothing is counted in two cities.
         City size grows with population<sup>0.4</sup> ÷ 20, so a city 10× larger is about 2.5× the size.
         The big number is the tile-ring population; the small one is the official figure — a US metro area, but only the
         city proper for Sri Lanka.
@@ -390,6 +417,15 @@ function CityBanner({ d, city }: { d: CountryData; city: City }) {
   // metric vintages can name both countries ("USA 2024; Sri Lanka 2024"): show this city's part only
   const vint = (k: string) => { const v = d.metricByKey.get(k)?.vintage; return v ? countryVintage(v, d.id) : '' }
   const gdpSrc = (city as City & CityProvenance).official_gdp_sources ?? ['bea_cagdp1']
+  const ringFull = city.ring_tiles ?? city.tiles.length
+  // Sri Lanka: the Census count of the DS division holding the centre (an official, dated count)
+  const census = city.census_ds_population ? {
+    pop: city.census_ds_population,
+    label: `${city.census_ds_name ? `${city.census_ds_name} DS division` : 'DS division'} (Census${city.census_year ? ` ${city.census_year}` : ''})`,
+    scope: city.census_scope ?? 'Census of Population and Housing (DCS): population of the DS division containing the city centre.',
+    sources: city.census_sources?.length ? city.census_sources : ['dcs_census_portal'],
+  } : null
+  const overlap = (city.overlap ?? []).filter((o) => o.tiles > 0)
   return (
     <section className="card cityview-banner" aria-label={`${city.name} overview`}>
       <div className="cityview-banner-head">
@@ -409,11 +445,19 @@ function CityBanner({ d, city }: { d: CountryData; city: City }) {
         <span className="k">Population · tile ring{vint('pop') ? ` (${vint('pop')})` : ''}</span>
         <span>{fmtNumber(city.pop)}</span>
         <span className="k">Ring</span>
-        <span>{city.tiles.length} tiles · {fmtArea(area)}</span>
+        <span title={ringFull > city.tiles.length ? `${ringFull} tiles lie within ${city.radius} steps of the centre; ${ringFull - city.tiles.length} of them belong to a nearer city` : undefined}>
+          {ringFull > city.tiles.length ? `${city.tiles.length} of ${ringFull} tiles` : `${city.tiles.length} tiles`} · {fmtArea(area)}
+        </span>
         {off ? (
           <>
             <span className="k" title={off.scope}>{off.label}</span>
             <span title={off.scope}>{fmtNumber(city.official_pop)}</span>
+          </>
+        ) : null}
+        {census ? (
+          <>
+            <span className="k" title={census.scope}>{census.label}</span>
+            <span title={census.scope}>{fmtNumber(census.pop)}</span>
           </>
         ) : null}
         <span className="k">GDP · tile ring{vint('gdp_usd') ? ` (${vint('gdp_usd')})` : ''}</span>
@@ -427,11 +471,30 @@ function CityBanner({ d, city }: { d: CountryData; city: City }) {
           </>
         ) : null}
       </div>
+      {overlap.length > 0 && (
+        <p className="cityview-overlap">
+          {overlap.map((o, k) => {
+            const other = d.cities.find((c) => c.id === o.id)
+            return (
+              <span key={o.id}>
+                {k > 0 && '; '}
+                {o.tiles} ring tile{o.tiles === 1 ? '' : 's'} ({fmtNumber(o.pop)} people) belong{o.tiles === 1 ? 's' : ''} to nearer{' '}
+                {other ? <button className="cityview-link" onClick={() => openCity(d.id, other)}>{o.name}</button> : o.name}
+              </span>
+            )
+          })}
+          , so {overlap.length === 1 && overlap[0].tiles === 1 ? 'it counts' : 'they count'} there and not in {city.name}’s population, GDP, yields or citizens.
+        </p>
+      )}
       {src.length > 0 && <div className="cityview-src"><span className="cityview-srclab">Tile ring</span><SourceChips ids={src} /></div>}
-      {off && (
+      {(off || census) && (
         <div className="cityview-official">
-          <p><b>{off.label}:</b> {off.scope}{off.note ? ` ${off.note}` : ''}</p>
-          <div className="cityview-src"><span className="cityview-srclab">Official</span><SourceChips ids={[...off.sources, ...(city.official_gdp_usd ? gdpSrc : [])]} /></div>
+          {off && <p><b>{off.label}:</b> {off.scope}{off.note ? ` ${off.note}` : ''}</p>}
+          {census && <p><b>{census.label}:</b> {census.scope}</p>}
+          <div className="cityview-src">
+            <span className="cityview-srclab">Official</span>
+            <SourceChips ids={[...(off?.sources ?? []), ...(census?.sources ?? []), ...(city.official_gdp_usd ? gdpSrc : [])]} />
+          </div>
         </div>
       )}
     </section>
@@ -632,10 +695,11 @@ function CityCitizens({ d, city }: { d: CountryData; city: City }) {
       <div className="cityview-bars" role="table" aria-label="Citizen class shares, city vs national">
         {bars.map((b) => {
           const lq = b.nat ? b.city / b.nat : NaN
+          const caveat = NOT_COMPARABLE[d.id]?.[b.k]
           return (
-            <div key={b.k} className="cityview-bar" role="row" title={CITIZEN_META[b.k].desc}>
-              <span className="cityview-bar-label" role="rowheader"><span aria-hidden>{CITIZEN_META[b.k].icon}</span> {CITIZEN_META[b.k].label}</span>
-              <span className="cityview-bar-track" role="cell" aria-label={`${fmtPct(b.city * 100)} in ${city.name}${b.nat != null ? `, ${fmtPct(b.nat * 100)} nationally` : ''}`}>
+            <div key={b.k} className={`cityview-bar ${caveat ? 'has-note' : ''}`} role="row" title={caveat ? `${CITIZEN_META[b.k].desc}. ${caveat}.` : CITIZEN_META[b.k].desc}>
+              <span className="cityview-bar-label" role="rowheader"><span aria-hidden>{CITIZEN_META[b.k].icon}</span> {CITIZEN_META[b.k].label}{caveat && <sup aria-hidden>†</sup>}</span>
+              <span className="cityview-bar-track" role="cell" aria-label={`${fmtPct(b.city * 100)} in ${city.name}${b.nat != null ? `, ${fmtPct(b.nat * 100)} nationally` : ''}${caveat ? `. ${caveat}` : ''}`}>
                 <i className={`cityview-bar-city ${d.id}`} style={{ width: `${(b.city / max) * 100}%` }} />
                 {b.nat != null && <i className="cityview-bar-nat" style={{ width: `${(b.nat / max) * 100}%` }} />}
               </span>
@@ -643,6 +707,7 @@ function CityCitizens({ d, city }: { d: CountryData; city: City }) {
                 {fmtPct(b.city * 100)}
                 {Number.isFinite(lq) && <small className={lq >= 1.15 ? 'up' : lq <= 0.87 ? 'down' : ''}>{lq.toFixed(1)}×</small>}
               </span>
+              {caveat && <span className="cityview-bar-note" aria-hidden>† {caveat}.</span>}
             </div>
           )
         })}

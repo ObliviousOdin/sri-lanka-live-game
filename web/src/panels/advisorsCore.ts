@@ -103,7 +103,9 @@ export function count(v: number) {
   if (a >= 100) return intFmt.format(v)
   if (a >= 10) return v.toFixed(1).replace(/\.0$/, '')
   if (a === 0) return '0'
-  return v.toPrecision(2).replace(/\.0+$/, '')
+  // below 10 keep two decimals (a fertility rate of 1.95 must not read "2"); below 0.1, two significant digits
+  const s = a >= 0.1 ? v.toFixed(2) : v.toPrecision(2)
+  return s.includes('e') ? s : s.replace(/(\.\d*?)0+$/, '$1').replace(/\.$/, '')
 }
 
 /** "about 30×" style ratio text. */

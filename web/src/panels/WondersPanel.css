@@ -54,3 +54,11 @@ table.data.wonders-race-table td.lead::after { content: ' ▲'; font-size: 9px; 
 .wonders-more { margin-top: 5px; font-size: 12px; padding: 3px 9px; }
 .wonders-src { margin-top: 6px; }
 .wonders-nodata { margin: 0 0 4px; font-size: 11.5px; color: var(--muted); }
+.wonders-nodata p { margin: 0; }
+.wonders-nodata .wonders-src { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; margin-top: 4px; }
+.wonders-cov { font-size: 11px; cursor: help; }
+.wonders-sites { display: inline-grid; justify-items: end; line-height: 1.2; }
+.wonders-sites small { font-size: 10px; font-weight: 400; color: var(--muted); }
+/* totals: two lines (sites, titles) in a narrow cell, so the lead keeps its colour but drops the ▲ */
+table.data.wonders-race-table td.wonders-tot.lead::after { content: none; }
+.wonders-sites > span { white-space: nowrap; }

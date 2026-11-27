@@ -36,6 +36,7 @@ pip install -r pipeline/requirements.txt
 cd pipeline
 python -m civmap.run                 # all stages, both countries (first run downloads ~2–3 GB)
 python -m civmap.run --stage reconcile civ export   # re-derive the map from cached tables
+python -m civmap.run --stage national reconcile civ export   # also refresh World Bank indicators + metros
 python -m civmap.validate economy    # check one domain's tables against the contract
 ```
 
@@ -51,7 +52,7 @@ time); a second run works offline. Intermediate tidy tables go to `data/interim/
 | national | `civmap/domains/national.py` | World Bank indicators for the advisors, metro list for City View |
 | reconcile | `civmap/reconcile.py` | Allocates every admin table to tiles (mass-preserving for totals, weighted means for rates) and re-aggregates to every admin level |
 | civ | `civmap/civ.py` | Terrain classes, yields, districts, wonders, citizens, city screens |
-| export | `civmap/export.py` | Columnar JSON + Float32 metric matrix + simplified GeoJSON for the web app |
+| export | `civmap/export.py` | Columnar JSON + Float32 metric matrix (`metrics.bin`, rounded to ~4 significant digits, plus a gzip copy `metrics.bin.gz` that the app inflates in the browser) + simplified GeoJSON for the web app |
 
 ### Data domains
 
@@ -65,7 +66,7 @@ time); a second run works offline. Intermediate tidy tables go to `data/interim/
 | society | Census religion & ethnicity, OSM places of worship, Wikidata | 2020 U.S. Religion Census, ACS B03002, Wikidata |
 | culture | Wikidata (UNESCO WHS, museums), DWC/SLTDA park visitors, WDPA | Wikidata, NPS visitor statistics, WDPA |
 | hazards | IBTrACS, USGS earthquakes, NOAA tsunami run-ups, DesInventar | same + FEMA National Risk Index |
-| infra | WRI Global Power Plant Database, PortWatch, OurAirports, Wikidata | EIA-860, PortWatch, OurAirports + FAA, Wikidata |
+| infra | WRI Global Power Plant Database, PortWatch, OurAirports (no open airport-level passenger statistics), Wikidata | EIA-860, PortWatch, OurAirports + FAA enplanements (boardings), Wikidata |
 
 The app's **Sources** tab lists every dataset with publisher, vintage, licence, access date and the
 metrics it feeds.

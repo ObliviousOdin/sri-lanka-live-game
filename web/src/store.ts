@@ -35,7 +35,6 @@ interface State {
     colorBy?: 'country' | 'lens'
   }
   flyTo: FlyTo | null
-  zoomRef: Partial<Record<CountryId, { zoom: number; lat: number }>>
   set: (p: Partial<State>) => void
   setLens: (id: string, metric?: string) => void
   select: (s: Selection | null, openPanel?: PanelTab) => void
@@ -62,7 +61,6 @@ export const useStore = create<State>((set) => ({
   panelOpen: typeof window !== 'undefined' ? window.innerWidth >= 900 : true,
   explorer: { scope: 'both', level: 'admin', x: 'pop_density', y: 'gdp_per_capita_usd', logX: true, logY: true, brushed: {} },
   flyTo: null,
-  zoomRef: {},
   set: (p) => set(p),
   setLens: (id, metric) =>
     set((s) => ({ lensId: id, lensMetric: metric ? { ...s.lensMetric, [id]: metric } : s.lensMetric })),

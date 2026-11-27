@@ -1,7 +1,7 @@
 // Pure helpers for the Tile inspector: percentile caches, point lookups and the yield derivation.
 // Everything here is memoised per CountryData / AdminTable object (WeakMap), so a pipeline
 // re-export (new objects) naturally invalidates the caches.
-import { YIELDS, type AdminTable, type CountryData, type IndexJson, type Metric, type PointRow, type Wonder, type YieldKey } from '../types'
+import { YIELDS, type AdminTable, type CountryData, type CountryId, type IndexJson, type Metric, type PointRow, type Wonder, type YieldKey } from '../types'
 import { fmtNumber, fmtUnit, fmtUsd } from '../format'
 
 // ---------------------------------------------------------------------------------------------
@@ -84,6 +84,22 @@ export function fmtLandDensity(v: number, unit: string) {
 export function plural(label: string, n = 2) {
   if (n === 1) return label
   return /[^aeiou]y$/i.test(label) ? label.slice(0, -1) + 'ies' : label + 's'
+}
+
+/** Fixed fly-to zooms per admin level (used when a unit has no land area). */
+export const ADMIN_ZOOM: Record<CountryId, Record<string, number>> = { lka: { adm1: 8.4, adm2: 9, adm3: 10.5 }, usa: { adm1: 5.5, adm2: 8 } }
+const MAX_FIT_ZOOM: Record<CountryId, number> = { lka: 10.5, usa: 8.5 }
+
+/**
+ * Fly-to zoom that shows an admin unit of `km2` (land area) at latitude `lat` about 320 px across
+ * (deck.gl 512 px tiles). Clamped so small units still show whole tiles of the country's grid.
+ */
+export function adminZoom(country: CountryId, level: string, km2: number | null | undefined, lat: number): number {
+  const fixed = ADMIN_ZOOM[country]?.[level] ?? 7
+  if (km2 == null || !Number.isFinite(km2) || km2 <= 0) return fixed
+  const mpp = (Math.sqrt(km2) * 1000) / 320
+  const z = Math.log2((78271.517 * Math.cos((lat * Math.PI) / 180)) / mpp)
+  return Number.isFinite(z) ? Math.max(3.5, Math.min(MAX_FIT_ZOOM[country] ?? 10, z)) : fixed
 }
 
 export function fmtBytes(b: number) {
@@ -239,13 +255,27 @@ export function pointsInHex(d: CountryData, h3: string): TilePoint[] {
   return m.get(h3) ?? []
 }
 
-export const POINT_LAYER_META: Record<string, { label: string; icon: string; value?: string[]; unit?: string }> = {
+export interface PointLayerMeta {
+  label: string
+  icon: string
+  /** columns holding the facility's size value, first finite one wins */
+  value?: string[]
+  unit?: string
+  /** shown instead of a value when a country publishes no figure for this layer (missing data, not zero) */
+  noValue?: Partial<Record<CountryId, string>>
+}
+
+export const POINT_LAYER_META: Record<string, PointLayerMeta> = {
   power_plants: { label: 'Power station', icon: '⚡', value: ['capacity_mw'], unit: 'MW' },
   ports: { label: 'Port', icon: '⚓', value: ['port_cargo_t', 'cargo_tonnes'], unit: 't cargo' },
-  airports: { label: 'Airport', icon: '✈️', value: ['airport_pax', 'passengers'], unit: 'enplanements (boardings)' },
+  // US values are FAA enplanements (each boarding passenger once, about half of all passengers)
+  airports: {
+    label: 'Airport', icon: '✈️', value: ['airport_pax', 'passengers'], unit: 'enplanements (boardings)',
+    noValue: { lka: 'no open airport-level statistics' },
+  },
   universities: { label: 'University', icon: '🎓', value: ['works_5y'], unit: 'works (5 y)' },
   institutions: { label: 'Research institution', icon: '🔬', value: ['works_5y'], unit: 'works (5 y)' },
-  heritage: { label: 'World Heritage', icon: '🏛️' },
+  heritage: { label: 'World Heritage', icon: '🏯' },
   parks: { label: 'National park', icon: '🏞️', value: ['park_visitors', 'visitors'], unit: 'visitors' },
   museums: { label: 'Museum', icon: '🖼️' },
   holy_sites: { label: 'Holy site', icon: '🪔' },

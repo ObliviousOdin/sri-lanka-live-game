@@ -16,8 +16,11 @@ Read it before adding a data domain or a UI panel.
   both maps have a comparable number of tiles across a metro area.
 * An optional **equal-tile** mode recomputes Sri Lanka at res 5, so a tile means the same land area in
   both countries.
-* Yields are computed from **densities** (per km²), so a res-6 tile and a res-5 tile with the same
-  intensity of activity get the same yield. Totals always sum absolute values.
+* Yields are computed from **densities per km² of tile area**, so a res-6 tile and a res-5 tile with the
+  same intensity of activity get the same yield; compare yields across countries as per-tile means,
+  never as sums (the US has ~20× more tiles). Totals of extensive metrics always sum absolute values.
+  Densities of extensive metrics in the app are per km² of tile ("per km² of tile"); population
+  density alone is per km² of land.
 * Land hexes = every hex that contains at least one population-raster pixel inside the country boundary.
   Water hexes = k-rings around land hexes (2 rings for LKA, 1 ring for USA), classed Coast/Ocean.
 
@@ -81,7 +84,9 @@ Sri Lankan values PPP-adjusted using the World Bank PPP conversion factor.
   Industrial Zone, Plantation, Farmland, Holy Site, Theater Square, Entertainment, Encampment,
   Aerodrome, Dam/Power, Spaceport, Neighborhood).
 * **Wonders** ← published ranking rules (national parks by visitors, universities by research output,
-  ports by cargo, power plants by capacity, UNESCO World Heritage, airports by passengers).
+  ports by cargo, power plants by capacity, UNESCO World Heritage, airports by enplanements, i.e. FAA
+  passenger boardings; Sri Lanka publishes no airport-level passenger statistics, so it has no Great
+  Airport).
 * **Citizens** ← workforce composition (ACS occupations / Sri Lanka LFS ISCO groups) mapped to
   Farmers, Workers, Merchants, Engineers, Scholars, Healers, Service, Administrators, Artists, Soldiers.
 
@@ -93,12 +98,20 @@ sources.json                  all sources (id, title, publisher, url, license, v
 national.json                 World Bank national indicators for both countries
 <cc>/meta.json                hex res, bbox, metric list (Metric + stats), admin levels, column order
 <cc>/hexes.json               {h3:[…], terrain:[…], district:[…], adm1:[…], adm2:[…], yields:{gold:[…],…}}
-<cc>/metrics.bin              Float32 column-major matrix, n_hex × n_metrics (NaN = no data)
+<cc>/metrics.bin              Float32 column-major matrix, n_hex × n_metrics (NaN = no data), values rounded
+                              to 13 mantissa bits (~4 significant digits, relative error ≤ 6e-5)
+<cc>/metrics.bin.gz           the same bytes, gzip level 9 (US ~8.7 MB vs 23 MB); the app fetches it and
+                              inflates it with DecompressionStream, falling back to metrics.bin
 <cc>/admin_<level>.json       units with id, name, parent, centroid, aggregated metric values
 <cc>/admin_<level>.geojson    simplified boundaries for outlines and admin picking
 <cc>/points.json              facilities used for wonders/districts (with source ids)
-<cc>/wonders.json             wonders with rule, rank, value, source
-<cc>/cities.json              City View payload: centre hex, ring tiles, citizens, districts
+<cc>/wonders.json             wonders with rule, rank, value, source (meta.json wonder_categories: status
+                              per category, e.g. no_data for Sri Lanka's Great Airport, with note and rule)
+<cc>/cities.json              City View payload: centre hex, ring tiles (after de-duplication) and
+                              ring_tiles / overlap (tiles ceded to a nearer city), citizens, districts,
+                              official_pop + population_scope ('metro area (Census MSA)' |
+                              'city proper (Wikidata)'), population_note, population_sources; Sri Lanka
+                              also census_ds_population (Census 2024, DS division holding the centre)
 ```
 
 ## 6. Web app

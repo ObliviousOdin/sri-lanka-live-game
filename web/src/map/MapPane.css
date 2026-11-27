@@ -46,6 +46,8 @@
   background: color-mix(in srgb, var(--c) 55%, transparent); border: 1px solid #0a0f19;
 }
 .mp-key-dot.ring { background: transparent; border: 1.5px solid var(--c); }
+.mp-key-dot.solid { background: var(--c); }
+.mp-key-dot.inline { display: inline-block; vertical-align: baseline; top: 1px; }
 .mp-key-sub { color: var(--muted); }
 .mp-attrib { pointer-events: auto; color: var(--muted); font-size: 10.5px; padding: 2px 6px; }
 .mp-attrib a { color: var(--muted); }

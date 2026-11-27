@@ -40,6 +40,26 @@ export interface Meta {
   yield_totals: Record<YieldKey, number>
   terrain_counts: Record<string, number>
   district_counts: Record<string, number>
+  /** one row per wonder category: the ranking rule and whether this country has data to rank it */
+  wonder_categories?: WonderCategory[]
+}
+
+/** meta.json `wonder_categories` (pipeline/civmap/civ.py): rule, coverage and provenance of a wonder category. */
+export interface WonderCategory {
+  category: string
+  rule: string
+  unit: string
+  metric: string | null
+  metric_vintage: string | null
+  /** top-N kept per country; null = every qualifying site (World Heritage) */
+  cap: number | null
+  candidates: number
+  with_value: number
+  ranked: number
+  /** 'ranked', or 'no_data' when no candidate has a value (missing data, not a zero) */
+  status: 'ranked' | 'no_data' | string
+  note: string | null
+  sources: string[]
 }
 
 export interface HexesJson {
@@ -138,6 +158,22 @@ export interface City {
   industries: { key: string; jobs: number; lq: number }[]
   wonders: string[]
   districts: string[]
+  /** ring tiles that went to a nearer City View centre (rings are de-duplicated in civ.py) */
+  overlap?: { id: string; name: string; tiles: number; pop: number }[]
+  /** tiles of the full radius-`radius` ring on the grid, before de-duplication (`tiles` holds this city's share) */
+  ring_tiles?: number
+  /** what `official_pop` covers, e.g. 'metro area (Census MSA)' / 'city proper (Wikidata)' */
+  population_scope?: string
+  population_note?: string
+  population_sources?: string[]
+  /** Sri Lanka: Census 2024 count of the DS division holding the centre (a like-for-like official figure) */
+  census_ds_population?: number | null
+  census_ds_urban_population?: number | null
+  census_ds_id?: string | null
+  census_ds_name?: string | null
+  census_year?: number | null
+  census_scope?: string | null
+  census_sources?: string[] | null
 }
 
 export interface Source {

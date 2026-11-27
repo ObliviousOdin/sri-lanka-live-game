@@ -134,7 +134,7 @@ DISTRICT_ORDER = ["city_center", "spaceport", "harbor", "aerodrome", "campus", "
                   "industrial_zone", "dam", "power_plant", "holy_site", "theater_square", "encampment",
                   "entertainment", "plantation", "farmland", "fishery", "neighborhood", "preserve"]
 DISTRICT_RULES = {
-    "city_center": "Centre tile of a City View metro (largest-population tile near the city's coordinates).",
+    "city_center": "Centre tile of a City View city: the most populous tile within one ring of the city's coordinates.",
     "harbor": "Seaport with ≥ 1 million tonnes of annual cargo, or one of the country's 3 busiest ports.",
     "aerodrome": "Airport with ≥ 1 million annual passenger boardings (US: FAA enplanements, about half of all "
                  "arriving + departing passengers), or the country's busiest airport by boardings. Sri Lanka has no "
@@ -152,11 +152,12 @@ DISTRICT_RULES = {
     "dam": "Hydroelectric capacity ≥ 100 MW in the tile.",
     "power_plant": "Thermal, nuclear, wind or solar capacity ≥ 500 MW in the tile.",
     "encampment": "Military installation in the tile.",
-    "holy_site": "One of the country's most notable religious sites (by Wikipedia language editions), "
-                 "or worship-site density in the top 1% of the country's tiles.",
+    "holy_site": "One of the country's most notable religious sites (top 10 in Sri Lanka, top 25 in the US by "
+                 "Wikipedia language editions), or worship-site density in the top 1% of the country's tiles.",
     "theater_square": "UNESCO World Heritage (cultural) site, ≥ 5 museums, or arts/recreation/hospitality LQ ≥ 2 "
                       "with ≥ 300 people/km².",
-    "entertainment": "Arts, recreation & hospitality employment LQ ≥ 2.5 (tourism economy).",
+    "entertainment": "Arts, recreation & hospitality employment LQ ≥ 2.5 (tourism economy) with ≥ 5,000 residents "
+                     "in the tile.",
     "preserve": "≥ 75% strictly protected (WDPA, IUCN categories Ia–IV), or a national park with visitor statistics.",
     "plantation": "Perennial/tree-crop share of agriculture ≥ 40%, Food yield ≥ 3 and ≥ 40% tree + crop cover.",
     "farmland": "Food yield ≥ 4 and ≥ 40% cropland.",
@@ -500,6 +501,69 @@ FALLBACK_METROS = {
 }
 
 
+# What the official population of a City View city covers: US metros carry Census MSA estimates;
+# Sri Lankan cities only the population statement on the city's Wikidata item (city proper).
+POPULATION_SCOPE = {"usa": "metro area (Census MSA)", "lka": "city proper (Wikidata)"}
+POPULATION_SOURCES = {"usa": ["census_pep_cbsa_2025", "census_delineation_2023"], "lka": ["wikidata"]}
+
+
+def city_population_fields(country: str, m: dict) -> dict:
+    """population_scope (short), population_note (what the figure covers, caveats) and
+    population_sources of a metro's official population, plus the Census 2024 DS-division
+    figures for Sri Lanka whenever metros.json has them (also for cities without a Wikidata figure)."""
+    out = {"population_scope": None, "population_note": None, "population_sources": []}
+    if m.get("population") is not None:
+        out = (_us_population(m) if country == "usa" else _lka_population(m))
+    if m.get("census_ds_population") is not None:
+        out.update({
+            "census_ds_population": m["census_ds_population"],
+            "census_ds_urban_population": m.get("census_ds_urban_population"),
+            "census_ds_id": m.get("census_ds_id"), "census_ds_name": m.get("census_ds_name"),
+            "census_year": m.get("census_year"), "census_scope": m.get("census_scope"),
+            "census_sources": list(m.get("census_sources") or ["dcs_census_portal"]),
+        })
+    return out
+
+
+def _us_population(m: dict) -> dict:
+    yr = m.get("population_year")
+    srcs = list(m.get("population_sources") or POPULATION_SOURCES["usa"])
+    title = m.get("title") or m.get("name")
+    n_cty = len(m.get("admin_ids") or [])
+    city = ""
+    if m.get("principal_city_population"):
+        pyr = m.get("principal_city_population_year")
+        city = (f" (the city of {m.get('principal_city') or m.get('name')} itself: "
+                f"{float(m['principal_city_population']):,.0f}{', ' + str(pyr) if pyr else ''}, Wikidata)")
+        if "wikidata" not in srcs:
+            srcs.append("wikidata")
+    note = (f"{title} Metropolitan Statistical Area (OMB 2023 delineation, {n_cty} "
+            f"{'county' if n_cty == 1 else 'counties'}): Census Bureau population estimate"
+            f"{' for ' + str(yr) if yr else ''}. A metro area, not the city proper{city}.")
+    return {"population_scope": POPULATION_SCOPE["usa"], "population_note": note, "population_sources": srcs}
+
+
+def _lka_population(m: dict) -> dict:
+    yr = m.get("population_year")
+    srcs = list(m.get("population_sources") or POPULATION_SOURCES["lka"])
+    parts = [f"Population statement on the city's Wikidata item (P1082{', ' + str(yr) if yr else ''}). Wikidata "
+             "does not record the area it covers (usually the municipal / urban council area); not a metro area, "
+             "so not comparable with US metro figures."]
+    kind = str(m.get("population_ref_kind") or "")
+    if kind == "unreferenced":
+        parts.append("The Wikidata statement cites no reference.")
+    elif kind.startswith("third-party"):
+        parts.append(f"The Wikidata statement cites a {kind}.")
+    elif kind:
+        parts.append(f"Wikidata reference: {kind}.")
+    if m.get("population_note"):
+        parts.append(str(m["population_note"]))
+        if "WDI" in str(m["population_note"]) and "worldbank_wdi" not in srcs:
+            srcs.append("worldbank_wdi")
+    return {"population_scope": POPULATION_SCOPE["lka"], "population_note": " ".join(parts),
+            "population_sources": srcs}
+
+
 def city_size(pop: float) -> int:
     return max(1, int(round((max(pop, 0) ** 0.4) / 20)))
 
@@ -595,6 +659,7 @@ def build_cities(country: str, tiles: pd.DataFrame, H: pd.DataFrame, wonders: li
             "ring_tiles": len(full_ring), "overlap": overlap,
             "pop": pop, "gdp_usd": gdp, "gdp_per_capita": (gdp / pop if gdp and pop else None),
             "official_pop": m.get("population"), "official_pop_year": m.get("population_year"),
+            **city_population_fields(country, m),
             "official_gdp_usd": m.get("gdp_usd"), "official_gdp_year": m.get("gdp_year"),
             "admin_ids": m.get("admin_ids"), "wikidata": m.get("wikidata"),
             "size": size, "citizens": cit, "citizen_icons": icons,

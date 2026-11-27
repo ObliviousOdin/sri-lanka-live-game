@@ -1,6 +1,6 @@
 // Grouped, filterable "All metrics" list used by the Tile inspector for tiles and admin units.
 import { memo, useMemo, useState } from 'react'
-import { SourceChip, SourceChips } from '../components/SourceChip'
+import { SourceChips } from '../components/SourceChip'
 import { YieldIcon } from '../components/YieldIcon'
 import { useStore } from '../store'
 import type { CountryId, Metric } from '../types'
@@ -150,12 +150,16 @@ const MetricRow = memo(function MetricRow({ r, scopeLabel, country }: { r: Metri
   )
 })
 
-/** At most two compact source chips per row (all of them are listed when the row is expanded). */
+/**
+ * At most two compact source chips per row (all of them are listed when the row is expanded).
+ * SourceChips labels the pair together, so two datasets of one publisher stay distinguishable
+ * ("DCS · LFS 2024", "DCS · Census 2024") instead of both reading "Department of Census…".
+ */
 function RowSources({ ids }: { ids: string[] }) {
   const u = [...new Set(ids)]
   return (
     <>
-      {u.slice(0, 2).map((id) => <SourceChip key={id} id={id} compact />)}
+      <SourceChips ids={u.slice(0, 2)} />
       {u.length > 2 && <span title={u.slice(2).join(', ')}>+{u.length - 2}</span>}
     </>
   )

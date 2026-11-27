@@ -247,7 +247,8 @@ INDICATORS: list[tuple[str, str, str | None, str]] = [
     ("AG.LND.FRST.ZS", V, None, "higher"),
     ("AG.LND.ARBL.ZS", V, "food", "neutral"),
     ("AG.LND.AGRI.ZS", V, "food", "neutral"),
-    ("ER.PTD.TOTL.ZS", V, None, "higher"),
+    ("ER.LND.PTLD.ZS", V, None, "higher"),            # terrestrial protected areas, % of land area
+    ("ER.PTD.TOTL.ZS", V, None, "higher"),            # terrestrial + marine, % of total territorial area
     ("EG.ELC.ACCS.ZS", V, None, "higher"),
     ("EG.ELC.PROD.KH", V, "production", "higher"),      # derived (archived in WDI)
     ("EG.USE.PCAP.KG.OE", V, "production", "neutral"),
@@ -570,9 +571,10 @@ def metros_lka(inds: list[dict] | None = None) -> tuple[list[dict], dict]:
                                  "(municipal / urban council, DS division, or a UN urban-agglomeration "
                                  "estimate). For a like-for-like official figure use census_ds_population."),
             "population_ref": w["population_ref"], "population_ref_kind": kind, "population_note": note,
+            "population_sources": ["wikidata"] + (["worldbank_wdi"] if note else []),
             "census_ds_id": cid, "census_ds_name": str(c["ADM_NAME"]),
             "census_ds_population": int(c["tot_Ag"]), "census_ds_urban_population": int(c["tot_Sec_Ur"]),
-            "census_year": CENSUS_YEAR,
+            "census_year": CENSUS_YEAR, "census_sources": ["dcs_census_portal"],
             "census_scope": ("Census of Population and Housing 2024 (DCS): total and urban-sector population "
                              "(Municipal / Urban Council areas, excluding Estate Urban) of the DS division "
                              "containing the city centre. A council area that spans several DS divisions "
@@ -750,6 +752,7 @@ def metros_usa() -> tuple[list[dict], dict]:
             "lat": round(w["lat"], 6), "lon": round(w["lon"], 6),
             "population": int(getattr(r, f"POPESTIMATE{py}")), "population_year": py,
             "population_scope": "Metropolitan Statistical Area (OMB 2023 delineation)",
+            "population_sources": ["census_pep_cbsa_2025", "census_delineation_2023"],
             "admin_level": "adm2", "admin_ids": mem,
             "cbsa": r.CBSA, "title": title, "rank": rank,
             "rank_basis": f"MSA population {py} (Puerto Rico excluded)", "states": sorted({c[:2] for c in mem}),

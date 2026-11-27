@@ -1,6 +1,7 @@
 // Navigation helpers shared by the City View and Wonders panels.
 import { cellToLatLng } from 'h3-js'
 import { COUNTRY_META } from '../civ'
+import { visibleHeightAboveSheet } from '../map/sheet'
 import { useStore } from '../store'
 import type { City, CountryId } from '../types'
 
@@ -10,17 +11,18 @@ export const SITE_ZOOM: Record<CountryId, number> = { lka: 9.8, usa: 7.8 }
 /**
  * On phones the panel is a bottom sheet drawn over the map. Shift the fly-to centre south so the
  * target lands in the middle of the part of the map that is still visible above the sheet.
+ * Uses the sheet's resting (open) position (map/sheet.ts: layout offsetTop, which ignores the
+ * slide-in transform), so a fly-to issued while the sheet is still closed or animating aims at
+ * where the sheet will be, not where it is on screen.
  */
 function sheetAdjustedLat(country: CountryId, lat: number, zoom: number): number {
-  if (typeof document === 'undefined') return lat
-  const cell = document.querySelector(`.map-cell[aria-label="${COUNTRY_META[country].name} map"]`)
-  const side = document.querySelector('.side')
-  if (!cell || !side) return lat
-  const m = cell.getBoundingClientRect()
-  const s = side.getBoundingClientRect()
-  const covers = s.left <= m.left + 1 && s.right >= m.right - 1 && s.top > m.top + 40 && s.top < m.bottom
-  if (!covers) return lat
-  const offsetPx = (m.top + m.bottom) / 2 - (m.top + s.top) / 2
+  // the callers open the panel (select) before flying; a sheet that stays closed covers nothing
+  if (typeof document === 'undefined' || !useStore.getState().panelOpen) return lat
+  const cell = document.querySelector<HTMLElement>(`.map-cell[aria-label="${COUNTRY_META[country].name} map"]`)
+  if (!cell) return lat
+  const visible = visibleHeightAboveSheet(cell)
+  if (visible == null) return lat
+  const offsetPx = (cell.getBoundingClientRect().height - visible) / 2
   const mpp = (78271.517 * Math.cos((lat * Math.PI) / 180)) / Math.pow(2, zoom)
   return lat - (offsetPx * mpp) / 111320
 }

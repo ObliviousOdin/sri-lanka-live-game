@@ -27,7 +27,10 @@ Nothing on the map is hand-placed: change a threshold in `civ.py`, re-run
   tile containing their coordinates, snapped to the nearest tile when they sit just offshore.
 
 Because the two grids differ in tile size, every yield is computed from a **density per km² of
-tile**, so a Colombo tile and a Manhattan tile are compared on intensity, not on tile area.
+tile**, so a Colombo tile and a Manhattan tile are compared on intensity, not on tile area. The app
+follows the same convention: densities of additive quantities are "per km² of tile" (sea and lake
+area included); only population density is per km² of land. Yields are per-tile intensity indices,
+so compare their per-tile means across countries, never their sums (the US has ~20× more tiles).
 
 ## 2. Terrain
 
@@ -50,7 +53,8 @@ Sources: ESA WorldCover 2021 v200 (10 m), Copernicus DEM GLO-90, WorldClim 2.1 (
 
 ## 3. Yields
 
-One yield point per half-decade (×√10 ≈ 3.16) of density above a base, capped at 12 before bonuses:
+One yield point per half-decade (×√10 ≈ 3.16) of density above a base, capped at 12 before bonuses
+(16 with bonuses):
 
 `yield = floor(2 · log10(density / base)) + 1` when `density ≥ base`, else 0.
 
@@ -58,11 +62,11 @@ One yield point per half-decade (×√10 ≈ 3.16) of density above a base, capp
 |---|---|---|---|
 | Gold | GDP (current US$) per km² | $100,000 | — |
 | Production | industrial GVA (mining, manufacturing, construction, utilities) per km² | $30,000 | +1 / +2 / +3 for ≥ 100 / 1,000 / 3,000 MW of power stations |
-| Food (land) | agriculture, forestry & fishing GVA per km² | $3,000 | — |
-| Food (sea) | fish landings per km² of coastal sea | 0.1 t | — |
+| Food (land) | agriculture, forestry & fishing GVA per km² | $3,000 | — (a land tile takes the larger of its land and sea Food) |
+| Food (sea) | fish landings per km² of coastal sea (sea tiles: per km² of tile) | 0.1 t | — |
 | Science | STEM workers per km² | 0.1 | +1 / +2 / +3 for ≥ 1,000 / 10,000 / 50,000 research works in 5 years from institutions in the tile |
-| Culture | arts, recreation & hospitality workers per km² | 0.3 | +2 per World Heritage Site (max 2), +1 for ≥ 3 museums, +1 for a national park with ≥ 1 M visitors |
-| Faith | places of worship per km² | 0.003 | +2 for one of the country's most notable religious sites |
+| Culture | arts, recreation & hospitality workers per km² | 0.3 | +2 per World Heritage Site (up to 2 sites, +4), +1 for ≥ 3 museums, +1 for a national park with ≥ 1 M visitors/yr |
+| Faith | places of worship per km² | 0.003 | +2 for a tile holding one or more of the country's most widely documented religious sites (Wikidata; top 30 in Sri Lanka, top 80 in the US by Wikipedia language editions) |
 
 Sea tiles only carry Food, Gold and Production. Money is in current US dollars at the market
 exchange rate of the data year; the app can also show Sri Lankan values at purchasing-power parity.
@@ -73,7 +77,7 @@ A tile receives every district whose rule it meets; the first in this priority o
 
 | District | Rule |
 |---|---|
-| City Center | centre tile of a City View metro (most populous tile at the city's coordinates) |
+| City Center | centre tile of a City View city: the most populous tile within one ring of the city's coordinates |
 | Spaceport | a launch site that has hosted an orbital or orbital-class launch: Cape Canaveral (incl. Launch Complex 46), Kennedy, Vandenberg, Wallops / Mid-Atlantic Regional Spaceport, Pacific Spaceport Complex – Alaska, Starbase. Other sites on the FAA spaceport list (runway, suborbital or reentry-only) stay on the map as points but do not qualify |
 | Harbor | a seaport with ≥ 1 million t/yr of cargo, or one of the country's 3 busiest ports |
 | Aerodrome | an airport with ≥ 1 million passenger boardings/yr (US: FAA enplanements, about half of all arriving + departing passengers), or the country's busiest airport by boardings. Sri Lanka has no open airport-level passenger statistics, so there every OurAirports *large airport* with scheduled service qualifies |
@@ -82,17 +86,20 @@ A tile receives every district whose rule it meets; the first in this priority o
 | Industrial Zone | Production ≥ 5 and manufacturing LQ ≥ 1.5, or an export-processing zone / industrial park |
 | Dam | ≥ 100 MW hydroelectric capacity |
 | Power Plant | ≥ 500 MW of other generating capacity |
-| Holy Site | one of the most widely documented religious sites, or worship-site density in the country's top 1% |
+| Holy Site | one of the most widely documented religious sites (top 10 in Sri Lanka, top 25 in the US by Wikipedia language editions), or worship-site density in the country's top 1% of land tiles |
 | Theater Square | a cultural World Heritage Site, ≥ 5 museums, or arts/recreation/hospitality LQ ≥ 2 at ≥ 300 people/km² |
 | Encampment | a military installation |
-| Entertainment Complex | arts, recreation & hospitality LQ ≥ 2.5 (tourism economies) |
-| Plantation | perennial/tree-crop share of agriculture ≥ 40%, Food ≥ 3, ≥ 40% tree + crop cover |
-| Farmland | Food ≥ 4 and ≥ 40% cropland |
+| Entertainment Complex | arts, recreation & hospitality LQ ≥ 2.5 (tourism economies) with ≥ 5,000 residents in the tile |
+| Plantation | perennial/tree-crop share of agricultural land ≥ 40%, Food ≥ 3, and ≥ 40% tree + crop cover |
+| Farmland | Food ≥ 4 and ≥ 40% cropland (ESA WorldCover) |
 | Fishery | sea tile with Food ≥ 6 (≥ 31.6 t of fish per km² of coastal sea) |
-| Neighborhood | ≥ 1,500 people/km² |
-| Preserve | ≥ 75% strictly protected (WDPA, IUCN Ia–IV), or a national park with visitor statistics |
+| Neighborhood | ≥ 1,500 people per km² of land |
+| Preserve | ≥ 75% of the tile strictly protected (WDPA, IUCN categories Ia–IV; other designations do not count), or a national park with visitor statistics |
 
 LQ = location quotient: the tile's share of employment in an industry divided by the national share.
+"Gold ≥ 7" and the other yield conditions use the yields of §3; the top-1% thresholds are computed
+over the country's land tiles on every build. The same rule text is shipped in `index.json` and shown
+in the app's tooltips.
 
 ## 5. Wonders
 
@@ -134,6 +141,15 @@ centre (grid steps, then distance, then the larger official population), so no r
 yield, district or wonder is counted in two cities; the city records how many of its ring tiles went
 to which neighbour. Ring totals are therefore not official city or metro figures.
 
+Each city also carries its **official population with its scope**, and the two countries' figures
+are not the same kind of number: a US city is its Metropolitan Statistical Area (Census Bureau
+Vintage 2025 estimate, OMB 2023 delineation counties), `population_scope` = *metro area (Census
+MSA)*; a Sri Lankan city has only the population statement on its Wikidata item (P1082, various
+years, usually the municipal / urban council area, sometimes the UN World Urbanization Prospects
+projection), `population_scope` = *city proper (Wikidata)*. For a like-for-like official Sri Lankan
+figure the city also carries the Census 2024 population of the DS division that holds its centre
+(`census_ds_population`). Compare cities across countries on their tile rings, not on these figures.
+
 A city's **size** is `round(population^0.4 / 20)`; its citizen icons split that size across classes
 by the largest-remainder method. Where Sri Lankan tables are only published by province, the
 domain module documents how they were split to districts (see each metric's *method*).
@@ -146,3 +162,12 @@ domain module documents how they were split to districts (see each metric's *met
   differ in completeness; compare Faith within a country with more confidence than across.
 * H3 tiles straddle administrative boundaries; tile values for admin-sourced statistics are
   population-weighted blends of the units they overlap.
+* Soldiers: Sri Lanka's Labour Force Survey covers household residents only, so armed-forces members
+  living in barracks are missing (about 41,000 household-resident soldiers vs the World Bank's ~317,000
+  armed forces personnel), while the ACS counts the armed forces including group quarters. The
+  Soldiers class is shown for each country but not compared between them.
+* Airports: US values are FAA enplanements (boardings, about half of all passengers). Sri Lanka has no
+  open airport-level passenger statistics, so its airports carry no traffic values and it has no Great
+  Airport.
+* `metrics.bin` stores tile values rounded to ~4 significant digits (relative error ≤ 6 × 10⁻⁵), the
+  same precision as the admin tables; national totals use the unrounded pipeline values.

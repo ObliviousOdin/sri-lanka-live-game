@@ -5,7 +5,7 @@ import { useNational, type AppData } from '../data/useData'
 import { fmtInt, fmtNumber, fmtUsd } from '../format'
 import { WONDER_ICON } from '../map/MapPane'
 import { useStore } from '../store'
-import { COUNTRIES, type CountryData, type CountryId, type NationalIndicator, type Wonder } from '../types'
+import { COUNTRIES, type CountryData, type CountryId, type NationalIndicator, type Wonder, type WonderCategory } from '../types'
 import { SITE_ZOOM, flyToCountry } from './cityViewNav'
 import { countryVintage } from './explorerData'
 import { wonderUnit } from './tilePanelStats'
@@ -32,25 +32,53 @@ const CATEGORY_DATA: Record<string, { layer: string; fields: string[]; what: str
   'Holy Wonder': { layer: 'holy_sites', fields: ['sitelinks'], what: 'holy-site documentation counts' },
 }
 
+/** The pipeline's record of a category for one country (meta.json `wonder_categories`). */
+function catMeta(d: CountryData | undefined, cat: string): WonderCategory | undefined {
+  return d?.meta.wonder_categories?.find((x) => x.category === cat)
+}
+
 function noData(d: CountryData | undefined, cat: string, n: number): boolean {
+  if (!d || n > 0) return false
+  const cm = catMeta(d, cat)
+  if (cm) return cm.status === 'no_data'
+  // older exports without wonder_categories: infer from the facilities' value columns
   const cd = CATEGORY_DATA[cat]
-  if (!d || n > 0 || !cd) return false
+  if (!cd) return false
   const rows = d.points?.[cd.layer]?.rows ?? []
   return !rows.some((r) => cd.fields.some((f) => r[f] != null && Number.isFinite(Number(r[f]))))
 }
 
-function NoDataNote({ c, cat, national }: { c: CountryId; cat: string; national: NationalIndicator[] }) {
+/** One map site can hold several titles (Yellowstone: Natural Wonder + World Heritage): count it once. */
+const siteKey = (w: Wonder) => (w.wikidata ? `wd:${String(w.wikidata)}` : `${w.h3}|${w.name}`)
+
+function NoDataNote({ c, d, cat, national }: { c: CountryId; d?: CountryData; cat: string; national: NationalIndicator[] }) {
+  const cm = catMeta(d, cat)
   const what = CATEGORY_DATA[cat]?.what ?? 'ranking data'
   // national context for the one known gap: passengers carried by the country's airlines (World Bank)
   const air = cat === 'Great Airport' ? national.find((r) => r.code === 'IS.AIR.PSGR')?.[c === 'lka' ? 'LKA' : 'USA'] : undefined
   return (
-    <p className="wonders-nodata">
-      No {what} are published for {COUNTRY_META[c].name}, so no {cat === 'Great Airport' ? 'airport' : 'site'} can be ranked — this is missing data, not a zero.
-      {air?.value != null && air.year != null && (
-        <> For scale: {COUNTRY_META[c].name}-registered airlines carried {fmtNumber(air.value)} passengers in {air.year} (World Bank). <SourceChips ids={['worldbank_wdi']} /></>
-      )}
-    </p>
+    <div className="wonders-nodata">
+      <p>
+        {cm?.note ?? `No ${what} are published for ${COUNTRY_META[c].name}, so no ${cat === 'Great Airport' ? 'airport' : 'site'} can be ranked.`}
+        {' '}This is missing data, not a zero{cm && cm.candidates > 0 ? `: ${fmtInt(cm.candidates)} candidates are on the map, none with a${/^[aeiou]/i.test(cm.unit) ? 'n' : ''} ${cm.unit || 'value'} figure` : ''}.
+        {air?.value != null && air.year != null && (
+          <> For scale: {COUNTRY_META[c].name}-registered airlines carried {fmtNumber(air.value)} passengers in {air.year} (World Bank). <SourceChips ids={['worldbank_wdi']} /></>
+        )}
+      </p>
+      {cm && cm.sources.length > 0 && <div className="wonders-src"><span className="muted">Candidates:</span> <SourceChips ids={cm.sources} /></div>}
+    </div>
   )
+}
+
+/** "top 10 of 917 candidates" — how the category was ranked for this country. */
+function coverage(cm: WonderCategory | undefined): { text: string; title: string } | null {
+  if (!cm || cm.status === 'no_data') return null
+  const vint = cm.metric_vintage ? ` (${cm.metric_vintage})` : ''
+  if (cm.cap == null) return { text: 'every listed site', title: `All ${fmtInt(cm.candidates)} qualifying sites are wonders${vint}` }
+  return {
+    text: `top ${cm.cap} of ${fmtInt(cm.candidates)}`,
+    title: `Top ${cm.cap} of ${fmtInt(cm.candidates)} candidates; ${fmtInt(cm.with_value)} have a ${cm.unit || 'ranking'} value${vint}`,
+  }
 }
 const SHOW_KIND = new Set(['World Heritage', 'Holy Wonder'])
 const COLLAPSED = 5
@@ -95,12 +123,21 @@ export function WondersPanel({ app }: { app: AppData }) {
 
   const groups = useMemo(() => {
     const m = new Map<string, Group>()
+    const group = (cat: string) => {
+      let g = m.get(cat)
+      if (!g) { g = { cat, rules: [], by: {} }; m.set(cat, g) }
+      return g
+    }
     for (const cc of COUNTRIES) {
       const d = app.countries[cc]
       if (!d) continue
+      // the pipeline's category list carries the rule even where a country has no wonder in it
+      for (const cm of d.meta.wonder_categories ?? []) {
+        const g = group(cm.category)
+        if (cm.rule && !g.rules.includes(cm.rule)) g.rules.push(cm.rule)
+      }
       for (const w of d.wonders) {
-        let g = m.get(w.category)
-        if (!g) { g = { cat: w.category, rules: [], by: {} }; m.set(w.category, g) }
+        const g = group(w.category)
         if (w.rule && !g.rules.includes(w.rule)) g.rules.push(w.rule)
         ;(g.by[cc] ??= []).push(w)
       }
@@ -180,13 +217,15 @@ export function WondersPanel({ app }: { app: AppData }) {
                   const rows = open ? list : list.slice(0, COLLAPSED)
                   const srcs = [...new Set(list.flatMap((w) => w.sources ?? []))]
                   const missing = noData(app.countries[c], g.cat, list.length)
+                  const cov = coverage(catMeta(app.countries[c], g.cat))
                   return (
                     <div key={c} className="wonders-country">
                       <div className="wonders-country-head">
                         <span className={`chip ${c}`}>{COUNTRY_META[c].short}</span>
                         <span className="muted">{list.length ? `${list.length} wonder${list.length === 1 ? '' : 's'}` : missing ? 'no data' : 'none qualify'}</span>
+                        {cov && <span className="muted wonders-cov" title={cov.title}>· {cov.text}</span>}
                       </div>
-                      {missing && <NoDataNote c={c} cat={g.cat} national={national} />}
+                      {missing && <NoDataNote c={c} d={app.countries[c]} cat={g.cat} national={national} />}
                       {list.length > 0 && (
                         <ol className="wonders-rows">
                           {rows.map((w) => {
@@ -244,6 +283,15 @@ export function WondersPanel({ app }: { app: AppData }) {
 // Wonder race scoreboard
 // ---------------------------------------------------------------------------------------------
 
+function SiteCount({ sites, titles }: { sites: number; titles: number }) {
+  return (
+    <span className="wonders-sites" title={`${sites} distinct site${sites === 1 ? '' : 's'} holding ${titles} wonder title${titles === 1 ? '' : 's'}`}>
+      <span>{sites} site{sites === 1 ? '' : 's'}</span>
+      {titles !== sites && <small>({titles} titles)</small>}
+    </span>
+  )
+}
+
 function WonderRace({ groups, lka, usa }: { groups: Group[]; lka?: CountryData; usa?: CountryData }) {
   const count = (g: Group, c: CountryId) => g.by[c]?.length ?? 0
   const dataOf = (c: CountryId) => (c === 'lka' ? lka : usa)
@@ -251,7 +299,20 @@ function WonderRace({ groups, lka, usa }: { groups: Group[]; lka?: CountryData; 
   const gaps = COUNTRIES.flatMap((c) => groups.filter((g) => gap(g, c)).map((g) => `${g.cat} (${COUNTRY_META[c].name})`))
   const popYear = (d?: CountryData) => { const v = d?.metricByKey.get('pop')?.vintage; return v && d ? countryVintage(v, d.id) : '' }
   const top = (g: Group, c: CountryId) => g.by[c]?.find((w) => w.rank === 1 && w.value != null && Number.isFinite(w.value))?.value ?? null
-  const tot = (c: CountryId) => groups.reduce((a, g) => a + count(g, c), 0)
+  const titles = (c: CountryId) => groups.reduce((a, g) => a + count(g, c), 0)
+  const siteSet = (c: CountryId) => new Set(groups.flatMap((g) => (g.by[c] ?? []).map(siteKey)))
+  const tot = (c: CountryId) => siteSet(c).size
+  // sites holding more than one title, for the footnote
+  const multi = COUNTRIES.flatMap((c) => {
+    const n = new Map<string, { name: string; cats: string[] }>()
+    for (const g of groups) for (const w of g.by[c] ?? []) {
+      const k = siteKey(w)
+      const e = n.get(k) ?? { name: w.name, cats: [] }
+      e.cats.push(g.cat)
+      n.set(k, e)
+    }
+    return [...n.values()].filter((e) => e.cats.length > 1).map((e) => ({ c, ...e }))
+  })
   const pop = (d?: CountryData) => d?.meta.totals?.pop
   const land = (d?: CountryData) => d?.meta.totals?.land_km2
   const perM = (c: CountryId, d?: CountryData) => (d && pop(d) ? tot(c) / (pop(d)! / 1e6) : null)
@@ -279,7 +340,7 @@ function WonderRace({ groups, lka, usa }: { groups: Group[]; lka?: CountryData; 
             const a = lka && !ga ? count(g, 'lka') : null
             const b = hasUsa && !gb ? count(g, 'usa') : null
             const cell = (v: number | null, d: CountryData | undefined, miss: boolean) =>
-              miss ? <span className="muted" title={`No ${CATEGORY_DATA[g.cat]?.what ?? 'data'} for this country`}>–</span> : d ? v : '…'
+              miss ? <span className="muted" title={catMeta(d, g.cat)?.note ?? `No ${CATEGORY_DATA[g.cat]?.what ?? 'data'} for this country`}>–</span> : d ? v : '…'
             const ta = top(g, 'lka'), tb = top(g, 'usa')
             let ratio: { c: CountryId; x: number } | null = null
             if (ta != null && tb != null && ta > 0 && tb > 0) ratio = ta >= tb ? { c: 'lka', x: ta / tb } : { c: 'usa', x: tb / ta }
@@ -297,9 +358,9 @@ function WonderRace({ groups, lka, usa }: { groups: Group[]; lka?: CountryData; 
         </tbody>
         <tfoot>
           <tr>
-            <th scope="row">Total wonders</th>
-            <td className={`num ${lead(tot('lka'), hasUsa ? tot('usa') : null, 'a')}`}>{lka ? tot('lka') : '…'}</td>
-            <td className={`num ${lead(tot('lka'), hasUsa ? tot('usa') : null, 'b')}`}>{hasUsa ? tot('usa') : '…'}</td>
+            <th scope="row" title="Distinct sites: a site that holds two titles (e.g. a national park that is also a World Heritage Site) counts once">Total wonders</th>
+            <td className={`num wonders-tot ${lead(tot('lka'), hasUsa ? tot('usa') : null, 'a')}`}>{lka ? <SiteCount sites={tot('lka')} titles={titles('lka')} /> : '…'}</td>
+            <td className={`num wonders-tot ${lead(tot('lka'), hasUsa ? tot('usa') : null, 'b')}`}>{hasUsa ? <SiteCount sites={tot('usa')} titles={titles('usa')} /> : '…'}</td>
             <td />
           </tr>
           <tr>
@@ -320,6 +381,15 @@ function WonderRace({ groups, lka, usa }: { groups: Group[]; lka?: CountryData; 
         Most rules keep a fixed top-N list per country, so raw counts are capped by design; only categories that list every
         qualifying site (such as World Heritage) compare like for like. With capped lists, rates per person and per area
         naturally favour the smaller country — the “#1 vs #1” column compares the champions’ real values instead.
+        {' '}Totals and rates count distinct sites, so a site with two titles counts once
+        {multi.length > 0 ? (
+          <span title={multi.map((e) => `${e.name}: ${e.cats.join(' + ')}`).join('\n')}>
+            {' '}({COUNTRIES.map((c) => {
+              const m = multi.filter((e) => e.c === c)
+              return m.length ? `${COUNTRY_META[c].name} ${m.length}: ${m.length === 1 ? m[0].name : `e.g. ${m[0].name}`}` : ''
+            }).filter(Boolean).join('; ')})
+          </span>
+        ) : null}.
         {gaps.length > 0 && <> “–” = no data, not zero: {gaps.join(', ')}; those categories add nothing to the total.</>}
         {' '}Population (map tiles, {[popYear(lka), popYear(usa)].filter(Boolean).filter((v, i, a) => a.indexOf(v) === i).join(' / ') || 'n/a'} estimates) and land area: {lka ? `Sri Lanka ${fmtNumber(pop(lka))} people, ${fmtNumber(land(lka))} km²` : '…'}
         {usa ? `; United States ${fmtNumber(pop(usa))} people, ${fmtNumber(land(usa))} km²` : ''}.

@@ -28,7 +28,8 @@ export interface LensDef {
 
 export const LENSES: LensDef[] = [
   { id: 'terrain', label: 'Terrain', group: 'Map', icon: '⛰️', kind: 'terrain', description: 'Base terrain from ESA WorldCover land cover, Copernicus DEM relief and WorldClim climate.' },
-  { id: 'districts', label: 'Districts', group: 'Map', icon: '🏛️', kind: 'district', description: 'Specialist districts assigned by published-data rules (see each district’s rule).' },
+  // id stays 'districts'; the UI says "Specialist districts" so it is not read as an admin district
+  { id: 'districts', label: 'Specialist districts', group: 'Map', icon: '🏛️', kind: 'district', description: 'Specialist districts assigned by published-data rules (see each district’s rule). Rings: US spaceport sites, filled when they host orbital launches.', pointLayers: ['spaceports'] },
   { id: 'gold', label: 'Gold', group: 'Yields', icon: YIELD_META.gold.glyph, kind: 'yield', yield: 'gold', description: YIELD_META.gold.blurb },
   { id: 'production', label: 'Production', group: 'Yields', icon: YIELD_META.production.glyph, kind: 'yield', yield: 'production', description: YIELD_META.production.blurb },
   { id: 'food', label: 'Food', group: 'Yields', icon: YIELD_META.food.glyph, kind: 'yield', yield: 'food', description: YIELD_META.food.blurb },
@@ -43,7 +44,7 @@ export const LENSES: LensDef[] = [
   { id: 'workforce', label: 'Workforce', group: 'People', icon: '👷', kind: 'dominant', dominant: { prefix: 'cit_', suffix: '_pct', byLQ: true }, description: 'Most over-represented citizen class (highest location quotient vs the national mix).' },
   { id: 'disasters', label: 'Disasters', group: 'Environment', icon: '🌪️', kind: 'metric', metrics: ['hazard_index', 'cyclone_tracks', 'quakes_m5', 'tsunami_runups', 'nri_risk_score', 'nri_eal_usd', 'disaster_deaths_per_100k', 'flood_events', 'landslide_events'], palette: 'hazard', log: false, description: 'Tropical cyclones (IBTrACS), earthquakes (USGS), tsunami run-ups (NOAA) and national loss databases.' },
   { id: 'energy', label: 'Energy', group: 'Infrastructure', icon: '⚡', kind: 'metric', metrics: ['power_capacity_mw', 'generation_gwh', 'renewable_capacity_mw'], palette: 'inferno', log: true, description: 'Installed generating capacity and generation per km² of tile.', pointLayers: ['power_plants'] },
-  { id: 'trade', label: 'Trade', group: 'Infrastructure', icon: '⚓', kind: 'metric', metrics: ['port_cargo_t', 'airport_pax', 'emp_transport', 'emp_trade'], palette: 'blues', log: true, description: 'Port cargo, US airport enplanements (FAA boardings; Sri Lanka publishes no airport-level passenger statistics) and trade/transport employment, per km² of tile.', pointLayers: ['ports', 'airports'] },
+  { id: 'trade', label: 'Trade', group: 'Infrastructure', icon: '⚓', kind: 'metric', metrics: ['port_cargo_t', 'airport_pax', 'emp_transport', 'emp_trade'], palette: 'blues', log: true, description: 'Port cargo, airport enplanements (US; FAA boardings — Sri Lanka publishes no airport-level passenger statistics) and trade/transport employment, per km² of tile.', pointLayers: ['ports', 'airports'] },
   { id: 'landcover', label: 'Land cover', group: 'Environment', icon: '🌳', kind: 'dominant', dominant: { prefix: 'lc_' }, metrics: ['lc_tree', 'lc_crop', 'lc_built', 'protected_pct'], description: 'Dominant ESA WorldCover 2021 class.' },
   { id: 'elevation', label: 'Elevation', group: 'Environment', icon: '🏔️', kind: 'metric', metrics: ['elev_mean_m', 'relief_m', 'slope_mean_deg', 'temp_mean_c', 'precip_mm'], palette: 'terrain', log: false, description: 'Copernicus DEM GLO-90 elevation and relief; WorldClim climate.' },
   { id: 'custom', label: 'Any metric', group: 'Economy', icon: '📊', kind: 'metric', metrics: [], palette: 'viridis', autoLog: true, description: 'Any metric chosen in the Explorer.' },
@@ -160,6 +161,17 @@ const CAT_COLORS: Record<string, RGB> = {
 
 export function catColor(key: string, i: number): RGB {
   return CAT_COLORS[key] ?? CATEGORICAL[i % CATEGORICAL.length]
+}
+
+/**
+ * Column heights of the terrain-style lenses (terrain, districts, dominant): mean elevation in metres,
+ * from the metric matrix (all zero until metrics.bin arrives).
+ */
+export function reliefElevation(d: CountryData): Float32Array {
+  const out = new Float32Array(d.n)
+  const elev = column(d, 'elev_mean_m')
+  if (elev) for (let i = 0; i < d.n; i++) out[i] = Math.max(0, elev[i] || 0)
+  return out
 }
 
 export function terrainRGB(d: CountryData, idx: IndexJson, i: number): RGB {
@@ -417,15 +429,14 @@ export function computeLens(
 ): LensResult {
   const n = d.n
   const colors = new Uint8Array(n * 4)
-  const elevation = new Float32Array(n)
-  const elev = column(d, 'elev_mean_m')
+  // yield and metric lenses overwrite these heights below
+  const elevation = reliefElevation(d)
   const set = (i: number, c: RGB, a = 255) => {
     colors[i * 4] = c[0]; colors[i * 4 + 1] = c[1]; colors[i * 4 + 2] = c[2]; colors[i * 4 + 3] = a
   }
   const terrainAll = () => { for (let i = 0; i < n; i++) set(i, terrainRGB(d, idx, i)) }
   const dimTerrain = (i: number) => set(i, shade(terrainRGB(d, idx, i), 0.32))
   const dimAll = () => { for (let i = 0; i < n; i++) dimTerrain(i) }
-  if (elev) for (let i = 0; i < n; i++) elevation[i] = Math.max(0, elev[i] || 0)
   const name = COUNTRY_META[d.id].name
 
   if (lens.kind === 'terrain') {
@@ -449,7 +460,7 @@ export function computeLens(
     }
     return {
       colors, elevation,
-      legend: { kind: 'categorical', title: 'Districts', items: codes.filter((c) => counts[c]).map((c) => ({ label: `${DISTRICT_META[c]?.icon ?? ''} ${DISTRICT_META[c]?.label ?? c}`, rgb: DISTRICT_META[c]?.rgb ?? [200, 200, 200], count: counts[c] })) },
+      legend: { kind: 'categorical', title: 'Specialist districts', items: codes.filter((c) => counts[c]).map((c) => ({ label: `${DISTRICT_META[c]?.icon ?? ''} ${DISTRICT_META[c]?.label ?? c}`, rgb: DISTRICT_META[c]?.rgb ?? [200, 200, 200], count: counts[c] })) },
     }
   }
 

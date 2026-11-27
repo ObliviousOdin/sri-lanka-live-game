@@ -24,6 +24,11 @@ export interface PointStyle {
   /** what to say when a country publishes no size measure for this layer (tooltip / map key) */
   noValue?: Partial<Record<CountryId, string>>
   noValueKey?: Partial<Record<CountryId, string>>
+  /**
+   * Unsized layers only: a boolean row field drawn as a filled dot when true and a ring when false
+   * (spaceports: `orbital`), with the words for each in the map key and the tooltip.
+   */
+  flag?: { field: string; on: string; off: string; onTip: string; offTip: string }
 }
 
 export const POINT_STYLE: Record<string, PointStyle> = {
@@ -41,6 +46,24 @@ export const POINT_STYLE: Record<string, PointStyle> = {
     noValue: { lka: 'Sri Lanka publishes no open airport-level passenger statistics: airports are shown as rings, without a size.' },
     noValueKey: { lka: 'rings, no size: Sri Lanka publishes no open airport-level passenger statistics' },
   },
+  // no size measure: every site is drawn at one size; `orbital` (FAA list + launch history) decides
+  // the Spaceport district (civ.py), so it also decides filled dot vs ring here
+  spaceports: {
+    label: 'Spaceport site', plural: 'Spaceport sites', color: [230, 230, 255], value: [], unit: '',
+    sizeLabel: '', ref: 1, metric: 'spaceports',
+    flag: {
+      field: 'orbital', on: 'orbital launch site', off: 'runway, suborbital or reentry only',
+      onTip: 'Hosts orbital launches: a Spaceport district', offTip: 'No orbital launches: not a Spaceport district',
+    },
+  },
+}
+
+/** Whether a row's flag field (e.g. spaceports' `orbital`) is set. */
+export function pointFlag(name: string, r: PointRow): boolean {
+  const f = pointStyle(name).flag
+  if (!f) return false
+  const v = r[f.field]
+  return v === true || v === 1 || v === 'true' || v === 'True'
 }
 
 const FALLBACK_STYLE: PointStyle = {
@@ -95,6 +118,8 @@ const FIELDS: Record<string, { label: string; unit?: string; year?: boolean }> =
   airport_pax: { label: 'Enplanements (boardings)', unit: '/yr' },
   enplanements: { label: 'Enplanements (boardings)', unit: '/yr' },
   iata: { label: 'IATA code' },
+  launch_type: { label: 'Launch type' },
+  faa_license: { label: 'Licence' },
 }
 const KIND_LABEL: Record<string, string> = {
   large_airport: 'large airport', medium_airport: 'medium airport', small_airport: 'small airport', seaport: 'seaport',
@@ -121,7 +146,8 @@ export function pointTooltip(d: CountryData, name: string, r: PointRow, sources:
     lines.push(`<div><span class="k">${f.label}</span> ${shown}</div>`)
   }
   const note = !Number.isFinite(pointValue(name, r)) && st.noValue?.[d.id]
-    ? `<div class="k">${escapeHtml(st.noValue[d.id])}</div>` : ''
+    ? `<div class="k">${escapeHtml(st.noValue[d.id])}</div>`
+    : st.flag ? `<div>${escapeHtml(pointFlag(name, r) ? st.flag.onTip : st.flag.offTip)}</div>` : ''
   const m = d.metricByKey.get(st.metric)
   const src = m?.sources?.length
     ? m.sources.map((id) => { const s = sources.find((x) => x.id === id); return s ? `${shortPublisher(s)} ${s.vintage.split(/[;(]/)[0].trim()}`.trim() : id }).join(' · ')

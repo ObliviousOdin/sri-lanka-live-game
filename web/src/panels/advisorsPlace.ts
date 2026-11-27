@@ -3,7 +3,7 @@
 // yields, hazards, land cover. Only loaded values are used; missing inputs skip the comment.
 import { adminUnitOfHex } from '../data/load'
 import { terrainLabel } from '../civ'
-import type { CountryData, IndexJson, YieldKey } from '../types'
+import type { CountryData, CountryId, IndexJson, YieldKey } from '../types'
 import {
   ADJ, type AdvisorId, type Comment, count, counterpartLevel, fig, getter, levelNoun, type Measure, measureValue,
   medianOf, metricMeasure, money, natAgg, nm, ok, ordinal, pct, percentileOf, perCapMeasure, type Place, poss, prettyLabel,
@@ -243,15 +243,38 @@ function wondersIn(place: Place) {
   })
 }
 
+/** Scope fields of a city's official population (cities.json; older exports lack them). */
+interface CityPopScope {
+  population_scope?: string | null
+  population_sources?: string[] | null
+}
+
+/** What a City View city's official population covers (US: Census MSA metro area; Sri Lanka: city proper on Wikidata). */
+const POP_SCOPE: Record<CountryId, { scope: string; sources: string[] }> = {
+  usa: { scope: 'metro area (Census MSA)', sources: ['census_pep_cbsa_2025', 'census_delineation_2023'] },
+  lka: { scope: 'city proper (Wikidata)', sources: ['wikidata'] },
+}
+
 function cityComment(place: Place): Comment | null {
   const c = place.city
   if (!c) return null
   const home = place.country
+  const x = c as typeof c & CityPopScope
   const segs: Seg[] = [`City View: ${c.name} is a size-`, fig(String(c.size), home), ' city of ', fig(count(c.pop), home), ` residents across its ${c.tiles.length} tiles`]
-  if (ok(c.official_pop)) segs.push(` (official figure ${count(c.official_pop)}${c.official_pop_year ? `, ${c.official_pop_year}` : ''})`)
-  if (ok(c.gdp_per_capita)) segs.push('; GDP per resident ', fig(money(c.gdp_per_capita), home))
+  const sources = [...(place.d.metricByKey.get('pop')?.sources ?? [])]
+  let meta = 'City population = sum of its City View tiles'
+  if (ok(c.official_pop)) {
+    const scope = x.population_scope || POP_SCOPE[home].scope
+    segs.push(`; official population ${count(c.official_pop)}${c.official_pop_year ? ` (${c.official_pop_year})` : ''} for the ${scope}`)
+    sources.push(...(x.population_sources?.length ? x.population_sources : POP_SCOPE[home].sources))
+    meta += `; official figures differ in scope (US: metro area, Sri Lanka: city proper), so compare tile totals across countries`
+  }
+  if (ok(c.gdp_per_capita)) {
+    segs.push('; GDP per resident ', fig(money(c.gdp_per_capita), home))
+    sources.push(...(place.d.metricByKey.get('gdp_usd')?.sources ?? []))
+  }
   segs.push('.')
-  return { id: 'city', icon: '🏛️', segs, sources: [...(place.d.metricByKey.get('pop')?.sources ?? []), ...(ok(c.gdp_per_capita) ? place.d.metricByKey.get('gdp_usd')?.sources ?? [] : [])], meta: 'City population = sum of its City View tiles' }
+  return { id: 'city', icon: '🏛️', segs, sources: [...new Set(sources)], meta }
 }
 
 function economic(ctx: PlaceCtx): Comment[] {

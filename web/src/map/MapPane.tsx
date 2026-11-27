@@ -10,7 +10,7 @@ import { SourceChips } from '../components/SourceChip'
 import { adminUnitOfHex, finestLevel, hexesOfAdmin, loadAdminGeo, value } from '../data/load'
 import { useSources, type AppData } from '../data/useData'
 import { fmtInt, fmtNumber, fmtUnit } from '../format'
-import { LENS_BY_ID, isDensity, type LensResult } from '../lenses'
+import { LENS_BY_ID, isDensity, lensMetricKey, lensMetricKeys, metricLabel, type LensDef, type LensResult } from '../lenses'
 import { CITY_ZOOM, openCity } from '../panels/cityViewNav'
 import { useStore } from '../store'
 import { YIELDS, type City, type CountryData, type CountryId, type PointRow } from '../types'
@@ -18,7 +18,7 @@ import { adminFeature, adminIdAt, adminIndexOf, frameLon, geoForMap, mapLon } fr
 import { BaseMap } from './BaseMap'
 import { emojiAtlas } from './emojiAtlas'
 import { coarsePointer, prefersReducedMotion } from './motion'
-import { escapeHtml, pointRadiusScale, pointStyle, pointTooltip, pointValue, splitRows } from './pointLayers'
+import { escapeHtml, pointFlag, pointRadiusScale, pointStyle, pointTooltip, pointValue, splitRows } from './pointLayers'
 import { markMoved, metersPerPixel, publishScale, resetMoved, scaleLeader, useScaleLink, zoomForMpp } from './scaleLink'
 import { visibleHeightAboveSheet } from './sheet'
 import './MapPane.css'
@@ -69,6 +69,20 @@ function still(v: MapViewState): MapViewState {
   return out as unknown as MapViewState
 }
 
+/**
+ * Room kept free when fitting a region: the pane label (and US jump buttons) on top, the legend dock
+ * and scale bar at the bottom. Capped on small panes, where fitBounds needs most of the pane.
+ */
+function fitPadding(size: { w: number; h: number }) {
+  const side = Math.min(40, size.w / 10)
+  return {
+    top: Math.min(48, size.h / 8),
+    left: side,
+    right: side,
+    bottom: Math.min(40 + Math.min(100, size.h * 0.14), size.h / 4),
+  }
+}
+
 const plural = (w: string) => (/[^aeiou]y$/.test(w) ? `${w.slice(0, -1)}ies` : `${w}s`)
 
 /** `lon` moved by whole turns to lie within 180° of `ref` (keeps fly-to paths short across 180°). */
@@ -112,7 +126,7 @@ export function MapPane({ country, data, app, lens, compact }: Props) {
   useEffect(() => {
     if (!size || size.w < 10 || (view && userMoved.current)) return
     const vp = new WebMercatorViewport({ width: size.w, height: size.h })
-    const { longitude, latitude, zoom } = vp.fitBounds(INITIAL_BOUNDS[country], { padding: Math.min(40, size.w / 10) })
+    const { longitude, latitude, zoom } = vp.fitBounds(INITIAL_BOUNDS[country], { padding: fitPadding(size) })
     setView((v) => ({ ...(v ? still(v) : { pitch: extrude ? MAX_PITCH_3D : 0, bearing: 0 }), longitude, latitude, zoom }))
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [size, country])
@@ -267,18 +281,25 @@ export function MapPane({ country, data, app, lens, compact }: Props) {
   const iconData = useMemo(() => {
     const out: IconDatum[] = []
     const codes = idx.districts.map((x) => x.code)
+    // a Spaceport district needs an orbital launch site in the tile: name those sites on its icon
+    const orbital = new Map<string, string[]>()
+    for (const r of data.points.spaceports?.rows ?? []) {
+      if (typeof r.h3 === 'string' && pointFlag('spaceports', r)) orbital.set(r.h3, [...(orbital.get(r.h3) ?? []), String(r.name)])
+    }
     const minor = new Set(['neighborhood', 'farmland', 'preserve', 'fishery', 'plantation', 'encampment'])
     for (let i = 0; i < data.n; i++) {
       const code = codes[data.hexes.district[i]]
       if (!code) continue
       if (minor.has(code) && zoom < iconMinZoom + 1.2) continue
       const [lo, la] = hexCenter(data, i)
-      out.push({ pos: [mapLon(country, lo), la], icon: DISTRICT_META[code]?.icon ?? '•', size: code === 'city_center' ? 30 : 22, kind: 'district', label: `Civ district: ${DISTRICT_META[code]?.label ?? code}` })
+      const sites = code === 'spaceport' ? orbital.get(data.hexes.h3[i]) : undefined
+      const label = `Specialist district: ${DISTRICT_META[code]?.label ?? code}${sites?.length ? ` (orbital launch site${sites.length > 1 ? 's' : ''}: ${sites.join(', ')})` : ''}`
+      out.push({ pos: [mapLon(country, lo), la], icon: DISTRICT_META[code]?.icon ?? '•', size: code === 'city_center' ? 30 : 22, kind: 'district', label })
     }
     for (const w of data.wonders) out.push({ pos: [mapLon(country, w.lon), w.lat], icon: WONDER_ICON[w.category] ?? '★', size: 30, kind: 'wonder', label: `${w.category}: ${w.name}` })
     return out
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [data.hexes, data.wonders, data.n, idx, country, zoom >= iconMinZoom + 1.2])
+  }, [data.hexes, data.wonders, data.points, data.n, idx, country, zoom >= iconMinZoom + 1.2])
   const atlas = useMemo(() => emojiAtlas([...new Set(iconData.map((d) => d.icon))]), [iconData])
 
   // declutter city banners: keep the biggest cities, drop labels whose boxes would overlap
@@ -319,8 +340,15 @@ export function MapPane({ country, data, app, lens, compact }: Props) {
       }),
       unsized.length > 0 && new ScatterplotLayer<PointRow>({
         id: `pts-${name}-ring`, data: unsized, pickable: true, stroked: true, filled: true,
-        getPosition: pos, getRadius: 4.5, radiusUnits: 'pixels',
-        getFillColor: [10, 15, 25, 90], getLineColor: [...st.color, 235] as [number, number, number, number], lineWidthUnits: 'pixels', getLineWidth: 1.5,
+        getPosition: pos, getRadius: st.flag ? (r) => (pointFlag(name, r) ? 5.5 : 4.5) : 4.5, radiusUnits: 'pixels',
+        // flagged rows (orbital spaceports) are filled dots, the others rings
+        getFillColor: st.flag
+          ? (r) => (pointFlag(name, r) ? [...st.color, 230] as [number, number, number, number] : [10, 15, 25, 90])
+          : [10, 15, 25, 90],
+        getLineColor: st.flag
+          ? (r) => (pointFlag(name, r) ? [10, 15, 25, 230] : [...st.color, 235]) as [number, number, number, number]
+          : [...st.color, 235] as [number, number, number, number],
+        lineWidthUnits: 'pixels', getLineWidth: 1.5,
         modelMatrix: shiftBy(0), parameters: ON_TOP,
       }),
     ]
@@ -466,7 +494,7 @@ export function MapPane({ country, data, app, lens, compact }: Props) {
   const getTooltip = (info: PickingInfo) => {
     const id = info.layer?.id ?? ''
     if (id.startsWith('hex-') && typeof info.object === 'number') {
-      return { html: hexTooltip(data, app, info.object, lensId, lensMetricSel), className: 'deck-tip' }
+      return { html: hexTooltip(data, app, info.object, lensDef, lensMetricSel), className: 'deck-tip' }
     }
     if (id.startsWith('icons-')) return { html: `<b>${escapeHtml((info.object as IconDatum).label)}</b>`, className: 'deck-tip' }
     if (id.startsWith('pts-') && info.object) {
@@ -514,7 +542,7 @@ export function MapPane({ country, data, app, lens, compact }: Props) {
   if (extrude) notes.push(coarsePointer() ? '3D: drag with two fingers to tilt or turn.' : '3D: right-drag, or Ctrl + drag, to tilt or turn.')
   if (pickFallback) notes.push(`No ${pickLevel === 'adm3' ? 'DS divisions' : 'units of that level'} here: clicks select ${plural((data.admin[pickLv]?.label ?? 'unit').toLowerCase())}.`)
   const showKey = pointSets.length > 0
-  const lensKey = lensMetricSel && data.metricByKey.has(lensMetricSel) ? lensMetricSel : (lensDef.metrics ?? []).find((k) => data.metricByKey.has(k))
+  const lensKey = lensDef.kind === 'metric' ? lensMetricKey(lensDef, lensMetricSel, data, loadedCountries(app)) : null
   const shortJump = compact || (size?.w ?? 1000) < 600
 
   return (
@@ -540,7 +568,7 @@ export function MapPane({ country, data, app, lens, compact }: Props) {
         <strong>{data.meta.name}</strong>
         <span className="muted"> · H3 r{data.meta.h3_res} · ~{Math.round(data.meta.avg_hex_km2)} km² tiles</span>
       </div>
-      {view && <ScaleBar zoom={view.zoom} lat={view.latitude} className={country === 'usa' ? 'mp-below-jump' : undefined} />}
+      {view && <ScaleBar zoom={view.zoom} lat={view.latitude} />}
       {country === 'usa' && (
         <div className={`jump ${shortJump ? 'mp-jump-compact' : ''}`} role="group" aria-label="Show part of the United States">
           {US_JUMPS.map((j) => (
@@ -551,7 +579,7 @@ export function MapPane({ country, data, app, lens, compact }: Props) {
               onClick={() => {
                 if (!size) return
                 const vp = new WebMercatorViewport({ width: size.w, height: size.h })
-                const f = vp.fitBounds(j.bounds, { padding: Math.min(30, size.w / 12) })
+                const f = vp.fitBounds(j.bounds, { padding: fitPadding(size) })
                 useStore.getState().fly('usa', f.longitude, f.latitude, f.zoom)
               }}
             >
@@ -571,9 +599,22 @@ export function MapPane({ country, data, app, lens, compact }: Props) {
                 const shown = sized.length + unsized.length
                 const minV = sized.length ? pointValue(name, sized[sized.length - 1]) : NaN
                 const noValue = sized.length === 0 && (st.noValueKey?.[country] ?? st.noValue?.[country])
+                const dotStyle = { '--c': `rgb(${st.color.join(',')})` } as CSSProperties
+                if (st.flag) {
+                  return (
+                    <div key={name} className="mp-key-row" title={`${st.flag.onTip}. ${st.flag.offTip}.`}>
+                      <span className="mp-key-dot solid" style={dotStyle} aria-hidden />
+                      <span>
+                        <b>{st.plural}</b>: {st.flag.on} · <span className="mp-key-dot ring inline" style={dotStyle} aria-hidden /> {st.flag.off}
+                        {/* the FAA list decides orbital vs not; the tooltip names every source */}
+                        {m?.sources?.length ? <> <SourceChips ids={m.sources.slice(0, 1)} /></> : null}
+                      </span>
+                    </div>
+                  )
+                }
                 return (
                   <div key={name} className="mp-key-row">
-                    <span className={`mp-key-dot ${noValue ? 'ring' : ''}`} style={{ '--c': `rgb(${st.color.join(',')})` } as CSSProperties} aria-hidden />
+                    <span className={`mp-key-dot ${noValue ? 'ring' : ''}`} style={dotStyle} aria-hidden />
                     <span>
                       <b>{st.plural}</b>
                       {noValue ? <>: {noValue}</> : <>: circle area = {st.sizeLabel}</>}
@@ -612,30 +653,40 @@ function hexCenter(d: CountryData, i: number): [number, number] {
   return [c[i * 2], c[i * 2 + 1]]
 }
 
-function hexTooltip(d: CountryData, app: AppData, i: number, lensId: string, lensMetric?: string) {
+const loadedCountries = (app: AppData) => Object.values(app.countries).filter(Boolean) as CountryData[]
+
+function hexTooltip(d: CountryData, app: AppData, i: number, lens: LensDef, lensMetric?: string) {
   const idx = app.index!
   const t = idx.terrain_codes[d.hexes.terrain[i]]
   const f = idx.feature_codes[d.hexes.feature[i]]
   const dist = idx.districts[d.hexes.district[i]]?.code ?? ''
   const unit = adminUnitOfHex(d, 'adm2', i)
-  const y = YIELDS.map((k) => `<span class="y" style="color:${YIELD_META[k].color}" title="${YIELD_META[k].label}">${d.hexes.yields[k][i]}</span>`).join(' ')
-  const lens = LENS_BY_ID.get(lensId)
+  const y = YIELDS.map((k) => {
+    const m = YIELD_META[k]
+    return `<span class="y" style="color:${m.color}" title="${m.label}"><span aria-hidden="true">${m.glyph}</span>${d.hexes.yields[k][i]}</span>`
+  }).join('')
   let lensLine = ''
-  if (lens?.kind === 'metric') {
-    const key = lensMetric && d.metricByKey.has(lensMetric) ? lensMetric : (lens.metrics ?? []).find((k) => d.metricByKey.has(k))
+  if (lens.kind === 'metric') {
+    // the metric the map shows for this country; never another metric when it is not published here
+    const all = loadedCountries(app)
+    const key = lensMetricKey(lens, lensMetric, d, all)
+    const wanted = lensMetric || lensMetricKeys(lens, all.length ? all : [d])[0]
     if (key) {
       const m = d.metricByKey.get(key)!
       const v = value(d, key, i)
-      const shown = key === 'pop_density' ? `${fmtNumber(v)} people per km² of land` : fmtUnit(v, m.unit)
+      const shown = !d.matrixReady ? 'loading…' : key === 'pop_density' ? `${fmtNumber(v)} people per km² of land` : fmtUnit(v, m.unit)
       const dens = isDensity(d, key) && Number.isFinite(v) ? ` <span class="k">(${fmtUnit(v / d.hexArea[i], m.unit)} per km² of tile)</span>` : ''
       lensLine = `<div><span class="k">${escapeHtml(m.label)}</span> ${shown}${dens}</div>`
+    } else if (wanted) {
+      lensLine = `<div><span class="k">${escapeHtml(metricLabel(wanted, all))}</span> not published for ${COUNTRY_META[d.id].name}</div>`
     }
   }
   const pop = value(d, 'pop', i)
-  // "District" is also a Civ concept (the icon in the title), so name the admin unit explicitly
+  // "district" is also a game concept (Specialist district line above), so name the admin unit explicitly
   const unitLabel = d.admin.adm2.label === 'District' ? 'Admin district' : d.admin.adm2.label
-  return `<div class="tt-title">${terrainLabel(t, f, !!d.hexes.hills[i])}${dist ? ` · ${DISTRICT_META[dist]?.icon ?? ''} ${DISTRICT_META[dist]?.label ?? ''}` : ''}</div>
+  return `<div class="tt-title">${terrainLabel(t, f, !!d.hexes.hills[i])}</div>
     <div class="tt-yields">${y}</div>
+    ${dist ? `<div><span class="k">Specialist district</span> ${DISTRICT_META[dist]?.icon ?? ''} ${DISTRICT_META[dist]?.label ?? dist}</div>` : ''}
     ${unit ? `<div><span class="k">${unitLabel}</span> ${escapeHtml(unit.unit.name)}</div>` : ''}
-    <div><span class="k">Population</span> ${fmtUnit(pop, 'persons')}</div>${lensLine}`
+    <div><span class="k">Population</span> ${d.matrixReady ? fmtUnit(pop, 'persons') : 'loading…'}</div>${lensLine}`
 }

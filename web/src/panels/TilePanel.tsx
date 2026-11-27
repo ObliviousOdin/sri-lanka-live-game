@@ -1,6 +1,6 @@
 // Inspect tab: tile / admin-unit inspector and, with nothing selected, a Civilization summary.
 import { memo, useMemo } from 'react'
-import { cellToLatLng, getHexagonEdgeLengthAvg, UNITS } from 'h3-js'
+import { cellToLatLng, getHexagonEdgeLengthAvg, latLngToCell, UNITS } from 'h3-js'
 import { COUNTRY_META, DISTRICT_META, TERRAIN_META, YIELD_META, terrainLabel } from '../civ'
 import { rgbCss } from '../color'
 import { SourceChips } from '../components/SourceChip'
@@ -10,10 +10,12 @@ import { useNational, type AppData } from '../data/useData'
 import { useStore, type PickLevel } from '../store'
 import { COUNTRIES, YIELDS, type CountryData, type CountryId, type IndexJson, type Metric, type NationalIndicator, type Selection, type YieldKey } from '../types'
 import { fmtInt, fmtNumber, fmtUsd } from '../format'
+import { WONDER_ICON } from '../map/MapPane'
 import { countryVintage } from './explorerData'
+import { PlaceSearch } from './PlaceSearch'
 import { MetricGroups, type MetricRowData } from './TilePanelMetrics'
 import {
-  adminParents, adminRank, explainYields, fmtDensity, fmtLandDensity, fmtVal, hasDensity, hexPercentile, isLandDensity,
+  adminParents, adminRank, adminZoom, explainYields, fmtDensity, fmtLandDensity, fmtVal, hasDensity, hexPercentile, isLandDensity,
   landYieldMeans, plural, POINT_LAYER_META, pointsInHex, pointValue, tieInfo, wonderUnit, type YieldExplain,
 } from './tilePanelStats'
 import './TilePanel.css'
@@ -27,6 +29,16 @@ const ordinal = (p: number) => {
 // memo: App re-renders on every store change (e.g. map pan/zoom); this panel only needs `app` + its own store slices
 export const TilePanel = memo(function TilePanel({ app }: { app: AppData }) {
   const selection = useStore((s) => s.selection)
+  // the search box stays mounted (same position) whatever is selected, so it keeps focus
+  return (
+    <>
+      <PlaceSearch app={app} />
+      <TileBody app={app} selection={selection} />
+    </>
+  )
+})
+
+function TileBody({ app, selection }: { app: AppData; selection: Selection | null }) {
   const idx = app.index
   if (!idx) return <div className="loading">Loading…</div>
   if (!selection) return <Overview app={app} idx={idx} />
@@ -44,7 +56,7 @@ export const TilePanel = memo(function TilePanel({ app }: { app: AppData }) {
     return <AdminInspector key={`${d.id}:${selection.id}`} d={d} idx={idx} level={level} ui={ui} />
   }
   return <OtherSelection d={d} sel={selection} />
-})
+}
 
 function NotFound({ what }: { what: string }) {
   return (
@@ -174,7 +186,7 @@ function HexInspector({ d, idx, i }: { d: CountryData; idx: IndexJson; i: number
             {wonders.map((w) => (
               <li key={`w-${w.category}-${w.name}`}>
                 <button className="tilepanel-link" onClick={() => useStore.getState().select({ country, kind: 'wonder', id: w.name }, 'wonders')}>
-                  🏯 {w.name}
+                  <span aria-hidden>{WONDER_ICON[w.category] ?? '★'}</span> {w.name}
                 </button>
                 <span className="muted"> · {w.category} #{w.rank}{w.value != null ? ` · ${fmtNumber(w.value)} ${wonderUnit(w)}` : ''}</span>
               </li>
@@ -182,10 +194,12 @@ function HexInspector({ d, idx, i }: { d: CountryData; idx: IndexJson; i: number
             {facilities.slice(0, 12).map((p) => {
               const meta = POINT_LAYER_META[p.layer] ?? { label: p.layer, icon: '•' }
               const v = pointValue(p)
+              const none = !Number.isFinite(v) ? meta.noValue?.[country] : undefined
               return (
                 <li key={`${p.layer}-${p.row.id}`}>
                   <span aria-hidden>{meta.icon}</span> {p.row.name}
                   <span className="muted"> · {meta.label}{Number.isFinite(v) ? ` · ${fmtNumber(v)} ${meta.unit ?? ''}` : ''}</span>
+                  {none && <span className="muted tilepanel-novalue" title="Missing data, not a zero"> · {none}</span>}
                 </li>
               )
             })}
@@ -271,6 +285,8 @@ function AdminInspector({ d, idx, level, ui }: { d: CountryData; idx: IndexJson;
   const country = d.id
   const levels = Object.keys(d.meta.admin_levels)
   const levelLabel = d.meta.admin_levels[level]?.label ?? table.label ?? level
+  // "DS Division" → "DS division" (acronyms keep their capitals)
+  const levelLower = levelLabel.split(' ').map((w) => (/^[A-Z]{2,}$/.test(w) ? w : w.toLowerCase())).join(' ')
   const parents = useMemo(() => adminParents(d, level, ui), [d, level, ui])
   const tiles = useMemo(() => hexesOfAdmin(d, level, ui), [d, level, ui])
   const agg = useMemo(() => {
@@ -296,7 +312,7 @@ function AdminInspector({ d, idx, level, ui }: { d: CountryData; idx: IndexJson;
   const landKm2 = table.metrics.land_km2?.[ui] ?? null
   const pop = table.metrics.pop?.[ui] ?? null
   const gdp = table.metrics.gdp_usd?.[ui] ?? null
-  const scope = `Ranks compare this ${levelLabel.toLowerCase()} with all ${fmtInt(table.units.length)} ${levelLabel.toLowerCase()} units of ${d.meta.name} (#1 = highest value).`
+  const scope = `Ranks compare this ${levelLower} with all ${fmtInt(table.units.length)} ${levelLower} units of ${d.meta.name} (#1 = highest value).`
 
   const rows = useMemo<MetricRowData[]>(() => Object.keys(table.metrics).map((key) => {
     const m = d.metricByKey.get(key)
@@ -308,20 +324,29 @@ function AdminInspector({ d, idx, level, ui }: { d: CountryData; idx: IndexJson;
       key, metric: m, label: m?.label ?? key, category: m?.category || 'other', raw,
       valueText: landDens ? fmtLandDensity(raw, unitStr) : fmtVal(raw, unitStr),
       densityText: Number.isFinite(dens) ? fmtDensity(dens, unitStr, 'land') : landDens && Number.isFinite(raw) ? 'per km² of land' : undefined,
-      densityTitle: Number.isFinite(dens) || landDens ? `Divided by the ${levelLabel.toLowerCase()}'s land area (${fmtNumber(landKm2)} km²)` : undefined,
+      densityTitle: Number.isFinite(dens) || landDens ? `Divided by the ${levelLower}'s land area (${fmtNumber(landKm2)} km²)` : undefined,
       rank: () => {
         const r = adminRank(table, key, ui)
         if (!r) return null
         const tie = r.ties > 1
         return {
           pct: r.pct, text: `#${fmtInt(r.rank)}${tie ? '=' : ''}/${fmtInt(r.n)}`,
-          title: `#${fmtInt(r.rank)} of ${fmtInt(r.n)} ${levelLabel.toLowerCase()} units with data (highest first)${tie ? `, tied with ${fmtInt(r.ties - 1)} other${r.ties > 2 ? 's' : ''}` : ''}`,
+          title: `#${fmtInt(r.rank)} of ${fmtInt(r.n)} ${levelLower} units with data (highest first)${tie ? `, tied with ${fmtInt(r.ties - 1)} other${r.ties > 2 ? 's' : ''}` : ''}`,
         }
       },
     }
-  }), [d, table, ui, landKm2, levelLabel])
+  }), [d, table, ui, landKm2, levelLower])
 
-  const zoom = ((country === 'lka' ? { adm1: 8.4, adm2: 9, adm3: 10.5 } : { adm1: 5.5, adm2: 8 }) as Record<string, number>)[level]
+  const zoom = adminZoom(country, level, landKm2, unit.lat)
+  const noTiles = tiles.length === 0
+  // a unit that is no tile's dominant unit: offer the tile at its centroid instead
+  const centreTile = useMemo(() => {
+    if (!noTiles) return null
+    try {
+      const h = latLngToCell(unit.lat, unit.lon, d.meta.h3_res)
+      return d.hexIndex.has(h) ? h : null
+    } catch { return null }
+  }, [noTiles, unit, d])
 
   return (
     <div className="tilepanel">
@@ -359,12 +384,29 @@ function AdminInspector({ d, idx, level, ui }: { d: CountryData; idx: IndexJson;
           <div><span className="k">Population</span><b>{pop != null ? fmtNumber(pop) : '–'}</b></div>
           <div><span className="k">Land</span><b>{landKm2 != null ? `${fmtNumber(landKm2)} km²` : '–'}</b></div>
           <div><span className="k">GDP</span><b>{gdp != null ? fmtUsd(gdp) : '–'}</b></div>
-          <div><span className="k">Tiles</span><b>{fmtInt(tiles.length)}</b></div>
+          {!noTiles && <div><span className="k">Tiles</span><b>{fmtInt(tiles.length)}</b></div>}
         </div>
-        <div className="tilepanel-agg">
-          <div className="muted tilepanel-small">Summed yields of its {fmtInt(tiles.length)} tiles</div>
-          <YieldRow values={agg.yields} size={18} />
-        </div>
+        {noTiles ? (
+          <div className="tilepanel-agg tilepanel-notiles">
+            <p className="tilepanel-small">
+              {landKm2 != null && landKm2 < d.meta.avg_hex_km2
+                ? <>This {levelLower} ({fmtNumber(landKm2)} km² of land) is smaller than one {d.meta.name} tile (~{fmtNumber(d.meta.avg_hex_km2)} km²), so no tile is mostly in it.</>
+                : <>No tile has {unit.name} as its main {levelLower} by population: every tile it overlaps has more people in a neighbouring unit.</>}
+              {' '}Its statistics are blended into the neighbouring tiles it overlaps, so it has no tiles, yields or specialist districts of its own.
+              The figures above are the unit’s own published values.
+            </p>
+            {centreTile && (
+              <button className="btn tilepanel-notiles-btn" onClick={() => useStore.getState().select({ country, kind: 'hex', id: centreTile }, 'tile')}>
+                Inspect the tile at its centre
+              </button>
+            )}
+          </div>
+        ) : (
+          <div className="tilepanel-agg">
+            <div className="muted tilepanel-small">Summed yields of its {fmtInt(tiles.length)} tiles</div>
+            <YieldRow values={agg.yields} size={18} />
+          </div>
+        )}
         {agg.districts.length > 0 && (
           <div className="tilepanel-dall">
             <span className="muted" title="Civ specialist districts (Neighborhood, Campus, Harbor…) of the tiles counted here — not administrative districts">Specialist districts:</span>
@@ -373,7 +415,7 @@ function AdminInspector({ d, idx, level, ui }: { d: CountryData; idx: IndexJson;
             ))}
           </div>
         )}
-        <p className="muted tilepanel-small">Tiles are those whose dominant {levelLabel.toLowerCase()} (by population) is {unit.name}.</p>
+        {!noTiles && <p className="muted tilepanel-small">Tiles are those whose dominant {levelLower} (by population) is {unit.name}.</p>}
       </div>
 
       {children && children.list.length > 0 && (
@@ -391,7 +433,7 @@ function AdminInspector({ d, idx, level, ui }: { d: CountryData; idx: IndexJson;
         </div>
       )}
 
-      <h3 className="section-title">All {levelLabel.toLowerCase()} metrics</h3>
+      <h3 className="section-title">All {levelLower} metrics</h3>
       <MetricGroups rows={rows} scopeLabel={scope} country={country} />
     </div>
   )
@@ -410,7 +452,7 @@ function OtherSelection({ d, sel }: { d: CountryData; sel: Selection }) {
     <div className="tilepanel">
       <header className="tilepanel-head">
         <div className="tilepanel-title">
-          <span aria-hidden className="tilepanel-dicon">{isCity ? '🏛️' : '🏯'}</span>
+          <span aria-hidden className="tilepanel-dicon">{isCity ? '🏛️' : (wonder && WONDER_ICON[wonder.category]) ?? '★'}</span>
           <h2>{name}</h2>
           <CloseButton />
         </div>
@@ -451,6 +493,7 @@ function Overview({ app, idx }: { app: AppData; idx: IndexJson }) {
         <ul>
           <li><b>Click any hex</b> on either map to see its terrain, specialist district, yields — and exactly which statistics produced them — plus every metric with its percentile in the country.</li>
           <li>Change <b>Click:</b> in the top bar (or here) to select whole provinces / states, districts / counties or DS divisions instead.</li>
+          <li><b>Find a place</b> (above) jumps to any province / state, district / county, DS division or City View city of either country.</li>
           <li><b>Lenses</b> above the maps recolour both countries; “Shared scale” puts them on one colour ramp. Esc clears the selection.</li>
         </ul>
         <div className="tilepanel-pick" role="group" aria-label="Click selects">

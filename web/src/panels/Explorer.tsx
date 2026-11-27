@@ -6,9 +6,9 @@ import { COUNTRY_META, DISTRICT_META, terrainLabel } from '../civ'
 import { SourceChips } from '../components/SourceChip'
 import { YieldRow } from '../components/YieldIcon'
 import type { AppData } from '../data/useData'
-import { computeLens, LENS_BY_ID } from '../lenses'
+import { computeLens, LENS_BY_ID, lensBasis } from '../lenses'
 import { useStore } from '../store'
-import type { CountryData, CountryId, IndexJson } from '../types'
+import type { CountryData, CountryId, IndexJson, Metric } from '../types'
 import {
   axisInfo, brushFlags, brushSets, buildPlot, buildSeries, fmtShort, fmtVal, hasBrush, levelNoun, metricOptions,
   provenance, resolveKey, rowLonLat, rowName, segOf, selectionTargets, unitCaption, X_PREFS, Y_PREFS,
@@ -236,8 +236,8 @@ export const Explorer = memo(function Explorer({ app }: { app: AppData }) {
           </div>
 
           <div className="explorer-defs">
-            <MetricDef axis="X" info={xInfo} ds={ds} level={level} onMap={() => useStore.getState().setLens('custom', xInfo.key)} />
-            <MetricDef axis="Y" info={yInfo} ds={ds} level={level} onMap={() => useStore.getState().setLens('custom', yInfo.key)} />
+            <MetricDef axis="X" info={xInfo} ds={ds} level={level} log={plot.logX} onMap={() => useStore.getState().setLens('custom', xInfo.key)} />
+            <MetricDef axis="Y" info={yInfo} ds={ds} level={level} log={plot.logY} onMap={() => useStore.getState().setLens('custom', yInfo.key)} />
           </div>
 
           <ExplorerTable plot={plot} level={level} xInfo={xInfo} yInfo={yInfo} brush={brush} targets={targets}
@@ -268,6 +268,20 @@ function Seg<T extends string>({ items, value, onChange, labelledBy }: {
       ))}
     </div>
   )
+}
+
+/**
+ * Tooltip of a "Map X/Y" button. The map's "Any metric" lens keeps its own scale rule (lenses.ts:
+ * per-km² densities always log, other skewed positive metrics auto-log when they span ≥ 20×);
+ * the lens API takes no log flag, so the Explorer's switch cannot be handed over — say so.
+ */
+function mapScaleTitle(m: Metric | undefined, plotLog: boolean, axis: 'X' | 'Y'): string {
+  if (!m) return `Colour the map by this ${axis} metric`
+  const b = lensBasis(m)
+  const rule = b === 'density' ? 'always on a log ramp (per km² of tile)'
+    : b === 'share' ? 'on a linear ramp (share of the tile)'
+      : 'on a log ramp only if its values span 20× or more, otherwise linear'
+  return `Colour the map by ${m.label}. The map draws it ${rule}; the plot's log switch (now ${plotLog ? 'on' : 'off'}) does not carry over.`
 }
 
 function AxisRow({ axis, k, opts, log, blocked, onKey, onLog, lensActive }: {
@@ -302,7 +316,7 @@ function AxisRow({ axis, k, opts, log, blocked, onKey, onLog, lensActive }: {
           log
         </label>
         <button type="button" className={`btn explorer-map ${lensActive ? 'on' : ''}`} disabled={!k} aria-pressed={lensActive}
-          title={`Colour the map by this ${axis} metric`} onClick={() => k && useStore.getState().setLens('custom', k)}>
+          title={mapScaleTitle(k ? opts.byKey.get(k)?.metric : undefined, log, axis)} onClick={() => k && useStore.getState().setLens('custom', k)}>
           Map {axis}
         </button>
       </div>
@@ -348,7 +362,7 @@ function Tip({ plot, p, level, xInfo, yInfo, idx }: {
 // Definitions & provenance
 // ---------------------------------------------------------------------------------------------
 
-function MetricDef({ axis, info, ds, level, onMap }: { axis: 'X' | 'Y'; info: AxisInfo; ds: CountryData[]; level: ExLevel; onMap: () => void }) {
+function MetricDef({ axis, info, ds, level, log, onMap }: { axis: 'X' | 'Y'; info: AxisInfo; ds: CountryData[]; level: ExLevel; log: boolean; onMap: () => void }) {
   const per = ds.flatMap((d) => {
     const m = d.metricByKey.get(info.key)
     return m ? [{ c: d.id, m, pv: provenance(d, info.key) }] : []
@@ -368,7 +382,7 @@ function MetricDef({ axis, info, ds, level, onMap }: { axis: 'X' | 'Y'; info: Ax
       <div className="explorer-def-head">
         <span className="explorer-def-axis" aria-hidden>{axis}</span>
         <h3>{m.label}</h3>
-        <button className="btn explorer-map" onClick={onMap} title="Colour the map by this metric" aria-label={`Map ${axis}: colour the map by ${m.label}`}>Map {axis}</button>
+        <button className="btn explorer-map" onClick={onMap} title={mapScaleTitle(m, log, axis)} aria-label={`Map ${axis}: colour the map by ${m.label}`}>Map {axis}</button>
       </div>
       <p className="explorer-def-desc">{m.description || 'No description.'} {tfNote && <span className="muted">{tfNote}</span>}</p>
       <div className="explorer-def-meta">

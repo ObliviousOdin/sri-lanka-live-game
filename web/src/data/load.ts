@@ -77,24 +77,57 @@ const countryCache = new Map<CountryId, Promise<CountryData>>()
 const bases = new Map<CountryId, CountryBase>()
 const matrixBuf = new Map<CountryId, Promise<ArrayBuffer>>()
 
-/** Starts (once) the download of a country's metric matrix (~23 MB for the US). */
-function fetchMatrix(id: CountryId): Promise<ArrayBuffer> {
+const hasGunzip = typeof DecompressionStream === 'function'
+const isGzip = (b: ArrayBuffer) => {
+  const u = new Uint8Array(b, 0, Math.min(2, b.byteLength))
+  return u.length === 2 && u[0] === 0x1f && u[1] === 0x8b
+}
+const gunzip = (b: ArrayBuffer) =>
+  new Response(new Blob([b]).stream().pipeThrough(new DecompressionStream('gzip'))).arrayBuffer()
+
+/**
+ * metrics.bin.gz (~8.7 MB instead of 23 MB for the US) inflated with DecompressionStream; falls back to
+ * the raw metrics.bin when the browser has no DecompressionStream or the .gz is missing / unreadable.
+ * Progress counts the bytes on the wire (compressed). `expected` = decompressed byte length from
+ * meta.json: a server that already decoded the .gz (Content-Encoding: gzip) hands back raw bytes of
+ * exactly that length, which are used as they are; anything else (e.g. an HTML fallback page) is not.
+ */
+async function matrixBytes(id: CountryId, expected: number): Promise<ArrayBuffer> {
+  // total 0 = the server applied its own Content-Encoding, so the stream counts decoded bytes
+  const onProgress = (loaded: number, total: number) => setProgress(id, { loaded, total: total || expected })
+  if (hasGunzip) {
+    try {
+      const b = await binary(`${id}/metrics.bin.gz`, onProgress)
+      if (isGzip(b)) return await gunzip(b)
+      if (b.byteLength === expected) return b
+    } catch { /* fall back to the uncompressed file */ }
+    setProgress(id, { loaded: 0, total: expected })
+  }
+  return binary(`${id}/metrics.bin`, onProgress)
+}
+
+/** Starts (once) the download of a country's metric matrix (~23 MB for the US, ~8.7 MB gzipped). */
+function fetchMatrix(id: CountryId, expected: number): Promise<ArrayBuffer> {
   let p = matrixBuf.get(id)
   if (!p) {
-    p = binary(`${id}/metrics.bin`, (loaded, total) => setProgress(id, { loaded, ...(total ? { total } : {}) }))
+    p = matrixBytes(id, expected)
     p.catch(() => {}) // reported through loadMatrix; avoid an unhandled rejection meanwhile
     matrixBuf.set(id, p)
   }
   return p
 }
 
-/** Full CountryData with the real matrix; throws when metrics.bin does not match meta.json. */
+const matrixLength = (b: Pick<CountryBase, 'n' | 'meta'>) => b.n * b.meta.metrics.length * 4
+
+/** Full CountryData with the real matrix; throws when the (decompressed) metrics.bin does not match meta.json. */
 function withMatrix(base: CountryBase, buf: ArrayBuffer): CountryData {
-  const want = base.n * base.meta.metrics.length * 4
+  const want = matrixLength(base)
   if (buf.byteLength !== want) {
     throw new Error(`${base.id}/metrics.bin has ${buf.byteLength} bytes but meta.json describes ${base.n} tiles × ${base.meta.metrics.length} metrics (${want} bytes). The data files come from different exports; reload the page`)
   }
-  setProgress(base.id, { loaded: buf.byteLength, total: buf.byteLength, done: true })
+  const cur = progress.get(base.id)
+  // keep the byte counts of the download (compressed), just mark it complete
+  setProgress(base.id, { done: true, ...(cur?.total ? { loaded: cur.total } : { loaded: buf.byteLength, total: buf.byteLength }) })
   return { ...base, matrix: new Float32Array(buf), matrixReady: true }
 }
 
@@ -157,7 +190,7 @@ export function loadCountry(id: CountryId): Promise<CountryData> {
         json<City[]>(`${id}/cities.json`).catch(() => []),
       ])
       const n = hexes.h3.length
-      setProgress(id, { total: n * meta.metrics.length * 4 })
+      const expected = matrixLength({ n, meta })
       const admin: Record<string, AdminTable> = {}
       await Promise.all(
         Object.keys(meta.admin_levels).map(async (lvl) => {
@@ -168,7 +201,7 @@ export function loadCountry(id: CountryId): Promise<CountryData> {
       // waiting for the caller). Starting it earlier would only split a slow link's bandwidth with
       // hexes/admin and delay the map, since browsers do not prioritise fetches over HTTP/1.1.
       let bin: ArrayBuffer | null = null
-      fetchMatrix(id).then((b) => { bin = b }, () => {})
+      fetchMatrix(id, expected).then((b) => { bin = b }, () => {})
       const hexIndex = new Map<string, number>()
       hexes.h3.forEach((h, i) => hexIndex.set(h, i))
       const hexArea = await tileAreas(hexes)
@@ -192,7 +225,7 @@ export function loadMatrix(d: CountryData): Promise<CountryData> {
   if (d.matrixReady) return Promise.resolve(d)
   let p = matrixCache.get(d.id)
   if (!p) {
-    p = fetchMatrix(d.id).then((buf) => {
+    p = fetchMatrix(d.id, matrixLength(d)).then((buf) => {
       const base = bases.get(d.id)
       if (!base) throw new Error(`${d.id}: loadMatrix() before loadCountry()`)
       const full = withMatrix(base, buf)

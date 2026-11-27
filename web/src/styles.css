@@ -31,6 +31,8 @@ h1, h2, h3, h4 { font-family: var(--serif); font-weight: 600; letter-spacing: .0
 
 .app {
   height: 100%;
+  /* defensive: nothing may widen the page sideways on phones (panels scroll vertically only) */
+  overflow-x: clip;
   display: grid;
   grid-template-columns: minmax(0, 1fr) 0;
   grid-template-rows: auto auto minmax(0, 1fr);
@@ -55,6 +57,8 @@ h1, h2, h3, h4 { font-family: var(--serif); font-weight: 600; letter-spacing: .0
 .toggle-item { display: contents; }
 .toggles label { display: flex; gap: 4px; align-items: center; white-space: nowrap; }
 .toggle-hint { display: none; }
+.toggle-item.disabled label { opacity: .55; cursor: not-allowed; }
+.toggle-item.disabled input { cursor: not-allowed; }
 .toggles select { background: var(--bg2); border: 1px solid var(--line2); border-radius: 6px; padding: 3px 6px; }
 .topbar-actions { display: flex; gap: 8px; align-items: center; }
 .panel-toggle, .options-toggle { background: var(--bg2); border: 1px solid var(--brass); border-radius: 6px; padding: 5px 10px; color: var(--brass2); white-space: nowrap; }
@@ -94,6 +98,7 @@ h1, h2, h3, h4 { font-family: var(--serif); font-weight: 600; letter-spacing: .0
 .jump { position: absolute; top: 40px; left: 8px; display: flex; gap: 4px; }
 .jump button { background: #0b1422d9; border: 1px solid var(--line2); border-radius: 6px; padding: 2px 8px; font-size: 12px; color: var(--muted); }
 .jump button:hover { color: var(--brass2); border-color: var(--brass); }
+/* bottom-left on every pane (legends sit to its right, or above it on narrow panes), clear of the city banners */
 .scalebar { position: absolute; bottom: 10px; left: 10px; font-size: 11px; color: var(--text); background: #0b1422bf; padding: 3px 7px 4px; border-radius: 6px; pointer-events: none; }
 .scalebar .bar { height: 6px; border: 2px solid var(--text); border-top: 0; margin-bottom: 2px; }
 
@@ -135,7 +140,9 @@ h1, h2, h3, h4 { font-family: var(--serif); font-weight: 600; letter-spacing: .0
 /* deck tooltip (App.tsx useTooltipFlip keeps it inside the pane) */
 .deck-tip { background: #0b1422f2 !important; color: var(--text) !important; border: 1px solid var(--brass) !important; border-radius: 8px !important; padding: 8px 10px !important; font: 12.5px/1.45 var(--font) !important; max-width: min(300px, calc(100cqw - 16px)); box-shadow: 0 6px 18px #0008; }
 .deck-tip .tt-title { font-weight: 700; color: var(--brass2); margin-bottom: 3px; }
-.deck-tip .tt-yields { display: flex; gap: 8px; font-weight: 700; margin-bottom: 3px; }
+.deck-tip .tt-yields { display: flex; flex-wrap: wrap; gap: 2px 9px; font-weight: 700; margin-bottom: 3px; }
+.deck-tip .tt-yields .y { display: inline-flex; align-items: baseline; gap: 2px; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.deck-tip .tt-yields .y > span { font-size: 11px; }
 .deck-tip .k { color: var(--muted); }
 
 /* ---------- side panel */
@@ -148,7 +155,8 @@ h1, h2, h3, h4 { font-family: var(--serif); font-weight: 600; letter-spacing: .0
 .tabs .tab-icon { font-size: 15px; line-height: 1.1; }
 .tabs .tab-label { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .tabs button.active { color: var(--brass2); border-bottom-color: var(--brass); }
-.panel-body { overflow-y: auto; flex: 1; min-height: 0; padding: 12px 14px 40px; }
+/* overflow-x is defensive: a row that cannot wrap (e.g. a nowrap list of names) is clipped, never panned sideways */
+.panel-body { overflow-y: auto; overflow-x: hidden; flex: 1; min-height: 0; padding: 12px 14px 40px; }
 .panel-body:focus-visible { outline: 2px solid var(--brass2); outline-offset: -2px; }
 
 /* shared panel atoms (use these in panels) */
@@ -216,8 +224,6 @@ select.input, input.input { background: var(--bg); border: 1px solid var(--line2
   .pane-label { font-size: 12px; padding: 3px 8px; }
   .app.panel-open .pane-label .muted { display: none; }
   .app.panel-open .jump { display: none; }
-  /* the scale bar stays bottom-left (legends sit above it), clear of the city banners at the top */
-  .map-cell .scalebar, .map-cell .scalebar.mp-below-jump { top: auto; bottom: 10px; }
 }
 
 @media (prefers-reduced-motion: reduce) {

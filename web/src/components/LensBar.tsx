@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent } from 'react'
-import { LENSES, lensMetricKeys, type LensGroup } from '../lenses'
+import { LENSES, lensMetricOptions, type LensGroup } from '../lenses'
 import { useStore } from '../store'
 import type { CountryData } from '../types'
 
@@ -10,12 +10,8 @@ export function LensBar({ countries }: { countries: CountryData[] }) {
   const lensMetric = useStore((s) => s.lensMetric)
   const setLens = useStore((s) => s.setLens)
   const lens = LENSES.find((l) => l.id === lensId)!
-  const metricOptions = lens.kind === 'metric' || lens.kind === 'dominant'
-    ? (lens.id === 'custom'
-      ? [...new Map(countries.flatMap((c) => c.meta.metrics).map((m) => [m.key, m])).values()].map((m) => m.key)
-      : lensMetricKeys(lens, countries))
-    : []
-  const labelOf = (k: string) => countries.map((c) => c.metricByKey.get(k)?.label).find(Boolean) ?? k
+  // each option carries " (LK only)" / " (US only)" when just one loaded country publishes it
+  const metricOptions = lens.kind === 'metric' || lens.kind === 'dominant' ? lensMetricOptions(lens, countries) : []
   const showSelect = lens.kind === 'metric' && metricOptions.length > 0
 
   // ---- overflow affordance: edge fades + chevrons while more lenses are off-screen
@@ -99,11 +95,11 @@ export function LensBar({ countries }: { countries: CountryData[] }) {
       {showSelect && (
         <select
           className="lens-metric"
-          value={lensMetric[lensId] ?? metricOptions[0]}
+          value={lensMetric[lensId] ?? metricOptions[0].key}
           onChange={(e) => setLens(lensId, e.target.value)}
           aria-label={`${lens.label} lens metric`}
         >
-          {metricOptions.map((k) => <option key={k} value={k}>{labelOf(k)}</option>)}
+          {metricOptions.map((o) => <option key={o.key} value={o.key}>{o.label}{o.tag}</option>)}
         </select>
       )}
     </div>

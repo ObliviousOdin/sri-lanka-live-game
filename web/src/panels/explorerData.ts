@@ -3,6 +3,7 @@
 // Pure functions only (no React) so the panel can memoise each stage separately.
 import { cellToLatLng } from 'h3-js'
 import { adminUnitOfHex, column, hexesOfAdmin } from '../data/load'
+import { YIELD_META } from '../civ'
 import { fmtPct } from '../format'
 import type { AdminUnit, CountryData, CountryId, Metric, Selection } from '../types'
 
@@ -10,19 +11,21 @@ export type ExLevel = 'hex' | 'adm1' | 'adm2'
 export type Norm = 'total' | 'density' | 'capita'
 export type ColorBy = 'country' | 'lens'
 
-// Metric categories (pipeline/civmap/schema.py CATEGORIES) with their Civ reading.
+// Metric categories (pipeline/civmap/schema.py CATEGORIES) with their Civ reading. Categories that
+// feed a yield use that yield's text glyph (YIELD_META.glyph, the stand-in for the YieldIcon SVG),
+// since <optgroup> labels are plain text.
 export const CATEGORY_META: Record<string, { label: string; icon: string; civ?: string }> = {
   population: { label: 'Population', icon: '👥', civ: 'Citizens' },
-  economy: { label: 'Economy', icon: '◆', civ: 'Gold' },
+  economy: { label: 'Economy', icon: YIELD_META.gold.glyph, civ: 'Gold' },
   income: { label: 'Income & poverty', icon: '💵', civ: 'Gold' },
   labor: { label: 'Workforce', icon: '👷', civ: 'Citizens' },
-  production: { label: 'Industry', icon: '⚒', civ: 'Production' },
+  production: { label: 'Industry', icon: YIELD_META.production.glyph, civ: 'Production' },
   energy: { label: 'Energy', icon: '⚡', civ: 'Production' },
-  food: { label: 'Agriculture & fisheries', icon: '🌾', civ: 'Food' },
-  science: { label: 'Research', icon: '⚗', civ: 'Science' },
+  food: { label: 'Agriculture & fisheries', icon: YIELD_META.food.glyph, civ: 'Food' },
+  science: { label: 'Research', icon: YIELD_META.science.glyph, civ: 'Science' },
   education: { label: 'Education', icon: '🎓', civ: 'Science' },
-  culture: { label: 'Culture & tourism', icon: '✦', civ: 'Culture' },
-  faith: { label: 'Religion', icon: '☼', civ: 'Faith' },
+  culture: { label: 'Culture & tourism', icon: YIELD_META.culture.glyph, civ: 'Culture' },
+  faith: { label: 'Religion', icon: YIELD_META.faith.glyph, civ: 'Faith' },
   society: { label: 'Society', icon: '🧑‍🤝‍🧑' },
   hazard: { label: 'Disasters', icon: '🌪️' },
   trade: { label: 'Trade', icon: '⚓', civ: 'Trade routes' },

@@ -428,8 +428,10 @@ const GENERATORS: Record<string, Gen> = {
     const a = natAgg(d[ctx.home]!, 'power_capacity_mw'), b = natAgg(d[ctx.rival]!, 'power_capacity_mw')
     if (!(a > 0 && b > 0)) return null
     const pa = d[ctx.home]!.meta.totals.pop, pb = d[ctx.rival]!.meta.totals.pop
+    // MW ÷ people × 1,000 kW/MW × 1,000 people = kW per 1,000 people (numerically equal to W per person)
+    const kwPer1000 = (mw: number, people: number) => (mw * 1e3 / people) * 1e3
     return pairComment(ctx, 'power', 'y:production', 'Production capacity — installed power plants: ', a, b, (v) => `${count(v)} MW`, msrc(ctx, 'power_capacity_mw'), mvint(ctx, 'power_capacity_mw'), 'higher',
-      pa > 0 && pb > 0 ? `; ${count((a / pa) * 1e3)} vs ${count((b / pb) * 1e3)} kW per 1,000 people` : '')
+      pa > 0 && pb > 0 ? `; ${count(kwPer1000(a, pa))} vs ${count(kwPer1000(b, pb))} kW per 1,000 people` : '')
   },
   manpower: (ctx) => {
     const d = both(ctx); if (!d) return null

@@ -1,6 +1,7 @@
 """Export the web app's static data files (contract: docs/PLAN.md §5)."""
 from __future__ import annotations
 
+import gzip
 import json
 import math
 from datetime import datetime, timezone
@@ -53,6 +54,36 @@ def _clean(o):
     if isinstance(o, np.bool_):
         return bool(o)
     return o
+
+
+# metrics.bin keeps 13 of float32's 23 mantissa bits (relative error <= 2^-14 ~ 6e-5, i.e. ~4 significant
+# digits, the precision of the admin JSON values); the zeroed low bits make the gzip copy ~20% smaller.
+MATRIX_DROP_BITS = 10
+
+
+def quantise_f32(a: np.ndarray, drop_bits: int = MATRIX_DROP_BITS) -> np.ndarray:
+    """Round float32 values to (23 - drop_bits) mantissa bits (round half away from zero on the
+    magnitude: a carry into the exponent is the correct next power of two). NaN stays NaN, ±inf
+    and 0 are unchanged; integers below 2^(24 - drop_bits) (8,192) stay exact."""
+    a = np.ascontiguousarray(a, dtype=np.float32)
+    if drop_bits <= 0:
+        return a.copy()
+    u = a.view(np.uint32)
+    half, mask = np.uint32(1 << (drop_bits - 1)), np.uint32((0xFFFFFFFF << drop_bits) & 0xFFFFFFFF)
+    q = ((u + half) & mask).view(np.float32)
+    keep = ~np.isfinite(a)                      # NaN payloads / inf must not be rounded into each other
+    return np.where(keep, a, q).astype(np.float32)
+
+
+def write_matrix(out, mat_col_major: np.ndarray) -> dict:
+    """metrics.bin (raw little-endian float32, column-major) and metrics.bin.gz (gzip level 9).
+    The app fetches the .gz and inflates it with DecompressionStream, falling back to the raw file."""
+    raw = np.ascontiguousarray(mat_col_major, dtype="<f4").tobytes()
+    (out / "metrics.bin").write_bytes(raw)
+    # mtime=0: byte-identical output for identical data (stable hashes, no spurious diffs)
+    gz = gzip.compress(raw, compresslevel=9, mtime=0)
+    (out / "metrics.bin.gz").write_bytes(gz)
+    return {"bin_bytes": len(raw), "gz_bytes": len(gz)}
 
 
 def dump(path, obj, indent=None):
@@ -125,8 +156,8 @@ def export_country(country: str) -> dict:
     keys = [m["key"] for m in metrics if m["key"] in R.columns]
     metrics = [m for m in metrics if m["key"] in R.columns]
     mat = R[keys].to_numpy(dtype=np.float32)
-    # column-major Float32 matrix
-    mat.T.copy().tofile(out / "metrics.bin")
+    # column-major Float32 matrix, quantised to ~4 significant digits, plus a gzip copy for the app
+    msize = write_matrix(out, quantise_f32(mat.T))
     for i, m in enumerate(metrics):
         m["col"] = i
         m["stats"] = metric_stats(R[m["key"]].to_numpy(float)[core.ring.to_numpy() == 0], m["kind"])
@@ -237,7 +268,8 @@ def export_country(country: str) -> dict:
         "wonder_categories": wonder_categories,
     }
     dump(out / "meta.json", meta)
-    return {"metrics": len(metrics), "hexes": len(core), "points": {k: len(v["rows"]) for k, v in points_out.items()}}
+    return {"metrics": len(metrics), "hexes": len(core), **msize,
+            "points": {k: len(v["rows"]) for k, v in points_out.items()}}
 
 
 def export_global() -> dict:
