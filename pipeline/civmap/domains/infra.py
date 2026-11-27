@@ -24,7 +24,7 @@ import numpy as np
 import pandas as pd
 
 from .. import util
-from ..config import CACHE, US_STATE_FIPS, interim_dir
+from ..config import CACHE, COUNTRIES, US_STATE_FIPS, interim_dir
 from ..core import load_admin, load_hexes
 from ..fetch import fetch, unzip
 from ..schema import Metric, Source, write_domain_meta
@@ -62,15 +62,17 @@ FAA_URL = ("https://www.faa.gov/airports/planning_capacity/passenger_allcargo_st
 MIRTA_URL = ("https://services2.arcgis.com/FiaPA4ga0iQKduv3/arcgis/rest/services/"
              "MIRTA_Points_A_view/FeatureServer/0/query")
 NOMINATIM_URL = "https://nominatim.openstreetmap.org/search"
+FAA_SPACEPORTS_URL = "https://www.faa.gov/space/spaceports_by_state"
 
 SOURCES = [
     Source("wri_gppd", "Global Power Plant Database v1.3.0",
            "World Resources Institute (WRI) et al.",
            "https://datasets.wri.org/dataset/globalpowerplantdatabase", "CC BY 4.0",
-           "capacity c. 2017-2019; estimated generation 2017", ["lka"],
+           "v1.3.0 (capacity year not stated for Sri Lankan rows); estimated generation 2017", ["lka"],
            "Downloaded from the WRI GitHub release (output_database/global_power_plant_database.csv). "
            "Used for Sri Lankan plant locations, capacity of plants not owned by CEB and modelled "
-           "(capacity-factor) generation 'estimated_generation_gwh_2017' where no reported figure exists."),
+           "generation 'estimated_generation_gwh_2017' (methods CAPACITY-FACTOR-V1, HYDRO-V1, SOLAR-V1-NO-AGE) "
+           "where no reported figure exists. Its year_of_capacity_data field is blank for all Sri Lankan rows."),
     Source("ceb_annual_report_2023", "Ceylon Electricity Board Annual Report 2023 (English)",
            "Ceylon Electricity Board (CEB)", "https://www.ceb.lk/publication-media/annual-reports/en",
            "public document (CEB)", "2023", ["lka"],
@@ -82,14 +84,15 @@ SOURCES = [
     Source("ceb_statistical_digest_2025", "CEB Statistical Digest 2025 (Web Edition)",
            "Ceylon Electricity Board (CEB)", CEB_SD_URL, "public document (CEB)", "2025", ["lka"],
            "Summary page 'Generation statistics': number of stations, installed capacity and net generation "
-           "by owner and technology for 2024-2025 (national totals; used for coverage checks and to "
-           "identify retired independent oil-fired plants)."),
-    Source("eia_860", "Form EIA-860 detailed data, 2025 (final release, Sept 2026)",
+           "by owner and technology for 2024-2025 (national totals; used for coverage checks, to "
+           "identify retired independent oil-fired plants and to reject GPPD generation estimates that "
+           "exceed the reported output of their whole IPP technology category)."),
+    Source("eia_860", "Form EIA-860 detailed data, 2025 (annual file eia8602025.zip)",
            "U.S. Energy Information Administration (EIA)", "https://www.eia.gov/electricity/data/eia860/",
            "public domain", "2025", ["usa"],
            "2___Plant_Y2025.xlsx (plant locations, operator) and 3_1_Generator_Y2025.xlsx sheet 'Operable' "
            "(generator nameplate capacity, technology, status, operating year)."),
-    Source("eia_923", "Form EIA-923 detailed data, 2025 (final release, Sept 2026)",
+    Source("eia_923", "Form EIA-923 detailed data, 2025 Final Data",
            "U.S. Energy Information Administration (EIA)", "https://www.eia.gov/electricity/data/eia923/",
            "public domain", "2025", ["usa"],
            "EIA923_Schedules_2_3_4_5_M_12_2025_Final.xlsx, sheet 'Page 1 Generation and Fuel Data': annual "
@@ -122,7 +125,12 @@ SOURCES = [
            "U.S. Federal Aviation Administration (FAA), Air Carrier Activity Information System",
            "https://www.faa.gov/airports/planning_capacity/passenger_allcargo_stats/passenger",
            "public domain", "2025", ["usa"],
-           f"{FAA_URL} (updated 2026-09-24). Revenue passenger enplanements (boardings) per airport, CY 2025."),
+           f"{FAA_URL} (workbook last modified 2026-09-25). Revenue passenger enplanements (boardings) per "
+           "airport, CY 2025."),
+    Source("faa_spaceports", "Spaceports by State", "U.S. Federal Aviation Administration, Office of Commercial Space "
+           "Transportation", FAA_SPACEPORTS_URL, "public domain", "accessed 2026-11", ["usa"],
+           "List of the 20 U.S. spaceports: FAA-licensed launch / reentry site operators, federal launch "
+           "ranges and private exclusive-use sites, with operator, location, licence and launch type."),
     Source("dod_mirta", "Military Installations, Ranges, and Training Areas (MIRTA) - Points",
            "U.S. Department of Defense, Defense Installation Spatial Data Infrastructure (DISDI); "
            "served by Esri US Federal Data",
@@ -132,9 +140,10 @@ SOURCES = [
            "installations, ranges and training areas reported in the Base Structure Report."),
     Source("wikidata", "Wikidata (SPARQL query service)", "Wikimedia Foundation / Wikidata contributors",
            "https://query.wikidata.org/", "CC0 1.0", "accessed 2026-11", ["lka", "usa"],
-           "Sri Lankan military bases / air bases (class and operator queries), US spaceports "
-           "(instances of spaceport Q194188 and subclasses) and coordinates of a few Sri Lankan plants "
-           "missing from GPPD (Thambapavani wind farm, Uma Oya)."),
+           "Sri Lankan military bases / air bases (class and operator queries), coordinates of the "
+           "federal and private US launch sites on the FAA spaceport list (instances of spaceport Q194188), "
+           "and coordinates of Sri Lankan plants missing from or misplaced in GPPD (Thambapavani wind "
+           "farm, Uma Oya, Old Laxapana, Polpitiya, Samanalawewa, Inginiyagala / Gal Oya Dam)."),
     Source("osm_nominatim", "OpenStreetMap via the Nominatim search API",
            "OpenStreetMap contributors / OSM Foundation", "https://nominatim.openstreetmap.org/",
            "ODbL 1.0", "accessed 2026-11", ["lka"],
@@ -151,7 +160,7 @@ RENEWABLE_FUELS = {"Hydro", "Wind", "Solar", "Geothermal", "Biomass"}
 METRICS = [
     Metric("power_capacity_mw", "Power plant capacity", "MW", "energy", "extensive", "none",
            "points_power_plants", ["eia_860", "wri_gppd", "ceb_annual_report_2023", "wikidata"],
-           "USA 2025; LKA 2023 (CEB plants) / c.2017-2019 (others)",
+           "USA 2025; LKA 2023 (CEB plants) / GPPD v1.3.0, capacity year not stated (others)",
            "Installed (nameplate) electric generating capacity of utility-scale power plants.",
            "USA: EIA-860 2025 generator file, sheet 'Operable', summing nameplate MW of generators with "
            "status OP (operating) or SB (standby) per plant; generators out of service (OS/OA) excluded; "
@@ -159,7 +168,9 @@ METRICS = [
            "Annual Report 2023 Tables G1-G3 (Old+New Laxapana reported as one 153.8 MW station; the four "
            "Kelanitissa units KCCP 165 + KCCP2 157 + GT7 115 + Frame V GTs 80 = 517 MW combined into one "
            "point; Uma Oya 120 MW added from the same report, commissioned Apr 2024); other plants from WRI "
-           "GPPD v1.3.0. Three small legacy independent oil plants in GPPD (Asia Power 51 MW, Northern "
+           "GPPD v1.3.0. GPPD coordinates more than 20 km from every Wikidata power station / dam of the same name "
+           "are replaced by the Wikidata coordinate (Old Laxapana, Polpitiya, Samanala), and Inginiyagala, whose "
+           "GPPD point duplicates Bowatenna Dam, is placed at the Gal Oya Dam. Three small legacy independent oil plants in GPPD (Asia Power 51 MW, Northern "
            "Power 36 MW, Lakdhanavi 24 MW) are dropped because the CEB Statistical Digest 2025 lists only "
            "2 independent oil-fired stations (482 MW in 2024), which the 300 MW Yugadanavi plant already "
            "dominates. CEB's 40 x 1 MW dispersed diesel units and most small IPP mini-hydro / solar plants "
@@ -173,10 +184,15 @@ METRICS = [
            "prime-mover/fuel rows of each plant, /1000; plants with negative net generation (pumped "
            "storage, batteries) set to 0; the 'State-Fuel Level Increment' pseudo-plant (id 99999) is "
            "excluded. LKA: CEB-owned stations use reported 2023 net generation (CEB Annual Report 2023 "
-           "Tables G1-G3); other plants use GPPD v1.3.0 'estimated_generation_gwh_2017' (capacity-factor "
-           "model). Columns generation_year and generation_basis record which applies.", "higher"),
+           "Tables G1-G3); other plants use GPPD v1.3.0 'estimated_generation_gwh_2017' (modelled: "
+           "CAPACITY-FACTOR-V1 / HYDRO-V1 / SOLAR-V1-NO-AGE), except that an estimate larger than the 2024 net "
+           "generation of all IPP plants of that technology (CEB Statistical Digest 2025) is set to NaN: this drops "
+           "Yugadanavi (GPPD 1,396 GWh vs 768 GWh for both IPP oil stations); the estimate is kept in column "
+           "generation_gwh_gppd_estimate. USA: plants reported in EIA-923 without an operating/standby generator "
+           "in EIA-860 are not mapped (count and GWh in the infra report). Columns generation_year and "
+           "generation_basis record which applies.", "higher"),
     Metric("renewable_capacity_mw", "Renewable power capacity", "MW", "energy", "extensive", "none", "hex",
-           ["eia_860", "wri_gppd", "ceb_annual_report_2023"], "USA 2025; LKA 2023 / c.2017-2019",
+           ["eia_860", "wri_gppd", "ceb_annual_report_2023"], "USA 2025; LKA 2023 (CEB) / GPPD v1.3.0 (others)",
            "Installed capacity of hydro (excl. pumped storage), wind, solar, geothermal and biomass plants per hex.",
            "Plant-level capacity of renewable technologies summed per snapped H3 cell. For US plants the "
            "renewable part is computed per generator (EIA technologies Conventional Hydroelectric, "
@@ -213,7 +229,8 @@ METRICS = [
            "points_airports", ["faa_enplanements_cy2025", "ourairports"], "2025",
            "Annual revenue passenger enplanements (boardings) at each airport.",
            "FAA CY 2025 enplanements (all airports file) joined to OurAirports large/medium airports by FAA "
-           "location id (local_code), falling back to IATA code. Enplanements count boarding passengers "
+           "location id (local_code; FAA ids are unique nationally), falling back to the IATA code only within the "
+           "same state (50 states + DC; territories excluded from the coverage denominator). Enplanements count boarding passengers "
            "only (about half of total passenger movements). Sri Lanka: no per-airport figure obtainable "
            "(aasl.lk / caa.lk unreachable); nationally the Civil Aviation Authority reports 4,437,156 "
            "passengers departing Sri Lanka by air in 2024 (DCS Statistical Abstract 2025 Table 7.16), "
@@ -233,12 +250,15 @@ METRICS = [
            "(MIRTA) is compared with crowd-sourced data (Wikidata has few Sri Lanka Navy and Army camps), so "
            "Sri Lankan counts are a lower bound.", "neutral"),
     Metric("spaceports", "Spaceports and launch sites", "count", "infrastructure", "extensive", "none",
-           "points_spaceports", ["wikidata"], "2026",
-           "Spaceports / launch sites (one per site).",
-           "Wikidata instances of spaceport (Q194188) and subclasses located in the US with coordinates; "
-           "items with an end/dissolution date or typed 'proposed entity' are dropped, as are heritage-listed "
-           "sites whose only type is spaceport (historic launch sites such as Goddard's 1926 site). "
-           "Sri Lanka has none (empty table).", "higher", ["usa"]),
+           "points_spaceports", ["faa_spaceports", "ourairports", "wikidata"], "2026",
+           "Spaceports / launch and reentry sites (one per site on the FAA list).",
+           "Every site on the FAA Office of Commercial Space Transportation 'Spaceports by State' page (FAA-licensed "
+           "launch/reentry sites, federal ranges, private exclusive-use sites); kind = FAA-licensed spaceport, "
+           "federal launch site or private launch site. Coordinates: OurAirports for airport-based spaceports, "
+           "Wikidata for launch ranges, or the plus code printed on the FAA page (Launch Complex 46, Shuttle "
+           "Landing Facility, Blue Origin Launch Site One). Wikidata's own 'spaceport' class is not used as the "
+           "list because it includes historic ranges, engine test stands and non-spaceports. Sri Lanka has none "
+           "(empty table).", "higher", ["usa"]),
     Metric("industrial_zones", "Export processing zones & industrial parks", "count", "production", "extensive",
            "none", "points_industrial_zones", ["osm_nominatim"], "2026",
            "Named export processing zones, export promotion zones, industrial parks and industrial zones.",
@@ -254,18 +274,42 @@ METRICS = [
 # ---------------------------------------------------------------------------------------------
 
 
+_DIAG: dict = {}   # coverage diagnostics collected during a build, written to report.json
+
+
 def _states() -> pd.DataFrame:
     a = load_admin("usa", "adm1")
     return pd.DataFrame({"fips": a.admin_id, "abbr": a["abbr"]})
 
 
 def _attach_admin(df: pd.DataFrame, country: str) -> pd.DataFrame:
-    """Add adm1/adm2 of the snapped hex (dominant unit) for convenience."""
+    """Add the admin units (adm1, adm2[, adm3]) containing each point.
+
+    Point-in-polygon on the core boundaries, so a plant on a state-line river (Vogtle GA, Salem NJ,
+    Quad Cities IL) keeps its own state even when its snapped hex is dominated by the neighbour.
+    Points outside every polygon (offshore wind, port berths, coastal sites) fall back to the
+    dominant unit of their snapped hex; column admin_method records which applied.  Hex-level
+    aggregation in civmap.reconcile uses the h3 column, not these columns."""
+    import geopandas as gpd
+
     hx = load_hexes(country).set_index("h3")
     cells = util.snap_points(df["lat"].to_numpy(float), df["lon"].to_numpy(float), country)
     df = df.copy()
-    for lvl in ("adm1", "adm2"):
-        df[lvl] = [hx.at[c, lvl] if c is not None and c in hx.index else None for c in cells]
+    if not len(df):
+        for lvl in COUNTRIES[country]["admin_levels"]:
+            df[lvl] = pd.Series(dtype=object)
+        df["admin_method"] = pd.Series(dtype=object)
+        return df
+    pts = gpd.GeoDataFrame(geometry=gpd.points_from_xy(df["lon"].astype(float), df["lat"].astype(float)),
+                           crs=4326, index=df.index)
+    pip = None
+    for lvl in COUNTRIES[country]["admin_levels"]:
+        a = load_admin(country, lvl)[["admin_id", "geometry"]]
+        j = gpd.sjoin(pts, a, how="left", predicate="within")
+        pip = j[~j.index.duplicated()]["admin_id"].reindex(df.index)
+        fb = pd.Series([hx.at[c, lvl] if c is not None and c in hx.index else None for c in cells], index=df.index)
+        df[lvl] = pip.where(pip.notna(), fb)
+    df["admin_method"] = np.where(pip.notna(), "point-in-polygon", "snapped hex (point outside boundaries)")
     return df
 
 
@@ -315,6 +359,22 @@ CEB_2023 = [
 CEB_LATER = [("Uma Oya", 120.0, "Hydro", 2024, "CEB Annual Report 2023 p.209 (Table 01): commissioned April 2024")]
 # GPPD independent oil plants not among the 2 IPP oil stations of the CEB Statistical Digest 2025.
 GPPD_RETIRED_LKA = {"Asia Power Sapugaskanda", "Northern Power", "Lakdhanavi"}
+# GPPD coordinates that are copies of another plant's site and are not caught by _check_location
+# (no Wikidata label contains the plant name).  name -> (copied site's Wikidata id, replacement
+# Wikidata id, reason).  Inginiyagala: the GPPD point (7.6674N 80.6668E) is Bowatenna Dam
+# (Q15830465, 7.6667N 80.6667E, ~0.1 km away) in Matale district; CEB Annual Report 2023 p.21
+# places Inginiyagala in the Samanala Complex "utilizing resources from the Walawe, Kalu, and
+# Gal Oya Rivers", so the station is at the Gal Oya dam (Wikidata Q16891495, on the Ampara /
+# Monaragala district border; COD-AB puts the point 0.15 km inside Monaragala).
+GPPD_LOCATION_FIX = {
+    "Inginiyagala": ("Q15830465", "Q16891495",
+                     ("GPPD coordinate duplicates Bowatenna Dam (Q15830465); Gal Oya Dam (Q16891495) used "
+                      "(CEB AR 2023 p.21: Samanala Complex uses the Gal Oya river)")),
+}
+# CEB Statistical Digest 2025, 'Generation statistics' (PDF p.1; verified against the cached PDF):
+# 2024 net generation (GWh) of all independent power producers of each technology.  A GPPD modelled
+# 2017 estimate larger than the reported 2024 output of its whole category is not used.
+CEB_SD_IPP_GEN_2024 = {"Oil": 768, "Hydro": 1473, "Wind": 409, "Solar": 257}
 
 EIA_TECH_FUEL = {
     "Conventional Steam Coal": "Coal", "Coal Integrated Gasification Combined Cycle": "Coal",
@@ -384,6 +444,16 @@ def power_plants_lka() -> pd.DataFrame:
     g = g[g.country == "LKA"].copy()
     wd = _wikidata_lka_plants()
     fixed = [_check_location(r.name, r.latitude, r.longitude, wd) for r in g.itertuples()]
+    for i, r in enumerate(g.itertuples()):
+        if r.name not in GPPD_LOCATION_FIX:
+            continue
+        dup_q, new_q, why = GPPD_LOCATION_FIX[r.name]
+        dup = wd[wd.qid == dup_q].iloc[0]
+        d_dup = float(_haversine_km(r.latitude, r.longitude, dup.lat, dup.lon))
+        assert d_dup < 1.0, f"GPPD {r.name} no longer at {dup_q} ({d_dup:.1f} km): re-check GPPD_LOCATION_FIX"
+        c = wd[wd.qid == new_q].iloc[0]
+        fixed[i] = (float(c.lat), float(c.lon), "wikidata",
+                    f"{why}; GPPD ({r.latitude:.4f}, {r.longitude:.4f}) is {d_dup:.1f} km from {dup.itemLabel}")
     g["lat"] = [f[0] for f in fixed]
     g["lon"] = [f[1] for f in fixed]
     g["loc_src"] = [f[2] for f in fixed]
@@ -421,10 +491,19 @@ def power_plants_lka() -> pd.DataFrame:
                          location_source="wikidata", source_ref=c.qid, note=note))
     rest = g[~g.name.isin(used) & ~g.name.isin(GPPD_RETIRED_LKA)]
     for r in rest.itertuples():
+        est = r.estimated_generation_gwh_2017
+        cat = CEB_SD_IPP_GEN_2024.get(r.primary_fuel)
+        if cat is not None and np.isfinite(est) and est > cat:
+            gen, gyear = np.nan, np.nan
+            basis = (f"GPPD v1.3.0 2017 estimate ({est:,.0f} GWh, {r.estimated_generation_note_2017}) not used: it "
+                     f"exceeds the 2024 net generation of all IPP {r.primary_fuel.lower()} plants combined "
+                     f"({cat:,} GWh, CEB Statistical Digest 2025)")
+        else:
+            gen, gyear = est, 2017
+            basis = f"estimated (GPPD v1.3.0 {r.estimated_generation_note_2017})"
         rows.append(dict(id=r.gppd_idnr, name=r.name, lat=r.lat, lon=r.lon, primary_fuel=r.primary_fuel,
-                         power_capacity_mw=r.capacity_mw, generation_gwh=r.estimated_generation_gwh_2017,
-                         generation_year=2017,
-                         generation_basis=f"estimated (GPPD v1.3.0 {r.estimated_generation_note_2017})",
+                         power_capacity_mw=r.capacity_mw, generation_gwh=gen, generation_gwh_gppd_estimate=est,
+                         generation_year=gyear, generation_basis=basis,
                          commissioning_year=r.commissioning_year, owner=r.owner if isinstance(r.owner, str) else "",
                          capacity_source="wri_gppd", location_source=r.loc_src, source_ref=r.gppd_idnr,
                          note="; ".join(x for x in [f"GPPD source: {r.source}", r.loc_note] if x)))
@@ -469,6 +548,10 @@ def power_plants_usa() -> pd.DataFrame:
     p1.columns = [str(c).replace("\n", " ") for c in p1.columns]
     p1 = p1[(p1["Plant Id"] != 99999) & p1["Plant State"].isin(states)]
     ng = pd.to_numeric(p1["Net Generation (Megawatthours)"], errors="coerce").groupby(p1["Plant Id"]).sum() / 1000.0
+    orphan = ng[~ng.index.isin(cap.index)]   # reported in EIA-923 but no OP/SB generator in EIA-860 'Operable'
+    _DIAG["eia923_total_gwh_excl_99999"] = float(ng.sum())
+    _DIAG["eia923_plants_without_operable_generator"] = int(len(orphan))
+    _DIAG["eia923_gwh_of_plants_without_operable_generator"] = float(orphan.sum())
 
     pl = plant[plant["Plant Code"].isin(cap.index)].copy()
     out = pd.DataFrame({
@@ -602,6 +685,7 @@ def _faa() -> pd.DataFrame:
     f = pd.read_excel(p, header=0)
     f = f[f.Locid.notna() & f["CY 25 Enplanements"].notna() & f.ST.notna()].copy()
     f["Locid"] = f.Locid.astype(str).str.strip()
+    f["ST"] = f.ST.astype(str).str.strip()
     f["pax"] = pd.to_numeric(f["CY 25 Enplanements"], errors="coerce")
     return f
 
@@ -621,15 +705,28 @@ def build_airports(country: str) -> pd.DataFrame:
     })
     out["airport_pax"] = np.nan
     if country == "usa":
+        out["state"] = a.iso_region.str[3:].to_numpy()
         f = _faa()
+        f = f[f.ST.isin(set(_states().abbr))]          # 50 states + DC (drops PR, GU, VI, AS, MP, WK)
+        assert not f.Locid.duplicated().any(), "FAA location ids are expected to be unique"
         by_lid = f.groupby("Locid").pax.sum()
-        pax = out.faa_lid.map(by_lid)
-        pax = pax.fillna(out.iata.map(by_lid))
+        by = f.groupby(["Locid", "ST"]).pax.sum()
+        # FAA location id first (unique nationally; no state check, as OurAirports codes DCA as US-DC
+        # while FAA files it under VA); IATA code as fallback only within the same state (an IATA
+        # code can equal another airport's FAA id: Buckley SFB, CO is IATA 'BFK' = FAA 'BFK' Buffalo, OK)
+        lid = out.faa_lid.map(by_lid)
+        iat = pd.Series([by.get((k, s), np.nan) for k, s in zip(out.iata, out.state)], index=out.index)
+        pax = lid.fillna(iat)
+        used = [k if np.isfinite(v) else i for k, i, v in zip(out.faa_lid, out.iata, lid)]
+        used = [u for u, p in zip(used, pax) if np.isfinite(p)]
+        assert len(used) == len(set(used)), "an FAA airport record is matched to two OurAirports airports"
         out["airport_pax"] = pax
         out["pax_year"] = 2025
         cov = pax.sum() / f.pax.sum()
+        _DIAG["faa_enplanements_50states_dc"] = float(f.pax.sum())
+        _DIAG["faa_enplanements_matched"] = float(pax.sum())
         print(f"  FAA enplanements matched to large/medium airports: {pax.sum() / 1e6:,.1f} M "
-              f"of {f.pax.sum() / 1e6:,.1f} M ({cov:.1%})")
+              f"of {f.pax.sum() / 1e6:,.1f} M in the 50 states + DC ({cov:.1%})")
     out = _attach_admin(out, country)
     out = out.sort_values(["airport_pax", "kind"], ascending=[False, True]).reset_index(drop=True)
     util.write_points(country, DOMAIN, "airports", out)
@@ -755,6 +852,114 @@ def build_military(country: str) -> pd.DataFrame:
 # ---------------------------------------------------------------------------------------------
 
 
+# FAA Office of Commercial Space Transportation, 'Spaceports by State' (cached page; every name is
+# checked against it at build time).  One row per listed site: name as printed, state, licence,
+# launch type, and where the coordinate comes from - the OurAirports airport the page names or whose
+# street address it gives (KCSM: page says 'Clinton-Sherman Airport (KCSM)'; KEFD: 'Ellington
+# Airport'; KTIX: 355 Golden Knights Blvd, Titusville geocodes 0.8 km from it via Nominatim), the
+# Wikidata item of a federal / private launch site, or the Open Location Code printed on the page.
+FAA_SPACEPORTS = [
+    ("Huntsville International Air and Space Port", "AL", "FAA", "Orbital Reentry", "ourairports", "KHSV"),
+    ("Pacific Spaceport Complex", "AK", "FAA", "Vertical", "wikidata", "Q283842"),
+    ("Mojave Air & Space Port", "CA", "FAA", "Horizontal", "ourairports", "KMHV"),
+    ("Vandenberg Space Force Base", "CA", "FAA and Federal", "Vertical and Horizontal", "wikidata", "Q461492"),
+    ("Colorado Air & Space Port", "CO", "FAA", "Horizontal", "ourairports", "KFTG"),
+    ("Cape Canaveral Space Force Station", "FL", "Federal", "Vertical and Horizontal", "wikidata", "Q334465"),
+    ("Kennedy Space Center", "FL", "Federal", "Vertical and Horizontal", "wikidata", "Q48821"),
+    ("Space Florida Launch Complex 46", "FL", "FAA", "Vertical", "pluscode", "FCQG+FV@Q334465"),
+    ("Space Florida Shuttle Landing Facility", "FL", "FAA", "Horizontal and Orbital Reentry", "pluscode", "J874+Q9@KTTS"),
+    ("Cecil Air and Space Port", "FL", "FAA", "Horizontal", "ourairports", "KVQQ"),
+    ("Exploration Spaceport", "FL", "FAA", "Horizontal", "ourairports", "KTIX"),
+    ("Spaceport Camden", "GA", "FAA", "Vertical", "wikidata", "Q43079524"),
+    ("Spaceport America", "NM", "FAA", "Horizontal and Vertical", "wikidata", "Q1352314"),
+    ("Infinity One Oklahoma Spaceport", "OK", "FAA", "Horizontal", "ourairports", "KCSM"),
+    ("Launch Site One West Texas", "TX", "Private Exclusive Use", "", "pluscode", "853QF62P+MV"),
+    ("Boca Chica", "TX", "Private Exclusive Use", "", "wikidata", "Q16950811"),
+    ("Houston Spaceport", "TX", "FAA", "Horizontal", "ourairports", "KEFD"),
+    ("Midland Spaceport", "TX", "FAA", "Horizontal", "ourairports", "KMAF"),
+    ("Mid-Atlantic Regional Spaceport", "VA", "FAA", "Vertical", "wikidata", "Q2660820"),
+    ("Wallops Flight Facility", "VA", "Federal", "Vertical", "wikidata", "Q182348"),
+]
+
+_OLC = "23456789CFGHJMPQRVWX"
+_OLC_RES = (20.0, 1.0, 0.05, 0.0025, 0.000125)
+
+
+def _olc_decode(code: str, ref: tuple[float, float] | None = None) -> tuple[float, float]:
+    """Centre (lat, lon) of an Open Location Code / plus code (github.com/google/open-location-code).
+    A short code (fewer than 8 digits before '+') is recovered against the reference point `ref`."""
+    c = code.upper()
+    n_pre = c.index("+")
+    c = c.replace("+", "")
+    if n_pre < 8:
+        assert ref is not None, f"short plus code {code} needs a reference point"
+        la, lo = ref[0] + 90.0, ref[1] + 180.0
+        pre = ""
+        for r in _OLC_RES[: (8 - n_pre) // 2]:
+            dla, dlo = int(la // r), int(lo // r)
+            pre += _OLC[dla] + _OLC[dlo]
+            la, lo = la - dla * r, lo - dlo * r
+        c = pre + c
+    lat, lon = -90.0, -180.0
+    for i in range(len(c) // 2):
+        lat += _OLC.index(c[2 * i]) * _OLC_RES[i]
+        lon += _OLC.index(c[2 * i + 1]) * _OLC_RES[i]
+    last = _OLC_RES[len(c) // 2 - 1]
+    lat, lon = lat + last / 2, lon + last / 2
+    if n_pre < 8:  # nearest match to the reference (recoverNearest)
+        span = _OLC_RES[(8 - n_pre) // 2 - 1]
+        lat += span * round((ref[0] - lat) / span)
+        lon += span * round((ref[1] - lon) / span)
+    return lat, lon
+
+
+def _faa_spaceports_page_text() -> str:
+    import html as _html
+    p = fetch(FAA_SPACEPORTS_URL, "faa_spaceports", "infra/faa_spaceports", "spaceports_by_state.html")
+    t = p.read_text(errors="ignore")
+    m = re.search(r"<main.*?</main>", t, flags=re.S)
+    body = re.sub(r"<script.*?</script>|<style.*?</style>", " ", m.group(0) if m else t, flags=re.S)
+    return _html.unescape(re.sub(r"<[^>]+>", "\n", body))
+
+
+def spaceports_usa(wd: pd.DataFrame) -> pd.DataFrame:
+    """US spaceports = the sites on the FAA 'Spaceports by State' page, geolocated (see FAA_SPACEPORTS)."""
+    txt = _faa_spaceports_page_text()
+    lines = [ln.strip() for ln in txt.splitlines() if ln.strip()]
+    flat = re.sub(r"\s+", " ", txt)
+    n_listed = sum(1 for ln in lines if ln == "Operator")
+    missing = [n for n, *_ in FAA_SPACEPORTS if n not in flat]
+    assert not missing, f"FAA spaceport names not on the cached page: {missing}"
+    assert n_listed == len(FAA_SPACEPORTS), f"FAA page lists {n_listed} spaceports, FAA_SPACEPORTS has {len(FAA_SPACEPORTS)}"
+    ap = pd.read_csv(fetch(OURAIRPORTS_URL, "ourairports", "infra/ourairports"), keep_default_na=False,
+                     na_values=[""], low_memory=False).set_index("ident")
+    wq = wd.assign(qid=wd["item"].map(_qid)).drop_duplicates("qid").set_index("qid")
+
+    def where(src: str, ref: str) -> tuple[float, float, str]:
+        if src == "ourairports":
+            r = ap.loc[ref]
+            return float(r.latitude_deg), float(r.longitude_deg), f"OurAirports {ref} ({r['name']})"
+        if src == "wikidata":
+            la, lo = _wkt(wq.loc[ref, "coord"])
+            return la, lo, f"Wikidata {ref} ({wq.loc[ref, 'itemLabel']})"
+        code, _, near = ref.partition("@")
+        base = None
+        if near:
+            base = where("wikidata" if near.startswith("Q") else "ourairports", near)[:2]
+        la, lo = _olc_decode(code, base)
+        return la, lo, f"plus code {code} on the FAA page" + (f" (recovered near {near})" if near else "")
+
+    rows = []
+    for name, st, lic, launch, src, ref in FAA_SPACEPORTS:
+        la, lo, how = where(src, ref)
+        kind = {"Federal": "federal launch site", "Private Exclusive Use": "private launch site"}.get(
+            lic, "FAA-licensed spaceport")
+        rows.append(dict(id="faa_sp_" + re.sub(r"[^a-z0-9]+", "_", name.lower()).strip("_"), name=name, lat=la,
+                         lon=lo, kind=kind, state=st, faa_license=lic, launch_type=launch, location_source=how,
+                         wikidata=ref if src == "wikidata" else "", spaceports=1))
+    return pd.DataFrame(rows)
+
+
 def build_spaceports(country: str) -> pd.DataFrame:
     cols = ["id", "name", "lat", "lon", "kind", "operator", "wikidata_types", "inception", "heritage_listed",
             "wikidata", "spaceports"]
@@ -771,6 +976,14 @@ def build_spaceports(country: str) -> pd.DataFrame:
       SERVICE wikibase:label { bd:serviceParam wikibase:language "en". }
     } GROUP BY ?item ?itemLabel ?coord""" % cq
     d = util.sparql(q, f"infra_spaceports_{country}")
+    if country == "usa":
+        # Wikidata's 'spaceport' class mixes in historic ranges, engine test stands, a Nike missile
+        # site and an airport merely named 'Intergalactic Spaceport', and misses FAA-licensed
+        # airport spaceports: the FAA register defines the US list; Wikidata only supplies coordinates.
+        df = _attach_admin(spaceports_usa(d), country)
+        util.write_points(country, DOMAIN, "spaceports", df)
+        print(f"  spaceports: {len(df)} FAA-listed sites; {df.kind.value_counts().to_dict()}")
+        return df
     rows = []
     if len(d):
         for c in ("ended", "heritage", "operator", "inception"):
@@ -791,7 +1004,6 @@ def build_spaceports(country: str) -> pd.DataFrame:
                              inception=(r.inception or "")[:4] if isinstance(r.inception, str) else "",
                              heritage_listed=isinstance(r.heritage, str), wikidata=_qid(r.item), spaceports=1))
     df = pd.DataFrame(rows, columns=cols)
-    # US only: keep sites inside the 50 states + DC grid
     if len(df):
         cells = util.snap_points(df.lat.to_numpy(float), df.lon.to_numpy(float), country)
         df = df[[c is not None for c in cells]]
@@ -912,7 +1124,12 @@ def _report(country: str, results: dict) -> None:
                                      "source": "CEB Statistical Digest 2025 pp.2-3; CEB Annual Report 2023 p.22"}
         rep["power"]["capacity_coverage_vs_2025"] = rep["power"]["capacity_mw"] / 4814
     else:
-        rep["power"]["published"] = {"eia923_2025_net_generation_gwh_all_rows_excl_state_increments": 4412549}
+        rep["power"]["published"] = {"eia923_2025_net_generation_gwh_all_rows_excl_state_increments":
+                                     _DIAG.get("eia923_total_gwh_excl_99999")}
+        rep["power"]["eia923_not_mapped"] = {
+            "plants_without_operable_generator": _DIAG.get("eia923_plants_without_operable_generator"),
+            "net_generation_gwh": _DIAG.get("eia923_gwh_of_plants_without_operable_generator")}
+    rep["power"]["generation_reported_plants"] = int(pw.generation_gwh.notna().sum())
     pt = results["ports"]
     rep["ports"] = {"ports": int(len(pt)), "port_cargo_t": float(pt.port_cargo_t.sum()),
                     "port_calls": float(pt.port_calls.sum()),
@@ -923,13 +1140,16 @@ def _report(country: str, results: dict) -> None:
     ap = results["airports"]
     rep["airports"] = {"airports": int(len(ap)), "large": int((ap.kind == "large_airport").sum()),
                        "airport_pax": float(np.nansum(ap.airport_pax)),
+                       "faa_enplanements_50states_dc": _DIAG.get("faa_enplanements_50states_dc"),
                        "wb_check": {"air_passengers_carried IS.AIR.PSGR": _wb("IS.AIR.PSGR", iso3)}}
     if country == "lka":
         rep["airports"]["published"] = {"passengers_departing_by_air_2024": 4437156,
                                         "passengers_arriving_by_air_2024": 4378767,
                                         "source": "DCS Statistical Abstract 2025 Table 7.16 (Civil Aviation Authority)"}
     rep["military_sites"] = int(len(results["military"]))
-    rep["spaceports"] = int(len(results["spaceports"]))
+    sp = results["spaceports"]
+    rep["spaceports"] = {"sites": int(len(sp)),
+                         "by_kind": sp.kind.value_counts().to_dict() if len(sp) else {}}
     rep["industrial_zones"] = int(len(results["industrial_zones"]))
     (interim_dir(country, DOMAIN) / "report.json").write_text(json.dumps(rep, indent=2, default=str))
     print("  report:", json.dumps(rep, default=str))

@@ -10,16 +10,20 @@ Outputs (data/interim/<country>/science/):
                            literacy) + DCS Statistical Abstract 2025 pupils / teachers
   admin_adm3.csv           LKA: Census 2024 DS-division degree holders (Census Data Portal) and Giga
                            school counts
-  points_schools.csv       LKA: Giga school geolocations (10,146 government schools)
+  points_schools.csv       LKA: Giga school geolocations (government schools)
 
 Research output (OpenAlex): ``works_5y`` is the institution's ``counts_by_year`` total for 2021-2025
 (all work types, as published).  Because OpenAlex counts ~1.8 million US *datasets* in 2021-2025
-(1.17 M for Pacific Northwest National Laboratory, ~0.45 M non-research items for the University of
-Michigan), ``research_works_5y`` is an exact count of research-type works (articles, reviews,
+(1.17 M for Pacific Northwest National Laboratory, 0.44 M for the University of Michigan; the build
+re-queries and prints these counts), ``research_works_5y`` is an exact count of research-type works (articles, reviews,
 books/chapters, conference papers, preprints, reports, dissertations, letters, data/software papers)
 per institution: one cached ``works?filter=authorships.institutions.id:..,type:..`` count query each
 (OpenAlex now requires an API key for cursor paging and caps group_by at 200 groups, so per-institution
 counts are the only exact key-less route; ~7,000 queries, 8 threads, a few minutes).
+
+Numbers that depend on the data (institution counts, HERD match rate, national ratios, school totals) are
+not written into the metric registry below: build() computes them and appends them to each metric's
+``method`` text (``_method_notes``), so metrics.json always describes the data actually written.
 
     python -m civmap.domains.science        # builds lka + usa, then validates
 """
@@ -49,6 +53,7 @@ US_MIN_WORKS = 200                       # OpenAlex works_count filter for the U
 
 OPENALEX_SELECT = "id,display_name,type,works_count,cited_by_count,ror,geo,counts_by_year"
 HERD_TABLE5 = "https://ncses.nsf.gov/pubs/nsf26304/assets/data-tables/tables/nsf26304-tab005.xlsx"
+HERD_TABLE5_PDF = "https://ncses.nsf.gov/pubs/nsf26304/assets/data-tables/tables/nsf26304-tab005.pdf"  # footnotes
 GIGA_CSV = ("https://data.humdata.org/dataset/4f6bd828-21de-403d-80e5-0c18b2d1ac46/resource/"
             "481d95c9-29fb-4432-bd02-a083fc527193/download/sri-lanka-school-geolocation-connectivity-data.csv")
 NCES_ZIP = "https://nces.ed.gov/programs/edge/data/EDGE_GEOCODE_PUBLICSCH_2425.zip"
@@ -79,8 +84,10 @@ SOURCES = [
            "https://ncses.nsf.gov/surveys/higher-education-research-development/2024", "public domain",
            "FY2024", ["usa"],
            "Data tables nsf26304 (tab005.xlsx): all R&D expenditures (dollars in thousands) of the standard "
-           "and short-form populations. System and control subtotal rows are skipped (spreadsheet "
-           "indentation levels); leaf institutions are matched to OpenAlex by name within state."),
+           "and short-form populations. System and control subtotal rows are skipped (a row whose value equals "
+           "the sum of its indented children); leaf institutions are matched to OpenAlex by name within state. "
+           "Footnotes a-d (joint reporting of U. Maryland and U. Oklahoma campuses, the Johns Hopkins Applied "
+           "Physics Laboratory amount) are read from the PDF edition nsf26304-tab005.pdf."),
     Source("census_acs5_2024", "American Community Survey 5-year estimates 2020-2024, table B15003 "
            "(Educational attainment for the population 25 years and over)", "U.S. Census Bureau",
            "https://www2.census.gov/programs-surveys/acs/summary_file/2024/table-based-SF/",
@@ -112,9 +119,9 @@ SOURCES = [
     Source("giga_schools_lka", "Sri Lanka: School Geolocation and Connectivity Status", "Giga (UNICEF / ITU) via HDX",
            "https://data.humdata.org/dataset/sri-lanka-school-geolocation-and-connectivity-status",
            "CC BY 4.0", "2024 release", ["lka"],
-           "10,146 schools with name, coordinates, education level (Primary / Secondary / Primary and "
-           "Secondary) and connectivity (Yes/No). The count equals the Ministry of Education 2021 "
-           "government-school total in DCS Statistical Abstract 2025 Table 14.11."),
+           "One row per school with name, coordinates, education level (Primary / Secondary / Primary and "
+           "Secondary) and connectivity (Yes/No). The build compares the total with the Ministry of Education "
+           "government-school counts 2019-2024 in DCS Statistical Abstract 2025 Table 14.11."),
     Source("worldbank_wdi", "World Development Indicators", "World Bank", "https://data.worldbank.org",
            "CC BY 4.0", "latest", ["lka", "usa"],
            "Used only for the national sanity checks printed by build() (SE.TER.CUAT.BA.ZS, SE.SEC.CUAT.UP.ZS, "
@@ -126,26 +133,27 @@ _RW_METHOD = (
     + ", ".join(RESEARCH_TYPES) + " with an authorship affiliated to the institution "
     "(works?filter=authorships.institutions.id:<id>,publication_year:2021-2025,type:...; meta.count). "
     "Datasets, peer reviews, errata, editorials, conference abstracts, book reviews, paratext, software and "
-    "'other' are excluded: in 2021-2025 OpenAlex lists 1.8 M US datasets, most deposited by a few "
-    "institutions (PNNL 1.17 M). Column works_5y keeps the all-types counts_by_year total for reference. "
+    "'other' are excluded (OpenAlex lists very large numbers of deposited datasets for a few US "
+    "institutions; counts below). Column works_5y keeps the all-types counts_by_year total for reference. "
     "A co-authored work counts once for every participating institution, so sums over hexes or the nation "
     "exceed the number of distinct works; preprints and their published versions can both count. Parent "
     "organisations do not roll up their children in OpenAlex (works are counted on the institution id, "
     "not its lineage), so there is no hierarchy double counting. Points sit at the Wikidata campus "
     "coordinate (item with the institution's ROR ID, nearest P625 within 50 km of the OpenAlex point) or, "
-    "failing that, at the OpenAlex/GeoNames city point (column coord_source). Reconcile sums the points per hex.")
+    "failing that, at the OpenAlex/GeoNames city point of the institution's ROR record (column coord_source). "
+    "Reconcile sums the points per hex.")
 
 METRICS = [
     # --- science (both) -----------------------------------------------------------------------
     Metric("research_works_5y", "Research works 2021-2025", "works", "science", "extensive", "none",
-           "points_institutions", ["openalex"], "2021-2025",
+           "points_institutions", ["openalex", "wikidata"], "2021-2025",
            "Scholarly works (articles, reviews, books, conference papers, preprints, reports...) published "
            "2021-2025 with an author affiliated to research institutions located in the hex.",
-           _RW_METHOD + " Sri Lanka: all 141 OpenAlex institutions with country_code LK. United States: "
-           f"institutions with more than {US_MIN_WORKS} lifetime works (6,834 of 35,768), which excludes "
-           "only the long tail of small organisations.", "higher"),
+           _RW_METHOD + " Sri Lanka: all OpenAlex institutions with country_code LK. United States: "
+           f"institutions with more than {US_MIN_WORKS} lifetime works, which excludes only the long tail of "
+           "small organisations.", "higher"),
     Metric("university_rd_usd", "University R&D expenditure (HERD FY2024)", "USD", "science", "extensive", "none",
-           "points_universities", ["nsf_herd_fy2024", "openalex"], "FY2024",
+           "points_universities", ["nsf_herd_fy2024", "openalex", "wikidata"], "FY2024",
            "Total R&D expenditures of the higher-education institution (all sources of funds).",
            "NSF HERD FY2024 Table 5 'All R&D expenditures' (dollars in thousands x 1000), 50 states + DC. "
            "System subtotal rows are dropped (a row is a subtotal when it equals the sum of its indented "
@@ -153,12 +161,15 @@ METRICS = [
            "education/healthcare/nonprofit/facility/government institutions by normalised name within the "
            "same state (U./C./Inst./Sch./Med./St. expanded, SUNY/CUNY prefixes dropped): exact token match, "
            "then names that differ only by a place qualifier (after a comma, dash or 'at', or a state name), "
-           "then fuzzy >= 0.86; one-to-one, greedy by score then R&D. 21 manual assignments "
-           "(science.HERD_ASSIGN); where HERD reports campuses jointly (U. Maryland = College Park + "
-           "Baltimore per Table 5 footnote b; Texas A&M + Health Science Center; Penn State + Hershey; "
-           "Vanderbilt + VUMC; Nebraska-Lincoln + UNMC; Dartmouth + Dartmouth-Hitchcock) the R&D is split "
-           "in proportion to each campus's 2021-2025 research works (an estimate). 99.8% of HERD R&D and "
-           "all top-100 institutions are matched; matches are listed in herd_matches.csv.", "higher",
+           "then fuzzy >= 0.86; one-to-one, greedy by score then R&D. Manual assignments "
+           "(science.HERD_ASSIGN) cover renamed institutions, abbreviation clashes and system offices; where "
+           "HERD reports campuses jointly (U. Maryland = College Park + Baltimore per Table 5 footnote b; "
+           "U. Oklahoma = Norman + Health Sciences Center + Tulsa per footnote d; Texas A&M + Health Science "
+           "Center; Penn State + Hershey; Vanderbilt + VUMC; Nebraska-Lincoln + UNMC; Dartmouth + "
+           "Dartmouth-Hitchcock) the R&D is split in proportion to each campus's 2021-2025 research works (an "
+           "estimate). Johns Hopkins U. includes the Applied Physics Laboratory (Laurel, MD); the APL amount "
+           "published in footnote c goes to the APL point and the rest to the Homewood point. Matches are "
+           "listed in herd_matches.csv.", "higher",
            ["usa"]),
     # --- education: attainment ------------------------------------------------------------------
     Metric("pct_bachelors", "Adults 25+ with a bachelor's degree or higher", "%", "education", "intensive", "pop",
@@ -172,13 +183,13 @@ METRICS = [
            "postgraduate diploma, postgraduate degree, PhD).",
            "Census 2024. The DCS Census Data Portal publishes 'Degree and above' by DS division only for "
            "persons aged 5+. Degree holders aged 25+ per DS division are estimated as the 5+ count x the "
-           "national ratio 958,440 / 1,022,588 (= degree+postgraduate diploma+postgraduate degree+PhD aged 25+ "
-           "from Final Report Table 7.6, over the national 5+ 'Degree and above' total, i.e. 93.7% of degree "
-           "holders are 25+), then divided by the DS population aged 25+ (portal tot_Ag minus the 0-24 "
-           "five-year groups). Assumes the 25+ share of degree holders is the same in every DS division. "
+           "national ratio k = (degree + postgraduate diploma + postgraduate degree + PhD aged 25+, Final "
+           "Report Table 7.6) / (national 5+ 'Degree and above' total, portal), then divided by the DS "
+           "population aged 25+ (portal tot_Ag minus the 0-24 five-year groups). Assumes the 25+ share of degree holders is the same in every DS division. "
            "Portal DS divisions are matched to COD-AB pcodes by name within district (DCS renumbered "
            "several divisions in Nuwara Eliya, Galle, Batticaloa, Ampara and Ratnapura); 'Kalmunai North "
-           "Sub' and 'Kalmunai' are summed into COD-AB Kalmunai (LK5221). National result 6.9% equals Table 7.6.",
+           "Sub' and 'Kalmunai' are summed into COD-AB Kalmunai (LK5221). The national result equals Table 7.6 "
+           "by construction.",
            "higher", ["lka"]),
     Metric("degree_holders", "Degree holders (25+)", "persons", "education", "extensive", "pop", "admin_adm2",
            [f"census_acs5_{ACS_YEAR}"], "2020-2024", "Persons aged 25+ with a bachelor's degree or higher.",
@@ -187,9 +198,9 @@ METRICS = [
     Metric("degree_holders", "Degree holders (25+, estimated)", "persons", "education", "extensive", "pop",
            "admin_adm3", ["dcs_census_portal", "dcs_cph2024"], "2024",
            "Persons aged 25+ with a university degree or higher (estimated).",
-           "Census 2024 Data Portal 'Degree and above' (persons 5+) per DS division x 0.9373 (national share "
-           "aged 25+, Final Report Table 7.6); national total 958,440. The unscaled 5+ count is kept in "
-           "column degree_holders_5plus.", "higher", ["lka"]),
+           "Census 2024 Data Portal 'Degree and above' (persons 5+) per DS division x k (national share aged "
+           "25+, see pct_bachelors). The unscaled 5+ count is kept in column degree_holders_5plus.",
+           "higher", ["lka"]),
     Metric("pct_secondary", "Adults 25+ with high school or higher", "%", "education", "intensive", "pop",
            "admin_adm2", [f"census_acs5_{ACS_YEAR}"], "2020-2024",
            "Share of the population aged 25+ that graduated from high school (diploma or GED) or higher.",
@@ -201,38 +212,38 @@ METRICS = [
            "Share of the population aged 25+ whose highest educational level is G.C.E. Ordinary Level "
            "(or equivalent) or higher (A/L, degree, postgraduate).",
            "Census 2024 Final Report Table 7.7, 2024 columns 'G.C.E. O/L or equivalent' + 'G.C.E. A/L or "
-           "over' (percent of population aged 25+), district level. National 48.2% (22.0 + 26.2). O/L is "
+           "over' (percent of population aged 25+), district level. O/L is "
            "taken at ~grade 11, so this is closer to completed lower/upper-secondary than to a US high-school "
            "diploma (12 grades).", "higher", ["lka"]),
     Metric("literacy_rate", "Literacy rate (10+)", "%", "education", "intensive", "pop", "admin_adm2",
            ["dcs_cph2024"], "2024",
-           "Share of persons aged 10+ able to read and write (with understanding) in at least one of "
-           "Sinhala, Tamil or English.", "Census 2024 Final Report Table 7.10 'At least one language', district.",
+           "Share of persons aged 10+ able to read and write a short letter or paragraph with understanding "
+           "in at least one of Sinhala, Tamil or English (CPH 2024 definition, Final Report ch. 7).", "Census 2024 Final Report Table 7.10 'At least one language', district.",
            "higher", ["lka"]),
     Metric("english_literacy_rate", "English literacy rate (10+)", "%", "education", "intensive", "pop",
            "admin_adm2", ["dcs_cph2024"], "2024", "Share of persons aged 10+ literate in English.",
            "Census 2024 Final Report Table 7.10 'English' column, district.", "higher", ["lka"]),
     Metric("computer_literacy_rate", "Computer literacy rate (5+)", "%", "education", "intensive", "pop",
            "admin_adm2", ["dcs_cph2024"], "2024",
-           "Share of persons aged 5+ who can use a computer on their own (DCS definition).",
+           "Share of persons aged 5+ able to independently power on a computer and perform a task with it "
+           "(CPH 2024 definition).",
            "Census 2024 Final Report Table 7.13, district.", "higher", ["lka"]),
     Metric("digital_literacy_rate", "Digital literacy rate (5+)", "%", "education", "intensive", "pop",
            "admin_adm2", ["dcs_cph2024"], "2024",
-           "Share of persons aged 5+ who can use a computer, laptop, tablet or smartphone on their own "
-           "(DCS definition).", "Census 2024 Final Report Table 7.13, district.", "higher", ["lka"]),
+           "Share of persons aged 5+ able to perform any task using a computer (laptop, desktop or "
+           "minicomputer) or a smartphone (CPH 2024 definition).", "Census 2024 Final Report Table 7.13, district.", "higher", ["lka"]),
     # --- education: schools ---------------------------------------------------------------------
     Metric("schools", "Public schools", "count", "education", "extensive", "pop", "admin_adm2",
            ["nces_edge_publicsch"], "2024-25", "Public elementary and secondary schools (NCES CCD universe).",
            "NCES EDGE public school geocodes 2024-25 counted by the file's 5-digit county code (CNTY), "
            "which uses the current county set including the Connecticut planning regions; 50 states + DC "
-           "(101,183 schools). Counties with no school get 0. Private schools excluded.", "higher", ["usa"]),
+           "(territories dropped by STFIP; BIE schools are kept under their physical state). Counties with "
+           "no school get 0. Private schools excluded.", "higher", ["usa"]),
     Metric("schools", "Government schools", "count", "education", "extensive", "pop", "admin_adm3",
            ["giga_schools_lka"], "2024 release",
            "Schools in the Giga school-location register (government schools).",
            "Giga school points assigned to COD-AB DS divisions by point-in-polygon (nearest division for "
-           "the few coastal points outside every polygon) and counted. Total 10,146 equals the 2021 MoE "
-           "government-school count; DCS Statistical Abstract Table 14.11 reports 10,076 for 2024 "
-           "(district totals compared in the build log).", "higher", ["lka"]),
+           "the few coastal points outside every polygon) and counted.", "higher", ["lka"]),
     Metric("schools_online", "Schools with internet connectivity", "count", "education", "extensive", "pop",
            "admin_adm3", ["giga_schools_lka"], "2024 release",
            "Schools reported as connected to the internet by Giga.",
@@ -245,9 +256,35 @@ METRICS = [
            "DCS Statistical Abstract 2025 Table 14.11, 2024 column, district level.", "higher", ["lka"]),
 ]
 
+# Data-dependent facts appended to the metric ``method`` texts at build time (see module docstring).
+_NOTES: dict[str, list[str]] = {}
+
+
+def _note(keys: str | tuple[str, ...], text: str) -> None:
+    for k in ((keys,) if isinstance(keys, str) else keys):
+        _NOTES.setdefault(k, []).append(text)
+
+
+def _metrics_with_notes(country: str) -> list[Metric]:
+    from dataclasses import replace
+    out = []
+    for m in METRICS:
+        if country in m.countries and _NOTES.get(m.key):
+            m = replace(m, method=m.method + " Build facts: " + " ".join(_NOTES[m.key]))
+        out.append(m)
+    return out
+
+
 # ---------------------------------------------------------------------------------------------
 # OpenAlex
 # ---------------------------------------------------------------------------------------------
+
+
+def _openalex_count(path: str, flt: str, name: str) -> int:
+    """meta.count of an OpenAlex list query (cached)."""
+    p = fetch(f"https://api.openalex.org/{path}", "openalex", "openalex", f"{name}.json",
+              params={"filter": flt, "per-page": 1, "select": "id"})
+    return int(json.loads(p.read_text())["meta"]["count"])
 
 
 def _short_id(u: str | None) -> str | None:
@@ -359,6 +396,9 @@ def institutions(country: str) -> pd.DataFrame:
     df["research_works_5y"] = df.id.map(_research_counts(df.id.tolist(), config.COUNTRIES[country]["iso2"]))
     print(f"  OpenAlex institutions: {n0} fetched, {len(df)} with coordinates in the country; "
           f"works_5y {df.works_5y.sum():,.0f}, research_works_5y {df.research_works_5y.sum():,.0f}", flush=True)
+    _note("research_works_5y", f"{len(df):,} institution points ({n0:,} fetched; {int(ok.sum()):,} at Wikidata campus "
+          f"coordinates, {int((~ok).sum()):,} at the OpenAlex city point); total {df.research_works_5y.sum():,.0f} "
+          f"institution-works (all-types works_5y total {df.works_5y.sum():,.0f}).")
     return df.sort_values("research_works_5y", ascending=False).reset_index(drop=True)
 
 
@@ -397,6 +437,63 @@ HERD_ASSIGN: dict[tuple[str, str], list[str]] = {
     ("Alabama A&M U.", "Alabama"): ["Alabama Agricultural and Mechanical University"],
     ("U. Colorado Anschutz Medical Campus", "Colorado"): ["University of Colorado Anschutz"],
     ("U. Texas M. D. Anderson Cancer Center", "Texas"): ["The University of Texas MD Anderson Cancer Center"],
+    # Table 5 footnote d: U. Oklahoma = Norman + Health Sciences Center (Oklahoma City) + Tulsa campuses
+    ("U. Oklahoma", "Oklahoma"):
+        ["University of Oklahoma", "University of Oklahoma Health Sciences Center", "University of Oklahoma - Tulsa"],
+    # renamed institutions / OpenAlex disambiguation suffixes / "C." read as a middle initial
+    ("U. New Orleans", "Louisiana"): ["LSU New Orleans"],          # ROR 034mtvk83 alias "University of New Orleans"
+    ("Texas A&M U.-Commerce", "Texas"): ["East Texas A&M University"],   # OpenAlex city: Commerce
+    ("Lincoln U., Jefferson City", "Missouri"): ["Lincoln University - Missouri"],
+    ("Marian U., Indianapolis", "Indiana"): ["Marian University - Indiana"],
+    ("U. of St. Thomas (MN)", "Minnesota"): ["University of St. Thomas - Minnesota"],
+    ("Citadel Military C. South Carolina", "South Carolina"): ["Citadel"],
+    ("Southern U. and A&M C., Baton Rouge", "Louisiana"):
+        ["Southern University and Agricultural and Mechanical College"],
+    ("Southern U. and A&M C., Agricultural Research and Extension Center", "Louisiana"):
+        ["Southern University and Agricultural and Mechanical College"],
+    ("Memorial Sloan Kettering Cancer Center, Louis V. Gerstner Jr. Graduate S. of Biomedical Sciences", "New York"):
+        ["Memorial Sloan Kettering Cancer Center"],
+    ("Graduate School of the Stowers Institute for Medical Research", "Missouri"):
+        ["Stowers Institute for Medical Research"],
+    ("U. of Health Sciences and Pharmacy in St. Louis", "Missouri"): ["University of Health Sciences and Pharmacy"],
+    ("Saint John's U.", "Minnesota"): ["College of Saint Benedict and Saint John's University"],
+    ("C. of Saint Benedict", "Minnesota"): ["College of Saint Benedict and Saint John's University"],
+    ("Manhattan C.", "New York"): ["Manhattan University"],
+    ("Iona U.", "New York"): ["Iona College"],
+    ("Utica U.", "New York"): ["Utica College"],
+    ("Canisius U.", "New York"): ["Canisius College"],
+    ("Molloy C.", "New York"): ["Molloy University"],
+    ("Marist C.", "New York"): ["Marist University"],
+    ("SUNY, Oswego", "New York"): ["State University of New York at Oswego"],
+    ("SUNY, Potsdam", "New York"): ["State University of New York at Potsdam"],
+    ("SUNY, C. Brockport", "New York"): ["SUNY Brockport"],
+    ("SUNY, Geneseo", "New York"): ["SUNY Geneseo"],
+    ("SUNY, C. Plattsburgh", "New York"): ["SUNY Plattsburgh"],
+    ("SUNY, Cobleskill", "New York"): ["SUNY Cobleskill"],
+    ("SUNY, Old Westbury", "New York"): ["SUNY Old Westbury"],
+    ("SUNY, New Paltz", "New York"): ["SUNY New Paltz"],
+    ("SUNY, C. Cortland", "New York"): ["SUNY Cortland"],
+    ("SUNY, Oneonta", "New York"): ["SUNY Oneonta"],
+    ("Johnson C. Smith U.", "North Carolina"): ["Johnson C. Smith University"],
+    ("Wheaton C., Norton", "Massachusetts"): ["Wheaton College - Massachusetts"],
+    ("MCPHS U.", "Massachusetts"): ["Massachusetts College of Pharmacy and Health Sciences"],
+    ("Hartford International U. for Religion and Peace", "Connecticut"): ["Hartford Seminary"],
+    ("A. T. Still U. of Health Sciences", "Missouri"): ["A.T. Still University"],
+    ("Converse U.", "South Carolina"): ["Converse College"],
+    ("Concordia C., Moorhead", "Minnesota"): ["Concordia College - Minnesota"],
+    ("California State U., Maritime Academy", "California"): ["California Maritime Academy"],
+    ("Fuller Theological Seminary", "California"): ["Fuller Theological Seminary"],   # OpenAlex type 'other'
+    # system offices (leaf rows in Table 5) -> the OpenAlex system entity
+    ("U. Hawaii, system office", "Hawaii"): ["University of Hawaii System"],
+    ("CUNY, system office", "New York"): ["City University of New York"],
+    ("California State U., system office", "California"): ["California State University System"],
+    ("U. North Carolina, general administration", "North Carolina"): ["University of North Carolina System"],
+}
+# HERD units for which a Table 5 footnote publishes the amount of a component located elsewhere:
+# (herd_name, state) -> (footnote letter, regex for the amount in $ thousands, component, remainder institution)
+HERD_FOOTNOTE_PARTS: dict[tuple[str, str], tuple[str, str, str, str]] = {
+    ("Johns Hopkins U.", "Maryland"): ("c", r"Applied Physics Laboratory, with \$([\d,]+) thousand",
+                                       "Johns Hopkins University Applied Physics Laboratory", "Johns Hopkins University"),
 }
 HERD_CAND_KINDS = ("education", "healthcare", "nonprofit", "facility", "government")
 
@@ -519,11 +616,32 @@ def herd_institutions() -> pd.DataFrame:
     return df.sort_values("rd_usd", ascending=False).reset_index(drop=True)
 
 
+@lru_cache(maxsize=None)
+def herd_footnotes() -> dict[str, str]:
+    """Footnotes of HERD FY2024 Table 5 ({letter: text}), from the PDF edition (the xlsx has none)."""
+    import pdfplumber
+    p = fetch(HERD_TABLE5_PDF, "nsf_herd_fy2024", "usa/nsf_herd", "nsf26304-tab005.pdf")
+    with pdfplumber.open(p) as pdf:
+        txt = "\n".join(pg.extract_text() or "" for pg in pdf.pages)
+    seg = txt[txt.index("i = imputed."):txt.index("Source(s):")]
+    notes: dict[str, str] = {}
+    cur = None
+    for ln in seg.splitlines()[1:]:
+        m = re.match(r"^([a-z]) (.*)$", ln)
+        if m:
+            cur = m.group(1)
+            notes[cur] = m.group(2)
+        elif cur:
+            notes[cur] += " " + ln
+    return notes
+
+
 def match_herd(inst: pd.DataFrame, herd: pd.DataFrame) -> pd.DataFrame:
     """HERD rows x OpenAlex ids: columns herd_name, state, rd_usd, oa_id, share, match_score, match.
 
-    Manual assignments (HERD_ASSIGN) first, then automatic one-to-one matching, greedy by score then
-    R&D.  Unmatched HERD rows are returned with oa_id None.
+    Footnoted components first (HERD_FOOTNOTE_PARTS: a published sub-amount goes to the component's own
+    point, the rest to the main institution), then manual assignments (HERD_ASSIGN), then automatic
+    one-to-one matching, greedy by score then R&D.  Unmatched HERD rows are returned with oa_id None.
     """
     cand = inst[inst.kind.isin(HERD_CAND_KINDS)
                 & ~inst.name.str.contains(r"\bSystems?\b|^State University of New York$", regex=True)].copy()
@@ -534,6 +652,24 @@ def match_herd(inst: pd.DataFrame, herd: pd.DataFrame) -> pd.DataFrame:
     weight = inst.set_index("id")["research_works_5y"].fillna(0) + 1.0
     by_state = {s: g for s, g in cand.groupby(cand.region.fillna(""))}
     out, used_o, done = [], set(), set()
+    notes = herd_footnotes()
+    for (hn, st), (letter, pat, part_name, main_name) in HERD_FOOTNOTE_PARTS.items():
+        h = herd[(herd.herd_name == hn) & (herd.state == st)]
+        m = re.search(pat, notes.get(letter, ""))
+        pool = inst[inst.region == st]
+        ids = [pool.id[pool.name == n].tolist() for n in (part_name, main_name)]
+        if h.empty or not m or not all(ids):
+            print(f"  WARNING HERD footnote {letter} split for {hn!r} not applied "
+                  f"(row {not h.empty}, amount {bool(m)}, OpenAlex ids {ids})")
+            continue
+        tot, part = h.rd_usd.iloc[0], _num(m.group(1)) * 1000.0
+        for oid, sh in ((ids[0][0], part / tot), (ids[1][0], 1.0 - part / tot)):
+            out.append({"herd_name": hn, "state": st, "rd_usd": tot, "oa_id": oid, "share": float(sh),
+                        "match_score": 1.0, "match": f"footnote-{letter}"})
+            used_o.add(oid)
+        done.add(h.index[0])
+        print(f"  HERD footnote {letter}: {hn} ${tot / 1e9:.2f} bn -> {part_name} ${part / 1e9:.2f} bn + "
+              f"{main_name} ${(tot - part) / 1e9:.2f} bn", flush=True)
     for (hn, st), names in HERD_ASSIGN.items():
         h = herd[(herd.herd_name == hn) & (herd.state == st)]
         if h.empty:
@@ -610,6 +746,14 @@ def universities(country: str, inst: pd.DataFrame) -> pd.DataFrame:
         miss = herd.head(200)[~herd.head(200).matched]
         if len(miss):
             print("  HERD top-200 unmatched:", "; ".join(f"{r.herd_name} ({r.state})" for r in miss.itertuples()))
+        n_fn = ok.match.str.startswith("footnote").sum()
+        _note("university_rd_usd",
+              f"{int(herd.matched.sum())} of {len(herd)} HERD institutions (50 states + DC) matched = "
+              f"{herd.rd_usd[herd.matched].sum() / herd.rd_usd.sum():.1%} of ${herd.rd_usd.sum() / 1e9:,.2f} bn; top-100 "
+              f"matched {int(top.matched.sum())}/100; {len(HERD_ASSIGN)} manual assignments "
+              f"({int(ok.match.str.startswith('manual').sum())} OpenAlex pairs) and {len(HERD_FOOTNOTE_PARTS)} footnote "
+              f"split(s) ({int(n_fn)} pairs); {int(df.rd_usd.notna().sum())} OpenAlex institutions carry R&D, total "
+              f"${df.rd_usd.sum() / 1e9:,.2f} bn.")
         uni = df[(df.kind == "education") | df.rd_usd.notna()].copy()
     else:
         uni = df[df.kind == "education"].copy()
@@ -654,6 +798,13 @@ def _usa_admin() -> pd.DataFrame:
         print(f"  NCES: {len(unknown)} county codes not in cb_2023: {sorted(unknown)[:10]} (dropped)")
     df["schools"] = df.admin_id.map(s.CNTY.value_counts()).fillna(0).astype(int)
     print(f"  NCES EDGE 2024-25 public schools: {df.schools.sum():,} in {(df.schools > 0).sum()} counties", flush=True)
+    zero = df.admin_id[df.schools == 0].tolist()
+    _note("schools", f"{df.schools.sum():,} schools in {len(df):,} counties; {len(zero)} counties have none "
+          f"({', '.join(zero[:6])}).")
+    w = df.pop_25plus.sum()
+    _note("pct_bachelors", f"National {100 * df.degree_holders.sum() / w:.1f}% ({len(df):,} counties).")
+    _note("degree_holders", f"National total {df.degree_holders.sum():,.0f} of {w:,.0f} persons aged 25+.")
+    _note("pct_secondary", f"National {(df.pct_secondary * df.pop_25plus).sum() / w:.1f}%.")
     return df.drop(columns="name")
 
 
@@ -742,7 +893,7 @@ def _lka_report_tables() -> tuple[pd.DataFrame, dict]:
     # Table 7.7 columns: pop25 2012, 2024, total% 2012, 2024, no schooling, grades 1-5, grades 6-10,
     # O/L or equivalent, A/L or over (each 2012, 2024)
     df["pop_25plus_census"] = [t77[i][1] for i in df.admin_id]
-    df["pct_secondary"] = [t77[i][11] + t77[i][13] for i in df.admin_id]
+    df["pct_secondary"] = [round(t77[i][11] + t77[i][13], 1) for i in df.admin_id]
     df["pct_al_or_over"] = [t77[i][13] for i in df.admin_id]
     # Table 7.10: pop 10+, at least one language, Sinhala, Tamil, English
     df["literacy_rate"] = [t710[i][1] for i in df.admin_id]
@@ -766,6 +917,11 @@ def _lka_report_tables() -> tuple[pd.DataFrame, dict]:
     print(f"  CPH2024 report: 25+ {nat['pop25']:,.0f}, degree+ 25+ {nat['degree_plus_25']:,.0f} "
           f"({100 * nat['degree_plus_25'] / nat['pop25']:.2f}%), O/L+ {nat['pct_secondary_national']:.1f}%, "
           f"literacy {nat['literacy_national']:.1f}%", flush=True)
+    _note("pct_secondary", f"Sri Lanka row of Table 7.7: {t77['LK'][11]:.1f} + {t77['LK'][13]:.1f} = "
+          f"{nat['pct_secondary_national']:.1f}%.")
+    for key, t, col, what in (("literacy_rate", t710, 1, "10+"), ("english_literacy_rate", t710, 4, "10+"),
+                              ("computer_literacy_rate", t713, 1, "5+"), ("digital_literacy_rate", t713, 2, "5+")):
+        _note(key, f"Sri Lanka {t['LK'][col]:.1f}% of {t['LK'][0]:,.0f} persons aged {what}.")
     return df, nat
 
 
@@ -858,10 +1014,18 @@ def _lka_adm3_education(nat: dict) -> pd.DataFrame:
     k = nat["degree_plus_25"] / g.degree_holders_5plus.sum()
     g["degree_holders"] = g.degree_holders_5plus * k
     g["pct_bachelors"] = 100 * g.degree_holders / g.pop_25plus
+    _note(("pct_bachelors", "degree_holders"),
+          f"k = {nat['degree_plus_25']:,.0f} (Table 7.6: degree {nat['degree']:,.0f} + PG diploma {nat['pgdip']:,.0f} + "
+          f"PG degree {nat['pgdeg']:,.0f} + PhD {nat['phd']:,.0f}) / {g.degree_holders_5plus.sum():,.0f} (portal, 5+) = "
+          f"{k:.4f}; national {100 * g.degree_holders.sum() / g.pop_25plus.sum():.2f}% of {g.pop_25plus.sum():,.0f} "
+          f"aged 25+ ({len(g)} DS divisions).")
     print(f"  census portal: pop {g.pop_census.sum():,.0f}, 25+ {g.pop_25plus.sum():,.0f} (Table 7.6: "
           f"{nat['pop25']:,.0f}); degree+ (5+) {g.degree_holders_5plus.sum():,.0f}; 25+ share k={k:.4f}; "
           f"national degree+ 25+ {100 * g.degree_holders.sum() / g.pop_25plus.sum():.2f}%", flush=True)
     return g
+
+
+_ABSTRACT_NATIONAL: dict[str, dict[int, float]] = {}   # Table 14.11 Grand Total rows, 2019-2024
 
 
 def _lka_abstract() -> pd.DataFrame:
@@ -881,6 +1045,8 @@ def _lka_abstract() -> pd.DataFrame:
             nums = re.findall(r"\d[\d,']*", re.sub(r"\(\d\)", "", m.group(2)))
             if len(nums) >= 6:
                 rows.setdefault(cur, {})[m.group(1).lower()] = _num(nums[-1])   # last column = 2024
+                if cur == "LK":
+                    _ABSTRACT_NATIONAL[m.group(1).lower()] = dict(zip(range(2019, 2025), map(_num, nums[-6:])))
             continue
         # district header rows end with the English name after the Sinhala and Tamil ones
         words = ln.split()
@@ -899,6 +1065,9 @@ def _lka_abstract() -> pd.DataFrame:
                 print(f"  WARNING Table 14.11 {c}: districts sum {df[c].sum():,.0f} != total {nat[c]:,.0f}")
     print(f"  Abstract 14.11 (2024): schools {df.schools.sum():,.0f}, pupils {df.pupils.sum():,.0f}, "
           f"teachers {df.teachers.sum():,.0f}", flush=True)
+    for c in ("pupils", "teachers"):
+        _note(c, f"25 districts sum to {df[c].sum():,.0f}"
+              + (f" (Grand Total row {nat[c]:,.0f})." if nat is not None else "."))
     df.index.name = "admin_id"
     return df.rename(columns={"schools": "gov_schools_moe_2024"}).reset_index()
 
@@ -959,6 +1128,18 @@ def _sanity(country: str, inst: pd.DataFrame, adm: pd.DataFrame | None, pct_b: f
     tot = inst.research_works_5y.sum()
     print(f"  check OpenAlex distinct research works {YEARS[0]}-{YEARS[1]} with a {cc} affiliation: {distinct:,}; "
           f"sum over institution points {tot:,.0f} (x{tot / distinct:.2f}: co-authorship across institutions)")
+    n_all = _openalex_count("institutions", f"country_code:{cc}", f"science_inst_{cc.lower()}_all_count")
+    n_ds = _openalex_count("works", f"authorships.institutions.country_code:{cc},publication_year:{YEARS[0]}-{YEARS[1]},"
+                           "type:dataset", f"science_datasets_{cc.lower()}_{YEARS[0]}_{YEARS[1]}")
+    nonres = (inst.works_5y - inst.research_works_5y).sort_values(ascending=False)
+    top = "; ".join(f"{inst.name[i]} {nonres[i] / 1e6:.2f} M" for i in nonres.index[:2] if nonres[i] > 1e5)
+    print(f"  check OpenAlex: {n_all:,} {cc} institutions in total ({len(inst):,} used); {n_ds:,} datasets "
+          f"{YEARS[0]}-{YEARS[1]} with a {cc} affiliation" + (f"; largest non-research totals: {top}" if top else ""))
+    _note("research_works_5y",
+          f"OpenAlex lists {n_all:,} institutions with country_code {cc} ({len(inst):,} used) and {distinct:,} distinct "
+          f"research works {YEARS[0]}-{YEARS[1]} with a {cc} affiliation, so the institution sum is x{tot / distinct:.2f} "
+          f"the distinct count; it also lists {n_ds:,} {cc}-affiliated datasets in the period (excluded)"
+          + (f"; largest non-research totals per institution: {top}." if top else "."))
     try:
         v, y = util.wb_value("IP.JRN.ARTC.SC", iso)
         print(f"  check S&E journal articles/yr (WB IP.JRN.ARTC.SC {y}, fractional Scopus count): {v:,.0f} vs "
@@ -969,6 +1150,7 @@ def _sanity(country: str, inst: pd.DataFrame, adm: pd.DataFrame | None, pct_b: f
 
 def build(country: str) -> None:
     print(f"[{DOMAIN}] building {country}", flush=True)
+    _NOTES.clear()
     inst = institutions(country)
     uni = universities(country, inst)
     cols = ["id", "name", "lat", "lon", "kind", "works_count", "works_5y", "research_works_5y",
@@ -997,6 +1179,14 @@ def build(country: str) -> None:
         diff = (giga_d.reindex(cmp.index) - cmp)
         print(f"  Giga vs MoE 2024 schools by district: max |diff| {diff.abs().max():.0f} "
               f"({diff.abs().idxmax()}), total {giga_d.sum():,} vs {cmp.sum():,.0f}", flush=True)
+        moe = _ABSTRACT_NATIONAL.get("schools", {})
+        same = [y for y, v in moe.items() if v == len(pts)]
+        _note("schools", f"Giga total {len(pts):,} schools; MoE government schools (Table 14.11 Grand Total) "
+              + ", ".join(f"{y}: {v:,.0f}" for y, v in moe.items())
+              + (f" (Giga total equals the {same[0]} count)" if same else "")
+              + f"; largest district difference from 2024: {diff.abs().max():.0f} ({diff.abs().idxmax()}).")
+        _note("schools_online", f"{int(sch.schools_online.sum()):,} of {int(sch.schools.sum()):,} schools "
+              f"({sch.schools_online.sum() / sch.schools.sum():.0%}).")
         # district check: estimated degree share must stay below the census A/L-or-over share
         g3 = d3.groupby(d3.admin_id.str[:4])[["degree_holders", "pop_25plus"]].sum()
         deg_d = 100 * g3.degree_holders / g3.pop_25plus
@@ -1016,7 +1206,7 @@ def build(country: str) -> None:
             print(f"  check adult literacy 15+ (WB {y}): {v:.1f} vs census 10+ {nat['literacy_national']:.1f}")
         except Exception:  # noqa: BLE001
             pass
-    schema.write_domain_meta(config.interim_dir(country, DOMAIN), METRICS, SOURCES, country)
+    schema.write_domain_meta(config.interim_dir(country, DOMAIN), _metrics_with_notes(country), SOURCES, country)
 
 
 if __name__ == "__main__":

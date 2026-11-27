@@ -52,6 +52,8 @@ RCMS_DTA = "https://osf.io/download/jc2yv"        # ARDA RCMSCY20, completely la
 RCMS_CODEBOOK = "https://osf.io/download/wekxa"   # ARDA RCMSCY20, variable descriptions
 CT_XWALK = "https://www2.census.gov/geo/docs/reference/ct_change/ct_cou_to_cousub_crosswalk.txt"
 CT_SUBEST = "https://www2.census.gov/programs-surveys/popest/datasets/2020-2023/cities/totals/sub-est2023_9.csv"
+USRC_HOME = "https://www.usreligioncensus.org/"
+N_RCMS_GROUPS = 372   # "372 faith groups were included in the 2020 edition" (USRC_HOME; re-checked by build())
 ACS_YEAR = 2024
 N_HOLY = {"lka": 30, "usa": 80}
 
@@ -103,6 +105,12 @@ SOURCES = [
            "adherents LDSADH, CJUDADH, IJUDADH, OJUDADH, RJUDADH, RFRMADH, MSLMADH (estimate), MAHBUDADH, THBUDADH, "
            "VAJBUDADH, HINTADH, HINYMADH (_2020). Data were collected by the ASARB (C. Grammich, E. Dollhopf, M. "
            "Gautier, R. Houseal, D. Jones, A. Krindatch, R. Stanley, S. Thumma) and downloaded from the ARDA."),
+    Source("usrc_2020_site", "U.S. Religion Census: Religious Congregations & Membership Study (project website)",
+           "Association of Statisticians of American Religious Bodies (ASARB)", USRC_HOME, "website (cited, not reused)",
+           "2020", ["usa"],
+           "Home page, fetched and cached: \"372 faith groups were included in the 2020 edition\"; \"more than 370 "
+           "religious bodies, over 350,000 congregations, and over 160 million adherents\" (the county file sums to "
+           "355,998 congregations and 161.0 million adherents). Cited for the number of participating groups."),
     Source("census_ct_xwalk", "Connecticut county to county subdivision crosswalk (old counties -> planning regions)",
            "U.S. Census Bureau, Geography Division", CT_XWALK, "public domain", "2022", ["usa"],
            "One row per town: OLD_COUNTYFP (09001-09015), NEW_COUNTYFP (planning region 110-190), COUSUBFP."),
@@ -119,7 +127,10 @@ SOURCES = [
            "Religious sites: items with P17 = Sri Lanka (Q854) / United States (Q30) that are P31/P279* instances of "
            "temple Q44539, Buddhist temple Q5393308, Hindu temple Q842402, kovil Q17059988, stupa Q180987, mosque "
            "Q32815, church building Q16970, cathedral Q2977, basilica Q163687, synagogue Q34627, shrine Q697295 or "
-           "pilgrimage site Q15135589; coordinates P625, religion P140, sitelinks (wikibase:sitelinks)."),
+           "pilgrimage site Q15135589; coordinates P625, religion P140, sitelinks (wikibase:sitelinks). Each "
+           "coordinate is checked against the item's own P131+ chain (Sri Lanka: district, USA: state); an item "
+           "whose point lies in another district/state is moved to the same-named OSM place of worship in the P131 "
+           "district (Sri Lanka) or dropped."),
     Source("worldbank_wdi", "World Development Indicators", "World Bank", "https://data.worldbank.org",
            "CC BY 4.0", "latest", ["lka", "usa"],
            "SP.POP.TOTL used only for the national sanity checks printed by build()."),
@@ -140,10 +151,11 @@ _LKA_ETH_M = ("Census of Population and Housing 2024 (DCS), ethnic group of the 
               "divided by tot_Eth. District sums agree with Final Report Table 6.1.11. Note: the 2024 census reports "
               "'Indian Tamil' as 'Indian Tamil/Malaiyaga Thamilar'; the 2012->2024 fall in this group and rise in Sri "
               "Lankan Tamils in the hill country partly reflect self-identification. Hexes: population-weighted average.")
-_US_RCMS_SRC = ["arda_rcms2020_county", "census_ct_xwalk", "census_pep_subcounty_2023"]
+_US_RCMS_SRC = ["arda_rcms2020_county", "census_ct_xwalk", "census_pep_subcounty_2023", "usrc_2020_site"]
 _US_RCMS_M = ("2020 U.S. Religion Census (ASARB, ARDA county file RCMSCY20): adherents (members, their children and "
               "regular attenders counted at congregations) divided by the 2020 census population POP2020 x 100. "
-              "Adherents are counted where the congregation meets, so in 30 small counties adherents exceed residents; "
+              "Adherents are counted where the congregation meets, so in 30 counties (all under 30,000 residents) "
+              "adherents exceed residents; "
               "there shares are divided by total adherents instead (claimed shares then sum to 100 and unclaimed is 0). "
               "Groups that did not report are not counted (adherents, not self-identification). Connecticut: the 8 "
               "old counties (09001-09015) are split to the 9 planning regions with the Census CT county->town "
@@ -202,7 +214,8 @@ METRICS = [
              "tot_Eth_SL_Tamil"),
     _lka_eth("eth_indian_tamil_pct", "Indian Tamil / Malaiyaga Thamilar (% of population)",
              "Share of residents who are Indian Tamil (Malaiyaga Thamilar)", "tot_Eth_Ind_Tamil"),
-    _lka_eth("eth_moor_pct", "Sri Lanka Moor (% of population)", "Share of residents who are Sri Lanka Moor",
+    _lka_eth("eth_moor_pct", "Sri Lanka Moor (% of population)",
+             "Share of residents who are Sri Lanka Moor ('Sri Lanka Moor/Muslim' in the Final Report tables)",
              "tot_Eth_SL_Moor"),
     _lka_eth("eth_other_pct", "Other ethnic groups (% of population)",
              "Share of residents who are Burgher, Malay, Sri Lanka Chetty, Bharatha, Veddha or another group",
@@ -222,8 +235,12 @@ METRICS = [
     _metric("worship_sites", "Places of worship", "count", "faith", "extensive", "pop", "admin_adm3",
             ["hot_rawdata_api", "hotosm_lka_cultural_places", "ocha_codab_lka"], "OSM snapshot 2026-11-26",
             "Places of worship mapped in OpenStreetMap (temples, kovils, mosques, churches...).",
-            "OpenStreetMap amenity=place_of_worship (nodes, and centroids of ways/relations), de-duplicated where a "
-            "node and a way/relation with the same normalised name lie within 100 m, assigned to COD-AB DS divisions "
+            "OpenStreetMap amenity=place_of_worship (nodes, and centroids of ways/relations), de-duplicated because "
+            "the same temple is often mapped twice (a named node on an unnamed building/site polygon, or the same name "
+            "traced twice): a feature is dropped when a higher-priority feature (named > religion-tagged > way/"
+            "relation > node) has the same normalised name within 100 m, lies within 5 m with a compatible religion "
+            "(equal or one unknown), or is named and within 20 m of this unnamed feature with a compatible religion; "
+            "then assigned to COD-AB DS divisions "
             "by point-in-polygon (features within 3 km offshore to the nearest unit), and counted. Religion per site "
             "comes from the OSM religion tag, else from the name (English, Sinhala and Tamil keywords such as "
             "vihara, kovil, mosque/pallivasal, church); see points_worship. Hexes: DS counts split by population. "
@@ -266,7 +283,8 @@ METRICS = [
             "Adherents of all other counted groups as a share of residents."),
     _us_rel("rel_unclaimed_pct", "Unclaimed by any counted congregation (% of population)",
             "100 - 100 x TOTADH_2020 / POP2020, floored at 0",
-            "Residents not counted as adherents of any of the 372 participating groups (includes the non-religious "
+            f"Residents not counted as adherents of any of the {N_RCMS_GROUPS} participating groups (U.S. Religion Census "
+            "site; includes the non-religious "
             "and members of non-participating groups)."),
     # ---- United States: ethnicity (ACS B03002)
     _us_eth("eth_white_nh_pct", "White, non-Hispanic (% of population)", "B03002_003",
@@ -301,7 +319,7 @@ METRICS = [
             "TOTCNG_2020 (all participating groups' congregations, including the ASARB Muslim estimate) per county; "
             "blank = 0. Connecticut old counties split to planning regions by 2020 town population (see religion "
             "shares), hence fractional values there. Hexes: county count split by population. Completeness caveat: "
-            "a census of congregations of 372 participating groups (non-participating groups and house churches "
+            f"a census of congregations of {N_RCMS_GROUPS} participating groups (non-participating groups and house churches "
             "are missing), versus volunteer-mapped OpenStreetMap places of worship for Sri Lanka.", "higher", "usa"),
 ]
 
@@ -593,8 +611,10 @@ def _osm_worship_raw() -> tuple[gpd.GeoDataFrame, str]:
         if g.crs is None:
             g = g.set_crs(4326)
         cols = {c.lower().replace(":", "_"): c for c in g.columns}
+        # Raw Data API layer names -> OSM element types (ids become e.g. "way/238423280", resolvable on osm.org)
+        otype = {"nodes": "node", "ways_poly": "way", "ways_line": "way", "relations": "relation"}
         df = gpd.GeoDataFrame({
-            "osm_id": [f"{str(t).rstrip('s')}/{i}" for t, i in zip(g["osm_type"], g["osm_id"])],
+            "osm_id": [f"{otype.get(str(t), str(t))}/{i}" for t, i in zip(g["osm_type"], g["osm_id"])],
             "name": g.get(cols.get("name", "name")),
             "name_en": g.get(cols.get("name_en", "name_en")),
             "name_si": g.get(cols.get("name_si", "name_si")),
@@ -660,33 +680,70 @@ def _norm_name(s) -> str:
     return re.sub(r"[^0-9a-z඀-෿஀-௿]", "", str(s).lower()) if isinstance(s, str) else ""
 
 
+_DUP_SAME_NAME_M = 100    # same normalised name within this distance -> one place
+_DUP_ANY_M = 5            # any two features with compatible religion this close -> one place
+_DUP_UNNAMED_M = 20       # an unnamed feature this close to a named one with compatible religion -> same place
+
+
+def _dedup_worship(raw: gpd.GeoDataFrame) -> tuple[list, dict]:
+    """Indices of OSM features that duplicate another feature of the same place of worship.
+
+    OSM convention is one element per place of worship, but in Sri Lanka the same temple is often mapped twice:
+    a named node on top of an (often unnamed) building or site polygon, or the same name traced twice.  Features
+    are visited in priority order (named, religion-tagged, way/relation, then id) and a feature is dropped when an
+    already-kept feature (a) has the same normalised name within 100 m, (b) lies within 5 m with a compatible
+    religion (equal, or one unknown), or (c) is named and lies within 20 m of this unnamed feature with a
+    compatible religion.  Distinct named shrines 5-100 m apart are kept.
+    """
+    from scipy.spatial import cKDTree
+    m = raw.to_crs(5234)
+    xy = np.c_[m.geometry.x.to_numpy(), m.geometry.y.to_numpy()]
+    nkey = raw.nkey.to_numpy()
+    kind = raw.kind.to_numpy()
+    named = nkey != ""
+    prio = sorted(range(len(raw)), key=lambda i: (not named[i], raw.religion_source.iat[i] != "osm_tag",
+                                                   raw.is_node.iat[i], str(raw.osm_id.iat[i])))
+    tree = cKDTree(xy)
+    kept = np.zeros(len(raw), bool)
+    drop, why = [], {"same_name_100m": 0, "within_5m": 0, "unnamed_within_20m_of_named": 0}
+    for i in prio:
+        reason = None
+        for j in tree.query_ball_point(xy[i], _DUP_SAME_NAME_M):
+            if j == i or not kept[j]:
+                continue
+            d = float(np.hypot(*(xy[i] - xy[j])))
+            compat = kind[i] == kind[j] or "unknown" in (kind[i], kind[j])
+            if named[i] and nkey[i] == nkey[j]:
+                reason = "same_name_100m"
+            elif d <= _DUP_ANY_M and compat:
+                reason = "within_5m"
+            elif d <= _DUP_UNNAMED_M and compat and not named[i] and named[j]:
+                reason = "unnamed_within_20m_of_named"
+            if reason:
+                break
+        if reason:
+            drop.append(raw.index[i])
+            why[reason] += 1
+        else:
+            kept[i] = True
+    return drop, why
+
+
 def lka_worship() -> tuple[pd.DataFrame, pd.DataFrame, dict]:
     raw, src = _osm_worship_raw()
     n_raw = len(raw)
-    # de-duplicate node + way/relation pairs with the same name within 100 m (keep the way/relation)
     raw["nkey"] = [_norm_name(a) or _norm_name(b) for a, b in zip(raw.name, raw.name_en)]
     raw["is_node"] = raw.osm_id.astype(str).str.startswith("node")
-    m = raw.to_crs(5234)
-    drop = set()
-    named = m[m.nkey != ""]
-    for _, grp in named.groupby("nkey"):
-        if len(grp) < 2:
-            continue
-        grp = grp.sort_values("is_node")       # ways/relations first
-        kept = []
-        for i, r in grp.iterrows():
-            if any(r.geometry.distance(k.geometry) <= 100 for k in kept):
-                drop.add(i)
-            else:
-                kept.append(r)
-    pts = raw.drop(index=list(drop)).copy()
     # religion: OSM tag, else name keywords
-    tag = pts.religion.astype(str).str.lower().str.strip().map(_OSM_REL)
-    tag = tag.where(pts.religion.notna(), None)
-    tag = tag.where(~(pts.religion.notna() & tag.isna()), "other")       # tagged with another religion
-    by_name = [_religion_from_names(a, b, c, d) for a, b, c, d in zip(pts.name, pts.name_en, pts.name_si, pts.name_ta)]
-    pts["religion_source"] = np.where(tag.notna(), "osm_tag", np.where(pd.notna(by_name), "name", "none"))
-    pts["kind"] = tag.where(tag.notna(), pd.Series(by_name, index=pts.index)).fillna("unknown")
+    tag = raw.religion.astype(str).str.lower().str.strip().map(_OSM_REL)
+    tag = tag.where(raw.religion.notna(), None)
+    tag = tag.where(~(raw.religion.notna() & tag.isna()), "other")       # tagged with another religion
+    by_name = [_religion_from_names(a, b, c, d) for a, b, c, d in zip(raw.name, raw.name_en, raw.name_si, raw.name_ta)]
+    raw["religion_source"] = np.where(tag.notna(), "osm_tag", np.where(pd.notna(by_name), "name", "none"))
+    raw["kind"] = tag.where(tag.notna(), pd.Series(by_name, index=raw.index)).fillna("unknown")
+    # de-duplicate (see _dedup_worship)
+    drop, why = _dedup_worship(raw)
+    pts = raw.drop(index=drop).copy()
     # DS division: point in polygon, else nearest within 3 km (coastal / offshore features)
     a3 = load_admin("lka", "adm3")[["admin_id", "geometry"]]
     j = gpd.sjoin(pts, a3, how="left", predicate="within")
@@ -710,11 +767,16 @@ def lka_worship() -> tuple[pd.DataFrame, pd.DataFrame, dict]:
                         "wikidata": pts.wikidata, "adm3": pts.adm3, "source": src}).reset_index(drop=True)
     # counts per DS division
     a3ids = load_admin("lka", "adm3").admin_id
-    cnt = out.groupby(["adm3", "kind"]).size().unstack(fill_value=0)
+    main = ("buddhist", "hindu", "muslim", "christian", "unknown")
+    ckind = out.kind.where(out.kind.isin(main), "other")      # sikh, jewish, multifaith ... -> other
+    cnt = out.assign(ckind=ckind).groupby(["adm3", "ckind"]).size().unstack(fill_value=0)
     adm = pd.DataFrame({"admin_id": a3ids})
     adm["worship_sites"] = adm.admin_id.map(cnt.sum(axis=1)).fillna(0).astype(int)
     for k in ("buddhist", "hindu", "muslim", "christian", "other", "unknown"):
         adm[f"worship_{k}"] = adm.admin_id.map(cnt[k] if k in cnt else pd.Series(dtype=float)).fillna(0).astype(int)
+    parts = adm[[f"worship_{k}" for k in ("buddhist", "hindu", "muslim", "christian", "other", "unknown")]].sum(axis=1)
+    if (parts != adm.worship_sites).any():
+        raise RuntimeError("worship_<kind> columns do not add up to worship_sites")
     if src == "hot_rawdata_api":   # cross-check against the HDX pre-built export
         try:
             z = fetch(HOT_CULTURAL_GPKG, "hotosm_lka_cultural_places", "lka/osm",
@@ -724,10 +786,10 @@ def lka_worship() -> tuple[pd.DataFrame, pd.DataFrame, dict]:
                   f"amenity=place_of_worship features vs {n_raw:,} in the snapshot", flush=True)
         except Exception as e:  # noqa: BLE001 - cross-check only
             print(f"  cross-check with the HDX export skipped: {str(e)[:80]}")
-    diag = {"source": src, "raw": n_raw, "duplicates_dropped": len(drop), "outside_country": n_out,
-            "kept": len(out), "by_kind": out.kind.value_counts().to_dict(),
+    diag = {"source": src, "raw": n_raw, "duplicates_dropped": len(drop), "duplicate_rules": why,
+            "outside_country": n_out, "kept": len(out), "by_kind": out.kind.value_counts().to_dict(),
             "religion_source": out.religion_source.value_counts().to_dict()}
-    print(f"  OSM places of worship ({src}): {n_raw:,} features, {len(drop):,} node/way duplicates dropped, "
+    print(f"  OSM places of worship ({src}): {n_raw:,} features, {len(drop):,} duplicates dropped {why}, "
           f"{n_out} outside; kept {len(out):,}; kinds {diag['by_kind']}; religion from {diag['religion_source']}",
           flush=True)
     return out, adm, diag
@@ -888,7 +950,70 @@ def _wd_id(u: str) -> str:
     return str(u).rsplit("/", 1)[-1]
 
 
-def holy_sites(country: str) -> pd.DataFrame:
+def _p131_labels(qids: list[str], country: str) -> dict[str, list[str]]:
+    """English labels of every unit in each item's P131+ chain (located in the administrative territorial entity)."""
+    out: dict[str, list[str]] = {}
+    for k in range(0, len(qids), 100):
+        vals = " ".join(f"wd:{i}" for i in qids[k: k + 100])
+        q = ("SELECT ?item (GROUP_CONCAT(DISTINCT ?al; separator='|') AS ?adm) WHERE { VALUES ?item { " + vals +
+             " } OPTIONAL { ?item wdt:P131+ ?a . ?a rdfs:label ?al . FILTER(LANG(?al) = 'en') } } GROUP BY ?item")
+        d = util.sparql(q, f"holy_{country}_p131_{k // 100:02d}")
+        for r in d.itertuples():
+            adm = getattr(r, "adm", None)
+            out[_wd_id(r.item)] = [s for s in adm.split("|") if s] if isinstance(adm, str) else []
+    return out
+
+
+def _check_holy_locations(g: gpd.GeoDataFrame, country: str, lvl: str, osm: pd.DataFrame | None):
+    """Compare each site's coordinate with Wikidata's own P131 chain (LKA: district, USA: state).
+
+    A site whose point falls in another district/state than its P131 chain names has a bad P625 coordinate.
+    Sri Lanka: it is moved to the OpenStreetMap place of worship with the same name in the P131 district when
+    exactly one exists (coord_source = the OSM element), otherwise dropped.  USA: dropped.  Sites whose chain
+    names no district/state cannot be checked and are kept.
+    """
+    labels = _p131_labels(g.wikidata.tolist(), country)
+    if country == "lka":
+        ids = _district_ids()
+        par = load_admin("lka", "adm3").set_index("admin_id").parent_id
+        unit = g[lvl].map(par)
+        expect = {q: {ids[_dkey(s[: -len(" District")])] for s in ls
+                      if s.endswith(" District") and _dkey(s[: -len(" District")]) in ids}
+                  for q, ls in labels.items()}
+    else:
+        a1 = load_admin("usa", "adm1")
+        st = dict(zip(a1.name, a1.admin_id))
+        unit = g[lvl].str[:2]
+        expect = {q: {st[s] for s in ls if s in st} for q, ls in labels.items()}
+    g = g.copy()
+    g["coord_source"] = "wikidata P625"
+    drop, moved = [], []
+    for i, q, u in zip(g.index, g.wikidata, unit):
+        e = expect.get(q, set())
+        if not e or u in e:
+            continue
+        hit = pd.DataFrame()
+        if country == "lka" and osm is not None:
+            lab = str(g.at[i, "itemLabel"])
+            keys = {_norm_name(lab), _norm_name(lab.split(",")[0])} - {""}
+            cand = osm[osm.adm3.map(par).isin(e)]
+            hit = cand[[(_norm_name(a) in keys) or (_norm_name(b) in keys) for a, b in zip(cand.name_local, cand.name)]]
+        if len(hit) == 1:
+            h = hit.iloc[0]
+            moved.append(f"{g.at[i, 'itemLabel']} ({q}): {g.at[i, 'lat']:.4f},{g.at[i, 'lon']:.4f} -> "
+                         f"{h.lat:.4f},{h.lon:.4f} ({h.id})")
+            g.at[i, "lat"], g.at[i, "lon"], g.at[i, lvl] = float(h.lat), float(h.lon), h.adm3
+            g.at[i, "coord_source"] = str(h.id)
+        else:
+            drop.append(i)
+            moved.append(f"{g.at[i, 'itemLabel']} ({q}): point in {u}, P131 says {sorted(e)} -> dropped")
+    n_chk = sum(1 for q in g.wikidata if expect.get(q))
+    print(f"  Wikidata P131 location check: {n_chk} of {len(g)} sites checkable; "
+          f"{len(moved)} inconsistent: {moved}", flush=True)
+    return g.drop(index=drop)
+
+
+def holy_sites(country: str, osm: pd.DataFrame | None = None) -> pd.DataFrame:
     cq = _COUNTRY_QID[country]
     min_sl, lim = (0, 500) if country == "lka" else (5, 300)
     member: dict[str, set[str]] = {}
@@ -955,13 +1080,15 @@ def holy_sites(country: str) -> pd.DataFrame:
         nn = nn[~nn.index.duplicated()]
         g.loc[miss, lvl] = nn.admin_id
     g = g[g[lvl].notna()]
+    g = _check_holy_locations(g, country, lvl, osm)
     g = g.sort_values(["sitelinks", "itemLabel"], ascending=[False, True]).head(N_HOLY[country]).copy()
     g["rank"] = np.arange(1, len(g) + 1)
     out = pd.DataFrame({"id": "wd:" + g.wikidata, "name": g.itemLabel, "lat": g.lat.round(6), "lon": g.lon.round(6),
                         "kind": g.kind, "type": g.types.str.replace("|", "; ", regex=False), "classes": g.classes,
                         "religion_detail": g.religions.str.replace("|", "; ", regex=False),
                         "religion_source": g.religion_source, "sitelinks": g.sitelinks, "rank": g["rank"],
-                        "wikidata": g.wikidata, "admin_id": g[lvl]}).reset_index(drop=True)
+                        "wikidata": g.wikidata, "admin_id": g[lvl], "coord_source": g.coord_source}
+                       ).reset_index(drop=True)
     print(f"  Wikidata holy sites: {len(sl):,} candidates, kept top {len(out)} by sitelinks; kinds "
           f"{out.kind.value_counts().to_dict()}; top: " + "; ".join(
               f"{r.name} ({r.sitelinks})" for r in out.head(6).itertuples()), flush=True)
@@ -971,6 +1098,22 @@ def holy_sites(country: str) -> pd.DataFrame:
 # ---------------------------------------------------------------------------------------------
 # Build
 # ---------------------------------------------------------------------------------------------
+
+
+def _usrc_group_check() -> None:
+    """The '372 groups' quoted in metric texts comes from the U.S. Religion Census site; re-read it from the cache."""
+    try:
+        html = fetch(USRC_HOME, "usrc_2020_site", "usa/religion", "usreligioncensus_home.html", timeout=60).read_text(
+            errors="ignore")
+        m = re.search(r"(\d{3})\s+faith groups were included in the 2020 edition", html)
+        n = int(m.group(1)) if m else None
+        if n != N_RCMS_GROUPS:
+            print(f"  WARNING usreligioncensus.org reports {n} faith groups, metric texts say {N_RCMS_GROUPS}")
+        else:
+            print(f"  check: usreligioncensus.org '{n} faith groups were included in the 2020 edition' "
+                  f"(matches metric texts)", flush=True)
+    except Exception as e:  # noqa: BLE001 - sanity check only
+        print(f"  check usreligioncensus.org skipped: {str(e)[:80]}")
 
 
 def _wb_check(country: str, mine: float, label: str, year: int | None = None) -> None:
@@ -984,11 +1127,11 @@ def _wb_check(country: str, mine: float, label: str, year: int | None = None) ->
 
 def build(country: str) -> None:
     print(f"[{DOMAIN}] building {country}", flush=True)
-    hs = holy_sites(country)
-    util.write_points(country, DOMAIN, "holy_sites", hs)
     if country == "lka":
         cen = lka_census()
         pts, wadm, diag = lka_worship()
+        hs = holy_sites(country, osm=pts)
+        util.write_points(country, DOMAIN, "holy_sites", hs)
         adm = cen.merge(wadm, on="admin_id", how="outer")
         util.write_admin(country, DOMAIN, "adm3", adm)
         util.write_points(country, DOMAIN, "worship", pts)
@@ -997,6 +1140,9 @@ def build(country: str) -> None:
         print(f"  worship sites: {nat_w:,} ({1e4 * nat_w / cen.census_pop_2024.sum():.2f} per 10,000 people)",
               flush=True)
     else:
+        hs = holy_sites(country)
+        util.write_points(country, DOMAIN, "holy_sites", hs)
+        _usrc_group_check()
         rel = us_religion()
         eth = us_ethnicity()
         adm = rel.join(eth, how="outer")

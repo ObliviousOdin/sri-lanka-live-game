@@ -90,9 +90,17 @@ class Reconciler:
             return P["land_km2"].to_numpy(float)
         if kind == "coast":
             return np.where(P.ring == 1, P.hex_km2, 0.0)
+        lc = self._landcover()
+        # Preferred: the terrain domain's in-country class areas (cropland_km2 ...), which exclude the
+        # sea and foreign land in coastal / border hexes; share = class km2 / hex land km2.
+        area_col = {"cropland": "cropland_km2", "tree": "tree_km2", "built": "built_km2", "grass": "grass_km2"}.get(kind)
+        if lc is not None and area_col in lc.columns:
+            hex_land = self.H["land_km2"].reindex(lc.index).to_numpy(float)
+            share = pd.Series(np.where(hex_land > 0, lc[area_col].to_numpy(float) / np.maximum(hex_land, 1e-9), 0.0),
+                              index=lc.index).clip(0, 1)
+            return P["land_km2"].to_numpy(float) * share.reindex(P.h3).fillna(0).to_numpy(float)
         cols = {"cropland": ["lc_crop"], "tree": ["lc_tree"], "built": ["lc_built"],
                 "grass": ["lc_grass", "lc_shrub"]}.get(kind)
-        lc = self._landcover()
         if cols is None or lc is None or not set(cols) <= set(lc.columns):
             return P["land_km2"].to_numpy(float)
         frac = lc[cols].sum(axis=1).reindex(P.h3).fillna(0).to_numpy(float)

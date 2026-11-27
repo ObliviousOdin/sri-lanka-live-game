@@ -23,10 +23,15 @@ Sri Lanka method (all figures DCS Labour Force Survey 2024 unless stated):
      occupation totals and the district x industry totals;
   4. major groups are cut into Civ classes with the national ISCO-08 sub-major-group (2-digit) shares
      of LFS 2024 (ILOSTAT); elementary workers in agriculture are ISCO 92 (agricultural labourers);
-  5. district values are distributed to DS divisions with Census of Population and Housing 2024
-     DS-division counts of employed / unemployed / persons 15+ (DCS census data portal), mapped from
-     the 2024 DS geography (340 units) to the COD-AB DS geography (339 units) with a population-
-     weighted overlay on the WorldPop 100 m grid.
+  5. district values are spread over the 340 DS divisions of the Census of Population and Housing 2024
+     (the LFS district geography) with census DS counts of employed / unemployed / persons 15+ (DCS
+     census data portal); inside each district, DS employment is split into agriculture / industry /
+     services with a seed of census urban-population share x the national LFS 2024 urban and rural
+     sector mix (ILOSTAT), raked to the district sector totals (Table 13); each sector's district
+     industry and class mix then applies;
+  6. census-DS values are moved to the 339 COD-AB DS divisions with a population-weighted overlay on
+     the WorldPop 100 m grid (national totals exact; a few COD districts differ from the LFS district
+     figures by up to ~2% where COD-AB and 2024 census boundaries differ).
 
 Run:  python -m civmap.domains.labor      (builds lka + usa, then validates)
 """
@@ -79,18 +84,20 @@ SOURCES = [
            "International Labour Organization (ILOSTAT)", "https://ilostat.ilo.org/data/", "CC BY 4.0", "2024",
            ["lka"],
            "Bulk API " + ILO_URL + " ids EMP_TEMP_SEX_OC2_NB_A, EMP_TEMP_ECO_OCU_NB_A, EMP_TEMP_SEX_ECO_NB_A, "
-           "ref_area=LKA. ILO tabulation of the same Sri Lanka LFS 2024 microdata (source BA:1359); totals "
-           "equal the DCS report (7,949.751 thousand employed). Supplies ISCO-08 sub-major-group (2-digit) "
-           "shares, the national industry x occupation cross-tab and ISIC section detail (D, E, F, L, R, U) "
-           "that the DCS report publishes only in combined groups. Cells ILO suppresses as unreliable are "
+           "EMP_TEMP_SEX_ECO_GEO_NB_A, ref_area=LKA. ILO tabulation of the same Sri Lanka LFS 2024 microdata "
+           "(source BA:1359); totals equal the DCS report (7,949.751 thousand employed). Supplies ISCO-08 "
+           "sub-major-group (2-digit) shares, the national industry x occupation cross-tab, ISIC section detail "
+           "(D, E, F, L, R, U) that the DCS report publishes only in combined groups, and the agriculture / "
+           "industry / services mix of urban and rural employment. Cells ILO suppresses as unreliable are "
            "treated as zero in seeds."),
     Source("dcs_census_portal", "Census of Population and Housing 2024 - Census Data Portal (DS-division tables: "
            "economic activity of persons 15 years and over)",
            "Department of Census and Statistics, Sri Lanka", PORTAL_BASE, "public data (DCS)", "2024", ["lka"],
            "POST " + PORTAL_FETCH + " with table ds_table_2024 and indicators tot_EcoAct (persons 15+), "
-           "tot_EcoAct_Emp (employed), tot_EcoAct_Unemp (unemployed) for all 340 DS divisions of the 2024 "
-           "census geography; DS boundaries from 2024-dsdivisions-topo.js on the same portal. Used only as "
-           "the within-district distribution of the LFS figures."),
+           "tot_EcoAct_Emp (employed), tot_EcoAct_Unemp (unemployed), tot_Sec (population) and tot_Sec_Ur "
+           "(urban-sector population) for all 340 DS divisions of the 2024 census geography; DS boundaries "
+           "and district membership (BELONGS_TO) from 2024-dsdivisions-topo.js on the same portal. Used only "
+           "for the within-district distribution of the LFS figures."),
     Source("worldpop_2020", "WorldPop Global Project Population Data 2020 (unconstrained, people per pixel)",
            "WorldPop, University of Southampton", "https://hub.worldpop.org/project/categories?id=3",
            "CC BY 4.0", "2020", ["lka"],
@@ -102,10 +109,12 @@ SOURCES = [
            "County rows of acsdt5y2024-b23025.dat (employment status, population 16+), acsdt5y2024-c24010.dat "
            "(sex by occupation, civilian employed 16+), acsdt5y2024-c24030.dat (sex by industry, civilian "
            "employed 16+) from https://www2.census.gov/programs-surveys/acs/summary_file/2024/table-based-SF/"
-           "data/5YRData/; line labels from ACS20245YR_Table_Shells.txt. Counties are the 2023 Census "
-           "geography (Connecticut planning regions), so no splitting was needed."),
+           "data/5YRData/; line labels from ACS20245YR_Table_Shells.txt. The 3,144 county rows of the 50 "
+           "states + DC (Connecticut planning regions 09110-09190; Puerto Rico dropped) match the 2023 "
+           "cartographic-boundary counties one to one, so no splitting was needed; their sums equal the "
+           "ACS national row."),
     Source("worldbank_wdi", "World Development Indicators", "The World Bank", "https://data.worldbank.org",
-           "CC BY 4.0", "2024", ["lka", "usa"],
+           "CC BY 4.0", "2020-2024", ["lka", "usa"],
            "Used only for sanity checks of national totals (SL.TLF.TOTL.IN, SL.UEM.TOTL.NE.ZS, "
            "SL.TLF.CACT.NE.ZS, MS.MIL.TOTL.P1)."),
 ]
@@ -119,6 +128,10 @@ CLASSES = ["cit_farmers", "cit_workers", "cit_merchants", "cit_engineers", "cit_
 INDUSTRIES = ["emp_agri", "emp_mining", "emp_manufacturing", "emp_construction", "emp_utilities", "emp_trade",
               "emp_transport", "emp_ict", "emp_finance", "emp_professional", "emp_education", "emp_health",
               "emp_arts_accommodation", "emp_public_admin", "emp_other"]
+SECTORS = ["agri", "industry", "services"]          # LFS major industry groups (Table 13)
+IND_SECTOR = {k: ("agri" if k == "emp_agri" else
+                  "industry" if k in ("emp_mining", "emp_manufacturing", "emp_construction", "emp_utilities") else
+                  "services") for k in INDUSTRIES}
 
 # --- USA: ACS C24010 detailed lines (male line n, female line n + 36) -> class
 US_OCC = {
@@ -194,9 +207,19 @@ def _num(s: str) -> float:
 # ---------------------------------------------------------------------------------------------
 
 LKA_BASE = ("Sri Lanka LFS 2024 (DCS), household population aged 15+. District figures are LFS estimates "
-            "(appendix Table 12/13) or estimates derived from province tables (14/15); each district value "
-            "is distributed to its DS divisions in proportion to Census 2024 DS-division counts (DCS census "
-            "data portal) overlaid onto the COD-AB DS geography with WorldPop 100 m population weights.")
+            "(appendix Table 12/13) or estimates derived from province tables (14/15). Each district value is "
+            "spread over the district's Census 2024 DS divisions in proportion to their census counts (DCS "
+            "census data portal), and the census-DS values are then moved to the COD-AB DS divisions with a "
+            "WorldPop 100 m population-weighted overlay. National totals are exact; where COD-AB and 2024 "
+            "census boundaries differ, COD district sums deviate from the LFS district figures (up to 2.3%, "
+            "Polonnaruwa).")
+LKA_DS_MIX = (" Inside a district, DS employment is split into agriculture / industry / services with a seed of "
+              "the census 2024 urban-population share of the DS (tot_Sec_Ur / tot_Sec) x the national LFS 2024 "
+              "sector mix of urban and of rural (incl. estate) employment (ILOSTAT EMP_TEMP_SEX_ECO_GEO_NB_A: "
+              "urban 4.0% agriculture vs rural 30.3%), raked to DS employment and to the district sector "
+              "totals of Table 13; the district's industry (or class) mix within each sector then applies, so "
+              "DS divisions with the same urban share in one district have the same composition. The census "
+              "publishes no DS-level industry or occupation counts.")
 US_BASE = ("ACS 2020-2024 5-year estimates, county level (U.S. Census Bureau table-based Summary File), "
            "population aged 16+.")
 
@@ -297,8 +320,9 @@ IND_META = {
     "emp_construction": ("Construction jobs",
                          "ISIC F: LFS group 6 (D+E+F) x national F share of D+E+F (ILOSTAT 2024: 544.8k of 604.5k)",
                          "C24030 line 006 (+033)"),
-    "emp_utilities": ("Utilities jobs (power, water, waste)",
-                      "ISIC D+E: LFS group 6 x national (D+E) share (ILOSTAT 2024: 59.7k of 604.5k)",
+    "emp_utilities": ("Utilities jobs (power, gas, water & sewerage)",
+                      "ISIC D+E: LFS group 6 x national (D+E) share (ILOSTAT 2024: 59.7k of 604.5k); section E "
+                      "also contains waste collection and remediation, which the US figure excludes",
                       "C24030 line 012 (+039) utilities (NAICS 22; waste management is in emp_professional)"),
     "emp_trade": ("Wholesale & retail trade jobs", "ISIC G (LFS group 7)", "C24030 lines 008, 009 (+035, 036)"),
     "emp_transport": ("Transport & storage jobs", "ISIC H (LFS group 8)", "C24030 line 011 (+038)"),
@@ -346,8 +370,10 @@ METRICS += _m("unemployed", "Unemployed persons", "persons", "extensive", "lower
               US_BASE + " B23025_E005 civilian unemployed.", _LK, _US)
 METRICS += _m("unemployment_rate", "Unemployment rate", "%", "intensive", "lower",
               "Unemployed as a share of the labour force.",
-              LKA_BASE + " unemployed / labour force x 100 (district values equal LFS Table 12/5.3; inside a "
-              "district the DS-division rate follows the Census 2024 pattern scaled to the LFS district rate).",
+              LKA_BASE + " unemployed / labour force x 100. Inside a district the DS-division rate follows the "
+              "Census 2024 pattern (employed and unemployed are spread separately with their own census "
+              "counts), so each district's census-DS totals equal LFS Table 12 (COD-AB district sums differ "
+              "slightly where boundaries differ, see above); national rate 4.4% as published.",
               US_BASE + " B23025_E005 / B23025_E003 x 100 (civilian unemployment rate, the official US "
               "definition; Armed Forces excluded from the denominator).", _LK, _US)
 METRICS += _m("lfpr", "Labour force participation rate", "%", "intensive", "higher",
@@ -360,13 +386,13 @@ _LKA_CLS_BASE = (LKA_BASE + " Occupation: province employment by ISCO-08 major g
                  "district x industry by iterative proportional fitting (seed = district x ISIC-group employment "
                  "x national occupation mix of each industry from ILOSTAT's 2024 LFS cross-tab; margins = "
                  "Table 14 province totals and district x industry totals), then cut into classes with national "
-                 "ISCO-08 2-digit shares of LFS 2024 (ILOSTAT). Class mapping: ")
+                 "ISCO-08 2-digit shares of LFS 2024 (ILOSTAT)." + LKA_DS_MIX + " Class mapping: ")
 _US_CLS_BASE = US_BASE + " C24010 (civilian employed 16+, male + female lines). Class mapping: "
 for k in CLASSES:
     label, desc, lka_m, us_m = CLASS_META[k]
     if k == "cit_soldiers":
-        METRICS += _m(k, label, "persons", "extensive", "neutral", desc, LKA_BASE + " " + lka_m,
-                      US_BASE + " " + us_m, _LK + ["worldbank_wdi"], _US)
+        METRICS += _m(k, label, "persons", "extensive", "neutral", desc, LKA_BASE + " " + lka_m + LKA_DS_MIX,
+                      US_BASE + " " + us_m, _LKO + ["worldbank_wdi"], _US)
     else:
         METRICS += _m(k, label, "persons", "extensive", "neutral", desc, _LKA_CLS_BASE + lka_m,
                       _US_CLS_BASE + us_m, _LKO, _US)
@@ -374,7 +400,7 @@ for k in CLASSES:
 _LKA_IND_BASE = (LKA_BASE + " Industry: province employment by ISIC Rev.4 group (LFS Table 15) split to districts "
                  "inside each sector block (agriculture / industry / services) in proportion to the district "
                  "sector employment of Table 13; combined LFS groups are split with national ILOSTAT 2024 "
-                 "section shares. Definition: ")
+                 "section shares." + LKA_DS_MIX + " Definition: ")
 _US_IND_BASE = (US_BASE + " C24030 sex by industry for the civilian employed population 16+ (NAICS-based "
                 "census industry codes; male + female lines). Definition: ")
 for k in INDUSTRIES:
@@ -558,7 +584,8 @@ def ilo_sections(year: int = 2024) -> pd.Series:
 def ilo_industry_occupation(year: int = 2024) -> pd.DataFrame:
     """ISIC section x ISCO-08 major group (persons); suppressed cells -> 0; X merged into group 6."""
     d = _ilo("EMP_TEMP_ECO_OCU_NB_A", year)
-    d = d[d.classif1.str.startswith("ECO_ISIC4_") & d.classif2.str.startswith("OCU_ISCO08_")]
+    d = d[d.classif1.str.startswith("ECO_ISIC4_") & d.classif2.str.startswith("OCU_ISCO08_")
+          & (d.classif1 != "ECO_ISIC4_TOTAL") & (d.classif2 != "OCU_ISCO08_TOTAL")]
     t = d.pivot_table(index="classif1", columns="classif2", values="obs_value", aggfunc="sum") * 1000.0
     t.index = t.index.str.replace("ECO_ISIC4_", "", regex=False)
     t.columns = t.columns.str.replace("OCU_ISCO08_", "", regex=False)
@@ -566,6 +593,17 @@ def ilo_industry_occupation(year: int = 2024) -> pd.DataFrame:
     if "X" in t.columns:
         t["6"] = t.get("6", 0.0) + t["X"]
     return t[ISCO1]
+
+
+def ilo_sector_by_area(year: int = 2024) -> pd.DataFrame:
+    """Employment by area (rows urban / rural; ILO 'rural' includes the estate sector) x sector
+    (agri / industry / services), persons."""
+    d = _ilo("EMP_TEMP_SEX_ECO_GEO_NB_A", year)
+    secs = {"ECO_SECTOR_AGR": "agri", "ECO_SECTOR_IND": "industry", "ECO_SECTOR_SER": "services"}
+    d = d[d.classif1.isin(secs) & d.classif2.isin(["GEO_COV_URB", "GEO_COV_RUR"])]
+    t = d.pivot_table(index="classif2", columns="classif1", values="obs_value", aggfunc="sum") * 1000.0
+    t = t.rename(index={"GEO_COV_URB": "urban", "GEO_COV_RUR": "rural"}, columns=secs)
+    return t.loc[["urban", "rural"], SECTORS]
 
 
 # ---------------------------------------------------------------------------------------------
@@ -669,6 +707,19 @@ def ipf3(seed: np.ndarray, m_dg: np.ndarray, m_o: np.ndarray, iters: int = 2000,
     return X, err
 
 
+def ipf2(seed: np.ndarray, rows: np.ndarray, cols: np.ndarray, iters: int = 5000, tol: float = 1e-6) -> np.ndarray:
+    """Rake a non-negative (n, k) matrix to row sums `rows` and column sums `cols` (same grand total)."""
+    X = seed.astype(float).copy()
+    for _ in range(iters):
+        s = X.sum(axis=1)
+        X *= np.divide(rows, s, out=np.zeros_like(rows, dtype=float), where=s > 0)[:, None]
+        s = X.sum(axis=0)
+        X *= np.divide(cols, s, out=np.zeros_like(cols, dtype=float), where=s > 0)[None, :]
+        if np.abs(X.sum(axis=1) - rows).max() <= tol * max(rows.sum(), 1.0):
+            break
+    return X
+
+
 def lka_district_estimates() -> tuple[pd.DataFrame, pd.DataFrame, dict]:
     pages = _lfs_pages()
     st = lfs_district_status(pages)
@@ -749,21 +800,28 @@ def lka_district_estimates() -> tuple[pd.DataFrame, pd.DataFrame, dict]:
         c = ISCO2_CLASS[k]
         cls9_nonag[c] = cls9_nonag.get(c, 0.0) + v / tot
 
-    gi = {g: i for i, g in enumerate(LFS_GROUPS)}
-    rows = []
+    rows, cls_sec_rows = [], []
     for d in st.index:
         X = X_all[d]
-        rec = {c: 0.0 for c in CLASSES}
-        for j, major in enumerate(ISCO1):
-            col = X[:, j]
-            if major == "9":
-                rec["cit_farmers"] += col[gi["1"]]
-                rest = col.sum() - col[gi["1"]]
-                for c, s in cls9_nonag.items():
-                    rec[c] += rest * s
-            else:
-                for c, s in major_class[major].items():
-                    rec[c] += col.sum() * s
+        # classes per sector block (agri / industry / services): lets DS divisions with a different
+        # sector mix get a different class mix (see build_lka)
+        by_sec = {s: {c: 0.0 for c in CLASSES} for s in SECTORS}
+        for i, g in enumerate(LFS_GROUPS):
+            r = by_sec[GROUP_SECTOR[g]]
+            for j, major in enumerate(ISCO1):
+                v = X[i, j]
+                if major == "9":
+                    if g == "1":                     # elementary workers in agriculture = ISCO 92
+                        r["cit_farmers"] += v
+                    else:
+                        for c, s in cls9_nonag.items():
+                            r[c] += v * s
+                else:
+                    for c, s in major_class[major].items():
+                        r[c] += v * s
+        for s in SECTORS:
+            cls_sec_rows.append({"admin_id": d, "sector": s, **by_sec[s]})
+        rec = {c: sum(by_sec[s][c] for s in SECTORS) for c in CLASSES}
         for j, major in enumerate(ISCO1):
             rec[f"isco_{major}"] = X[:, j].sum()
         # industries: split combined LFS groups with national ILOSTAT section shares
@@ -794,8 +852,12 @@ def lka_district_estimates() -> tuple[pd.DataFrame, pd.DataFrame, dict]:
         out[f"isco_{major}"] = est[f"isco_{major}"]
 
     prov = pd.concat([occ.add_prefix("isco_"), ind.drop(columns="total").add_prefix("isic_group_")], axis=1)
+    cls_sec = pd.DataFrame(cls_sec_rows).set_index(["admin_id", "sector"])
+    # class blocks add up to the district sector employment the IPF was raked to
+    blk = cls_sec.sum(axis=1).unstack("sector")
+    assert (blk.sub(emp_dg.T.groupby(GROUP_SECTOR).sum().T[SECTORS]).abs().max() < 1).all()
     diag = {"ipf_max_abs_error": float(max_err), "nat_ind": nat_ind, "nat_occ": nat_occ,
-            "isco2": isco2, "sections": sections}
+            "isco2": isco2, "sections": sections, "cls_sec": cls_sec}
     return out, prov, diag
 
 
@@ -806,37 +868,70 @@ def build_lka() -> None:
           f"unemployment {100 * dist.unemployed.sum() / dist.labor_force.sum():.2f}%  (IPF max error "
           f"{diag['ipf_max_abs_error']:.3g} persons)")
 
-    # ---- Census 2024 DS-division distribution
-    cen = portal_ds_values(["tot_EcoAct", "tot_EcoAct_Emp", "tot_EcoAct_Unemp"])
+    # ---- Census 2024 DS divisions (the LFS district geography): spread each district's LFS values
+    cen = portal_ds_values(["tot_EcoAct", "tot_EcoAct_Emp", "tot_EcoAct_Unemp", "tot_Sec", "tot_Sec_Ur"])
+    g24 = _portal_ds_geometry().set_index("ADM_ID")
+    cen["district"] = "LK" + g24.BELONGS_TO.reindex(cen.index).astype(str)
+    assert set(cen.district) == set(dist.index), "census DS districts do not match the LFS districts"
     print(f"  Census 2024 DS counts: employed {cen.tot_EcoAct_Emp.sum():,.0f}, unemployed "
-          f"{cen.tot_EcoAct_Unemp.sum():,.0f}, persons 15+ {cen.tot_EcoAct.sum():,.0f} ({len(cen)} DS divisions)")
+          f"{cen.tot_EcoAct_Unemp.sum():,.0f}, persons 15+ {cen.tot_EcoAct.sum():,.0f}, urban population "
+          f"{cen.tot_Sec_Ur.sum() / cen.tot_Sec.sum():.1%} ({len(cen)} DS divisions)")
+
+    def spread(dist_val: pd.Series, weight: pd.Series) -> pd.Series:
+        wsum = weight.groupby(cen.district).transform("sum")
+        return cen.district.map(dist_val) * weight / wsum
+
+    ds = pd.DataFrame(index=cen.index)
+    ds["employed"] = spread(dist.employed, cen.tot_EcoAct_Emp)
+    ds["unemployed"] = spread(dist.unemployed, cen.tot_EcoAct_Unemp)
+    ds["pop15"] = spread(dist.pop15, cen.tot_EcoAct)
+
+    # sector split inside each district: seed = DS employed x (urban share x national urban sector mix +
+    # rural share x national rural sector mix), raked to DS employed and to the district sector totals
+    area = ilo_sector_by_area()
+    mix = area.div(area.sum(axis=1), axis=0)
+    urb = (cen.tot_Sec_Ur / cen.tot_Sec).clip(0, 1).to_numpy()
+    print("  ILOSTAT 2024 sector mix: urban " + ", ".join(f"{s} {mix.at['urban', s]:.1%}" for s in SECTORS)
+          + "; rural " + ", ".join(f"{s} {mix.at['rural', s]:.1%}" for s in SECTORS))
+    seed = ds.employed.to_numpy()[:, None] * (urb[:, None] * mix.loc["urban"].to_numpy()[None, :]
+                                              + (1 - urb[:, None]) * mix.loc["rural"].to_numpy()[None, :])
+    sec_ds = pd.DataFrame(0.0, index=ds.index, columns=SECTORS)
+    for d in dist.index:
+        m = (cen.district == d).to_numpy()
+        rows_m = ds.employed.to_numpy()[m]
+        cols_m = dist.loc[d, [f"sector_{s}" for s in SECTORS]].to_numpy(float)
+        cols_m = cols_m * rows_m.sum() / cols_m.sum()       # Table 13 vs Table 12 rounding (<= 3 persons)
+        sec_ds.loc[m, :] = ipf2(seed[m], rows_m, cols_m)
+    for k in INDUSTRIES:
+        s = IND_SECTOR[k]
+        ds[k] = sec_ds[s] * cen.district.map(dist[k] / dist[f"sector_{s}"])
+    cls_sec = diag["cls_sec"]
+    for c in CLASSES:
+        ds[c] = sum(sec_ds[s] * cen.district.map(cls_sec[c].xs(s, level="sector") / dist[f"sector_{s}"])
+                    for s in SECTORS)
+
+    # ---- move the census-DS values onto the COD-AB DS divisions (population-weighted overlay)
     xw = ds24_to_cod()
     n_multi = int((xw.groupby("ds24").size() > 1).sum())
     print(f"  2024 DS -> COD-AB DS crosswalk: {len(xw)} links ({n_multi} census DS split over >1 COD DS)")
-    c = xw.merge(cen, left_on="ds24", right_index=True)
-    vals = ["tot_EcoAct", "tot_EcoAct_Emp", "tot_EcoAct_Unemp"]
-    for v in vals:
-        c[v] = c[v] * c.share
-    cod = c.groupby("adm3")[vals].sum()
+    ext = ["employed", "unemployed", "pop15"] + CLASSES + INDUSTRIES
+    c = xw.merge(ds[ext], left_on="ds24", right_index=True)
     adm3 = load_admin(cc, "adm3").set_index("admin_id")
-    cod = cod.reindex(adm3.index).fillna(0.0)
-    cod["district"] = adm3.parent_id
-
-    def distribute(dist_val: pd.Series, weight: pd.Series) -> pd.Series:
-        wsum = weight.groupby(cod.district).transform("sum")
-        share = np.where(wsum > 0, weight / wsum.replace(0, np.nan), 0.0)
-        return cod.district.map(dist_val) * share
-
+    cod = c[ext].mul(c.share, axis=0).groupby(c.adm3).sum().reindex(adm3.index)
+    assert cod.notna().all().all(), "COD DS division without census values"
     out = pd.DataFrame(index=adm3.index)
-    out["employed"] = distribute(dist.employed, cod.tot_EcoAct_Emp)
-    out["unemployed"] = distribute(dist.unemployed, cod.tot_EcoAct_Unemp)
-    out["labor_force"] = out.employed + out.unemployed
-    pop15 = distribute(dist.pop15, cod.tot_EcoAct)
+    out["employed"] = cod.employed
+    out["unemployed"] = cod.unemployed
+    out["labor_force"] = cod.employed + cod.unemployed
     out["unemployment_rate"] = 100 * out.unemployed / out.labor_force.replace(0, np.nan)
-    out["lfpr"] = 100 * out.labor_force / pop15.replace(0, np.nan)
-    emp_share = out.employed / cod.district.map(dist.employed)
+    out["lfpr"] = 100 * out.labor_force / cod.pop15.replace(0, np.nan)
     for k in CLASSES + INDUSTRIES:
-        out[k] = cod.district.map(dist[k]) * emp_share
+        out[k] = cod[k]
+    # COD-AB and census 2024 DS boundaries differ in a few places, so COD district sums can deviate
+    # slightly from the LFS district figures (national totals are preserved exactly)
+    dev = (out.employed.groupby(adm3.parent_id).sum() / dist.employed - 1).abs().sort_values()
+    print(f"  COD-AB district employed vs LFS district: {int((dev > 1e-6).sum())} districts differ, max "
+          f"{dev.max():.2%} ({dev.index[-1]})")
     out.index.name = "admin_id"
     out = out.reset_index()
     util.write_admin(cc, DOMAIN, "adm3", out)
@@ -853,6 +948,12 @@ def build_lka() -> None:
     nat_occ, nat_ind = diag["nat_occ"], diag["nat_ind"]
     assert abs(tot[CLASSES].sum() - tot.employed) < 5, "classes do not sum to employed"
     assert abs(tot[INDUSTRIES].sum() - tot.employed) < 5, "industries do not sum to employed"
+    assert (out[CLASSES].sum(axis=1) - out.employed).abs().max() < 1, "DS classes do not sum to DS employed"
+    assert (out[INDUSTRIES].sum(axis=1) - out.employed).abs().max() < 1, "DS industries do not sum to DS employed"
+    assert (out[CLASSES + INDUSTRIES] >= 0).all().all(), "negative DS estimates"
+    # per-district class / industry totals are those of the district estimates (up to the boundary overlay)
+    dsum = ds[CLASSES + INDUSTRIES].groupby(cen.district).sum()
+    assert (dsum - dist[CLASSES + INDUSTRIES]).abs().max().max() < 5, "census-DS values do not add up to districts"
     assert abs(tot.employed - nat_occ["total"]) < 30, "employed differs from LFS national total"
     assert abs(dist[[f"isco_{m}" for m in ISCO1]].sum().to_numpy() - nat_occ[ISCO1].to_numpy()).max() < 50
     assert abs(tot.emp_agri - nat_ind["1"]) < 30 and abs(tot.emp_manufacturing - nat_ind["3"]) < 30

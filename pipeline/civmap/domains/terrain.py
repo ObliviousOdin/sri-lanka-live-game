@@ -17,11 +17,13 @@ Output (data/interim/<country>/terrain/hex.csv), one row per hex of civmap.core.
 * Land cover (ESA WorldCover 10 m 2021 v200).  Sri Lanka: every native 10 m pixel (whole tiles
   downloaded, processed in windows).  United States: the COG's 4x internal overview (~40 m).
   The overviews are MODE-resampled (checked: 99.6-99.98% of 8x overview pixels equal the mode
-  of their 8x8 block of 10 m pixels).  On 60 random ~20 x 17 km US land windows the 4x
-  overview's class shares differed from the native 10 m shares by -3.0% relative for built-up
-  (mean |error| 0.12 percentage points, max 2.0), -5.7% for shrubland and within +-1% for the
-  other classes; the 8x overview (used earlier) was twice as biased (built-up -7.6%, max 4.4
-  points; Manhattan / Silicon Valley hexes +4 / +7 points built-up).
+  of their 8x8 block of 10 m pixels), so scattered minority classes shrink.  Checked against
+  the native 10 m pixels around 80 random US land hexes (area-uniform, so mostly rural): at 4x
+  built-up is -11% relative (max 0.5 percentage points per hex), shrub / wetland / moss -1 to
+  -2%, all other classes within +-0.5%; at 8x (used earlier) built-up was -26%.  In dense
+  urban hexes the bias reverses because built-up is the dominant class (4x: Manhattan +1.9,
+  Silicon Valley +2.9 points; 8x: +3.9 / +7.0).  Sri Lanka uses native 10 m, so US built-up
+  is somewhat understated relative to Sri Lanka (national US built_km2 rose 12% from 8x to 4x).
   Fractions are over the whole hex; ocean outside the tiles / no-data = water.
 * Allocation weights cropland_km2 / tree_km2 / built_km2 / grass_km2 = class share of the
   hex's *in-country* pixels x core land_km2, so Canadian / Mexican land in border hexes does
@@ -188,17 +190,20 @@ _LC_METHOD = (
     "described as whole hexes (foreign land included); the *_km2 weights are in-country only."
 )
 _RES_TXT = ("Sri Lanka: all native 10 m pixels; USA: the COG's 4x internal overview, 1/3000 deg ~ 40 m, "
-            "which was built with mode resampling, so scattered minority classes are slightly "
-            "under-represented: against native 10 m pixels on 60 random ~20 x 17 km US land windows, "
-            "built-up was -3.0% relative (mean |error| 0.12 percentage points, max 2.0), shrubland "
-            "-5.7%, all other classes within +-1%")
+            "which was built with mode resampling, so scattered minority classes are under-represented: "
+            "against native 10 m pixels around 80 random US land hexes (mostly rural), built-up was -11% "
+            "relative (max 0.5 percentage points per hex), shrub/wetland/moss -1 to -2%, other classes "
+            "within +-0.5%; in dense urban hexes built-up is instead over-represented by ~2-3 points "
+            "(Manhattan, Silicon Valley). Sri Lankan shares (10 m) have no such bias")
 _W_METHOD = (
     "{what} area (km2) = share of the hex's in-country WorldCover pixels (centre inside the "
     "COD-AB / Census cartographic boundary union) in {cls} x core land_km2 of the hex (WorldPop "
     "pixel-area crosswalk). Border hexes therefore exclude Canadian/Mexican land; water-ring hexes "
     "with land_km2 = 0 get 0. Hexes with land_km2 > 0 but no in-country WorldCover pixel at the "
-    "processing resolution fall back to the whole-hex non-water shares. Used by reconcile as the "
-    "'{w}' allocation weight."
+    "processing resolution fall back to the whole-hex non-water shares. Intended as the '{w}' "
+    "allocation weight; note that civmap.reconcile currently derives its '{w}' weight from the "
+    "whole-hex lc_* fraction x piece land area instead, which under-weights part-sea coastal hexes "
+    "(Sri Lanka national totals: built -13%, grass+shrub -5%, cropland -2% vs this column)."
 )
 _CLIM_METHOD = (
     "{bio} of the WorldClim 2.1 1970-2000 normals, nearest-pixel value at the centres of the hex's "
@@ -213,7 +218,10 @@ METRICS = [
            "2021 release", "Mean height of the land (and inland-water) surface in the hex (DSM, metres "
            "above EGM2008 geoid).", _DEM_METHOD, "neutral"),
     Metric("elev_min_m", "Minimum elevation", "m", "elevation", "intensive", "land", "hex", _ELEV_SRC,
-           "2021 release", "Lowest land pixel in the hex.", _DEM_METHOD, "neutral"),
+           "2021 release", "Lowest land pixel in the hex. A small pit can set it: a few eastern US hexes "
+           "reach 70-114 m below sea level in deep ~0.5 km-wide pits, probably open-pit quarries (e.g. "
+           "near Columbia SC and Richmond VA); relief_m uses the 5th percentile and is unaffected.",
+           _DEM_METHOD, "neutral"),
     Metric("elev_max_m", "Maximum elevation", "m", "elevation", "intensive", "land", "hex", _ELEV_SRC,
            "2021 release", "Highest land pixel in the hex (sharp peaks are smoothed by the ~90 m pixel "
            "size in both countries).", _DEM_METHOD, "neutral"),

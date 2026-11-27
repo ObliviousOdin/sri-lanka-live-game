@@ -19,10 +19,12 @@ Sri Lanka (2024)
     (Agricultural Activities); fisheries from the Ministry of Fisheries.
 
 United States
-  * BEA SAGDP2 state GDP of NAICS 11 (latest year, 2025): farms (line 4) -> counties by USDA NASS
-    2022 Census of Agriculture market value of agricultural products sold; forestry, fishing &
-    related activities (line 5) -> counties by ACS 2020-2024 employment in agriculture, forestry,
-    fishing and hunting.
+  * BEA SAGDP2 state GDP of NAICS 11 (latest year, 2025) -> counties by each county's share of its
+    state's NAICS 11 GDP in BEA CAGDP2 (county GDP by industry, latest county year 2024).  BEA
+    suppresses some county cells '(D)' and reports Virginia county + independent-city combinations
+    and Maui + Kalawao as single units; both are resolved with a proxy: farms (SAGDP2 line 4) by
+    USDA NASS 2022 Census of Agriculture sales, forestry, fishing & related (line 5) by ACS 2020-2024
+    employment in agriculture, forestry, fishing and hunting.
   * NOAA Fisheries FOSS commercial landings by state (2024).
 """
 from __future__ import annotations
@@ -40,8 +42,7 @@ from shapely.geometry import Polygon
 
 from civmap import util
 from civmap.config import US_STATE_FIPS, interim_dir
-from civmap.core import SOURCES as CORE_SOURCES
-from civmap.core import load_admin, load_hexes, load_pieces
+from civmap.core import load_admin, load_pieces
 from civmap.fetch import fetch, unzip
 from civmap.schema import Metric, Source, write_domain_meta
 
@@ -52,6 +53,7 @@ LKA_YEAR = 2024          # national accounts, paddy (Maha 2023/24 + Yala 2024), 
 LKA_INLAND_YEAR = 2023   # latest inland & aquaculture production by district (MoF)
 LKA_CENSUS_YEAR = 2014   # Economic Census 2013/14 - Agricultural Activities (perennial crop extents)
 US_GDP_YEAR = 2025       # BEA SAGDP2 (state GDP by industry)
+US_CTY_GDP_YEAR = 2024   # BEA CAGDP2 (county GDP by industry; latest county year)
 US_COA_YEAR = 2022       # Census of Agriculture
 US_FISH_YEAR = 2024      # NOAA FOSS commercial landings (same year as Sri Lanka marine production)
 ACS_YEAR = 2024
@@ -75,6 +77,7 @@ URL = {
     "mof2024": "https://www.fisheries.gov.lk/media/annual_statistics/files/2026/Fisheries_Statistics_-2024_compressed.pdf",
     "pgdp_press": "https://economynext.com/sri-lankas-regional-economic-disparities-narrow-central-bank-254593/",
     "sagdp": "https://apps.bea.gov/regional/zip/SAGDP.zip",
+    "cagdp2": "https://apps.bea.gov/regional/zip/CAGDP2.zip",
     "foss": "https://apps-st.fisheries.noaa.gov/ods/foss/landings/",
     "cb2021": "https://www2.census.gov/geo/tiger/GENZ2021/shp/cb_2021_us_county_500k.zip",
     "cainc45": "https://apps.bea.gov/regional/zip/CAINC45.zip",
@@ -83,8 +86,6 @@ URL = {
 # ---------------------------------------------------------------------------------------------
 # Sources
 # ---------------------------------------------------------------------------------------------
-
-_core = {s.id: s for s in CORE_SOURCES}
 
 SOURCES: list[Source] = [
     Source("dcs_qgdp2024_rev",
@@ -119,7 +120,7 @@ SOURCES: list[Source] = [
            "(acres); Table 28 cattle and buffalo population; Table 30 poultry population. Latest agricultural "
            "census with district detail for perennial crops and livestock."),
     Source("mof_fisheries_stats_2024",
-           "Fisheries Statistics 2024 (provisional; data year 2023) - Tables 4.3 and 4.9",
+           "Fisheries Statistics 2024 (provisional; data year 2023) - Table 4.3",
            "Ministry of Fisheries, Aquatic and Ocean Resources, Sri Lanka (Statistics Unit) / DFAR / NAQDA",
            URL["mof2024"], "open (government publication)", "2023", ["lka"],
            "Table 4.3: national fish production by sub-sector (marine; inland & aquaculture) and "
@@ -148,6 +149,14 @@ SOURCES: list[Source] = [
            f"SAGDP2__ALL_AREAS_1997_{US_GDP_YEAR}.csv, millions of current dollars, column {US_GDP_YEAR} "
            "(BEA release of Sept 2026). Line 3 agriculture, forestry, fishing and hunting = line 4 farms + "
            "line 5 forestry, fishing, and related activities."),
+    Source("bea_cagdp2",
+           "CAGDP2: Gross domestic product (GDP) by county and metropolitan area, by industry (current dollars)",
+           "U.S. Bureau of Economic Analysis", URL["cagdp2"], "public domain", str(US_CTY_GDP_YEAR), ["usa"],
+           f"CAGDP2__ALL_AREAS_2001_{US_CTY_GDP_YEAR}.csv, line 3 (agriculture, forestry, fishing and hunting), "
+           f"column {US_CTY_GDP_YEAR}, thousands of current dollars. Used for the within-state county shares "
+           "of NAICS 11 GDP. Cells suppressed '(D)' and BEA combination areas (Virginia county + independent "
+           "cities, Maui + Kalawao) are resolved as described in the ag_gva_usd method. Connecticut is "
+           "published for the 9 planning regions."),
     Source("usda_coa2022",
            "2022 Census of Agriculture, Volume 1, Chapter 2: County Level Data (state text files <st>v1.txt)",
            "USDA National Agricultural Statistics Service",
@@ -155,10 +164,11 @@ SOURCES: list[Source] = [
            "public domain", "2022", ["usa"],
            "Table 1 County Summary Highlights (farms; total cropland acres; market value of agricultural "
            "products sold, $1,000) and Table 30 Land in Orchards (acres). (D) = withheld to avoid disclosing "
-           "individual operations (filled as described in the metric methods). Published for 3,078 county "
-           "units: Alaska is tabulated for 5 agricultural census districts, Connecticut for its 8 former "
-           "counties, Virginia's independent cities other than Chesapeake, Suffolk and Virginia Beach are not "
-           "tabulated separately. The Quick Stats bulk file and API were not usable (file gateway / API key)."),
+           "individual operations (filled as described in the metric methods). Published for 3,079 county "
+           "units in the 50 states: Alaska is tabulated for 5 agricultural census districts, Connecticut for "
+           "its 8 former counties; Virginia's independent cities other than Chesapeake, Suffolk and Virginia "
+           "Beach, Baltimore city (MD), St. Louis city (MO) and Kalawao (HI) have no county column. The Quick "
+           "Stats bulk file and API were not usable (file gateway / API key)."),
     Source("bea_cainc45", "CAINC45: Farm income and expenses by county (thousands of dollars)",
            "U.S. Bureau of Economic Analysis", URL["cainc45"], "public domain", str(US_COA_YEAR), ["usa"],
            f"CAINC45_AK_1969_{US_COA_YEAR}.csv, line 10 cash receipts from marketings, {US_COA_YEAR}. Used only as "
@@ -189,10 +199,9 @@ SOURCES: list[Source] = [
            ["usa"], "Used only as the weight that splits Census of Agriculture values for Connecticut's "
            "former counties into planning regions (cropland inside each former county x region cell)."),
     Source("worldbank_wdi", "World Development Indicators", "World Bank",
-           "https://data.worldbank.org", "CC BY 4.0", "2021-2025", ["lka", "usa"],
+           "https://data.worldbank.org", "CC BY 4.0", "2021-2024", ["lka", "usa"],
            "PA.NUS.FCRF (LKR per USD, period average) for currency conversion; NV.AGR.TOTL.CD, ER.FSH.CAPT.MT "
            "and ER.FSH.AQUA.MT only to check national totals."),
-    _core["census_pep_2023"],
 ]
 
 # ---------------------------------------------------------------------------------------------
@@ -223,45 +232,53 @@ _LKA_GVA_METHOD = (
     "the district index is rescaled so that the province totals equal the agriculture shares of the CBSL "
     "Provincial GDP 2024 release: North Western 20.0 %, Central 13.9 %, Southern 11.8 % (quoted), Western "
     "derived as (42.4 % x GVA - 47.6 % x industry - 44.5 % x services) / agriculture with the DCS Abstract "
-    "Table 10.2 sector values (i.e. assuming net product taxes are distributed like GVA); the remaining "
+    "Table 10.2 sector values (i.e. assuming net product taxes are distributed like GVA) = 11.86 %, capped "
+    "at 11.7 % because the release ranks Southern (11.8 %) third (the residual carries ~1 pp rounding "
+    "error from shares quoted to 0.1 pp); the remaining "
     "share is split among the other five provinces in proportion to their index totals. Within a province "
     "districts keep their index proportions. Converted at the World Bank PA.NUS.FCRF 2024 average rate. "
     "Hex allocation: cropland weight."
 )
 
 _US_GVA_METHOD = (
-    f"USA {US_GDP_YEAR}: BEA SAGDP2 state GDP, current dollars. Line 4 (farms) is split to counties by "
-    f"each county's share of the state's {US_COA_YEAR} Census of Agriculture market value of agricultural "
-    "products sold (Table 1); line 5 (forestry, fishing, and related activities: support activities for "
-    f"agriculture & forestry, forestry & logging, fishing, hunting & trapping) by the county share of ACS "
+    f"USA {US_GDP_YEAR}: BEA SAGDP2 state GDP of agriculture, forestry, fishing and hunting (line 3), "
+    f"current dollars, split to counties by each county's share of its state's NAICS 11 GDP in BEA CAGDP2 "
+    f"{US_CTY_GDP_YEAR} (line 3; published county values, the latest county year). Counties sum exactly "
+    "to the BEA state rows (50 states + DC). Proxy used only where BEA publishes no single-county value: "
+    f"SAGDP2 line 4 (farms) shared by the county's {US_COA_YEAR} Census of Agriculture market value of "
+    "products sold (Table 1; sales-share caveats as for ag_sales_usd) + line 5 (forestry, fishing, and "
+    "related activities) shared by ACS "
     f"{ACS_YEAR - 4}-{ACS_YEAR} 5-year employment in agriculture, forestry, fishing and hunting (C24030 "
-    "lines 4 + 31, place of residence). District of Columbia: all to 11001. Counties sum exactly to the "
-    "BEA state rows (50 states + DC). Sales-share caveats as for ag_sales_usd (withheld cells filled; "
-    "Alaska split by BEA farm receipts, Connecticut by cropland). Hex allocation: cropland weight."
+    "lines 4 + 31, place of residence). (a) CAGDP2 cells suppressed '(D)': the state row minus the "
+    "disclosed units is shared among the suppressed units in proportion to the proxy; (b) BEA "
+    "combination areas (Virginia county + independent cities, Maui + Kalawao) are split to their member "
+    "counties in proportion to the proxy. Hex allocation: cropland weight."
 )
 
 _US_SALES_METHOD = (
     f"USDA NASS {US_COA_YEAR} Census of Agriculture, county Table 1, 'Market value of agricultural products "
-    "sold' ($1,000 x 1,000; crops incl. nursery & greenhouse + livestock, poultry & products; incl. "
-    "landlord's share is NOT included at county level). Withheld '(D)' county values: the state total minus "
-    "the disclosed counties is shared among the withheld counties in proportion to their number of farms. "
+    "sold' ($1,000 x 1,000; gross sales of crops incl. nursery & greenhouse + livestock, poultry & their "
+    "products, before expenses; county values sum to the published state totals). Withheld '(D)' county "
+    "values: the state total minus the disclosed counties is shared among the withheld counties in "
+    "proportion to their number of farms. "
     "Alaska is published only for 5 agricultural census districts whose borough composition is not given "
     "in the text files, so the Alaska state total is split to boroughs in proportion to BEA CAINC45 2022 "
     "farm cash receipts (non-zero for Aleutians West, Fairbanks North Star, Juneau, Kenai Peninsula, "
     "Matanuska-Susitna). Connecticut's 8 former counties are split to the 9 "
     "planning regions by the cropland inside each (former county x planning region) intersection (Census "
-    "cb_2021 county polygons overlaid on cb_2023 planning regions). Virginia independent cities that the "
-    "census does not tabulate separately (all except Chesapeake, Suffolk, Virginia Beach) and Kalawao "
-    "County, HI get 0."
+    "cb_2021 county polygons overlaid on cb_2023 planning regions). Units without a county column in the "
+    "census tables get 0: Virginia independent cities other than Chesapeake, Suffolk and Virginia Beach "
+    "(35), Baltimore city (MD), St. Louis city (MO) and Kalawao County (HI). District of Columbia: no value."
 )
 
 METRICS: list[Metric] = [
     Metric("ag_gva_usd", "Agriculture, forestry & fishing GVA (Food)", "USD", "food", "extensive", "cropland",
            "admin_adm2",
            ["dcs_qgdp2024_rev", "dcs_abstract2025_agri", "dcs_ec2014_agri", "mof_fisheries_stats_2024",
-            "cbsl_pgdp2024_press", "dcs_abstract2025", "bea_sagdp2", "usda_coa2022", "census_acs5_2024",
+            "cbsl_pgdp2024_press", "dcs_abstract2025", "bea_sagdp2", "bea_cagdp2", "usda_coa2022",
+            "census_acs5_2024",
             "census_cb_2021", "bea_cainc45", "terrain_worldcover", "worldbank_wdi"],
-           f"USA {US_GDP_YEAR}; Sri Lanka {LKA_YEAR}",
+           f"USA {US_GDP_YEAR} (county shares {US_CTY_GDP_YEAR}); Sri Lanka {LKA_YEAR}",
            "Gross value added of agriculture, forestry and fishing (ISIC A / NAICS 11), current US dollars.",
            _US_GVA_METHOD + " | " + _LKA_GVA_METHOD, "higher"),
     Metric("ag_sales_usd", "Farm sales (market value of agricultural products sold)", "USD", "food",
@@ -280,10 +297,11 @@ METRICS: list[Metric] = [
            "minus disclosed counties: cropland shared by farms with cropland; orchards shared by the county's "
            "2017 orchard acres (Table 30, else farms x the state median acres per orchard farm) and capped at "
            "the county's cropland. Alaska / Connecticut are split as for ag_sales_usd (both acreages with the "
-           "same weights). Counties with no cropland: no value. | Sri Lanka: (tea + rubber + coconut "
+           "same weights). Counties with less than 200 acres of cropland: no value. | Sri Lanka: (tea + "
+           "rubber + coconut "
            "extent) / total agricultural land of small holdings and estates x 100, Economic Census 2013/14 "
-           "(DCS Abstract 2025 Table 5.2 for the crops in hectares, EC 2013/14 Table 2 for the land in acres "
-           "converted at 0.404686 ha/acre). Definitional difference: the US denominator is cropland (excludes "
+           "(tea and coconut: DCS Abstract 2025 Table 5.2 in hectares; rubber: EC 2013/14 Table 6.3.1; land: "
+           "EC 2013/14 Table 2; acres converted at 0.404686 ha/acre). Definitional difference: the US denominator is cropland (excludes "
            "permanent pasture and woodland), the Sri Lankan one all agricultural land of holdings (incl. home "
            "gardens); the US numerator excludes berries, nurseries and Christmas trees.",
            "neutral"),
@@ -300,9 +318,12 @@ METRICS: list[Metric] = [
            "activities). District tea production is not published (Tea Board production is by elevation), so "
            "extent is used. '..' read as 0.", "neutral", ["lka"]),
     Metric("rubber_ha", "Rubber extent", "ha", "food", "extensive", "tree", "admin_adm2",
-           ["dcs_abstract2025_agri"], str(LKA_CENSUS_YEAR), "Cultivated extent of rubber.",
-           "DCS Statistical Abstract 2025 Table 5.2, 2014 column (Economic Census 2013/14). '..' read as 0.",
-           "neutral", ["lka"]),
+           ["dcs_ec2014_agri", "dcs_abstract2025_agri"], str(LKA_CENSUS_YEAR), "Cultivated extent of rubber.",
+           "Economic Census 2013/14 report Table 6.3.1 (extent under rubber by district, acres x 0.404686). "
+           "Abstract 2025 Table 5.2 carries the same census figures in hectares but prints '..' for "
+           "Kurunegala (8,015 acres = 3,244 ha in the census report) although its national total "
+           "(112,141 ha) includes it; the district sum is checked against that total. Districts without "
+           "rubber are absent from the census table (0).", "neutral", ["lka"]),
     Metric("coconut_ha", "Coconut extent", "ha", "food", "extensive", "tree", "admin_adm2",
            ["dcs_abstract2025_agri"], str(LKA_CENSUS_YEAR), "Cultivated extent of coconut.",
            "DCS Statistical Abstract 2025 Table 5.2, 2014 column (Economic Census 2013/14; systematic "
@@ -315,29 +336,32 @@ METRICS: list[Metric] = [
            "(gross seasonal extent: land cropped in both seasons counts twice). '..' read as 0.",
            "higher", ["lka"]),
     Metric("fish_catch_t", "Marine fish production / commercial landings", "t", "food", "extensive", "coast",
-           "admin_adm2", ["dcs_abstract2025_agri", "mof_fisheries_stats_2024", "noaa_foss_landings"],
-           f"Sri Lanka {LKA_YEAR}; USA {US_FISH_YEAR}",
+           "admin_adm2", ["dcs_abstract2025_agri", "mof_fisheries_stats_2024"], str(LKA_YEAR),
            "Marine fish catch landed, metric tonnes (live weight).",
            f"Sri Lanka: DCS Statistical Abstract 2025 Table 5.34, marine fish production {LKA_YEAR} by the 15 "
            "fisheries districts (coastal + offshore/multi-day; Ministry of Fisheries estimates), mapped to "
            "administrative districts (Negombo -> Gampaha, Chilaw + Puttalam -> Puttalam, Tangalle -> "
            "Hambantota, Kalmunai -> Ampara; others same name; the mapping reproduces MoF Table 4.3's 2023 "
-           "administrative-district figures exactly). Inland districts 0. | USA: state level, see the adm1 "
-           "metric. Hex allocation: coast weight.", "higher", ["lka"]),
+           "administrative-district figures exactly). Inland districts 0. Comparable to the US commercial "
+           "marine landings (state level). Hex allocation: coast weight.", "higher", ["lka"]),
     Metric("fish_inland_t", "Inland fisheries & aquaculture production", "t", "food", "extensive", "land",
            "admin_adm2", ["mof_fisheries_stats_2024"], str(LKA_INLAND_YEAR),
-           "Fish and shrimp from reservoirs, lagoons-based aquaculture and farms, metric tonnes.",
+           "Inland capture fisheries and aquaculture production, metric tonnes.",
            f"Ministry of Fisheries 'Fisheries Statistics 2024' Table 4.3, inland & aquaculture production "
            f"{LKA_INLAND_YEAR} by administrative district (latest year with district detail; national "
            "2024 total 102,330 t per Abstract 5.33). No comparable US series (FOSS has no aquaculture and "
            "Great Lakes data end in 2018).", "higher", ["lka"]),
     Metric("fish_catch_t", "Marine fish production / commercial landings", "t", "food", "extensive", "coast",
            "admin_adm1", ["noaa_foss_landings"], str(US_FISH_YEAR),
-           "Commercial marine landings, metric tonnes (live weight).",
+           "Commercial marine landings, metric tonnes (landed weight as reported by NOAA); comparable to Sri "
+           "Lanka's marine fish production (district level).",
            f"NOAA FOSS commercial landings {US_FISH_YEAR}: pounds summed over all species (incl. confidential "
            "aggregates) by state of landing x 0.45359237 / 1,000; Florida East + West coasts combined. "
-           "'Process at sea' landings (at-sea processors, mostly Alaska pollock) are not attributed to any "
-           "state and are excluded; Great Lakes commercial landings are not in FOSS after 2018 and are "
+           "Weights are used as published, without conversion to live weight: mollusc rows (clams, oysters, "
+           "scallops, mussels; ~34 kt in 2024, about 1 % of the total) appear to be meat weight (e.g. sea "
+           "scallops 21 M lb worth $332 M). "
+           "'Process at sea' landings (at-sea processors; 83 kt in 2024, almost all Pacific hake) are not "
+           "attributed to any state and are excluded; Great Lakes commercial landings are not in FOSS after 2018 and are "
            "excluded (consistent with Sri Lanka's marine-only definition); states without marine landings "
            "= 0. Hex allocation: coast weight.", "higher", ["usa"]),
     Metric("fish_value_usd", "Commercial landings ex-vessel value", "USD", "food", "extensive", "coast",
@@ -764,8 +788,8 @@ def _html_text(path) -> str:
 
 def _lka_province_targets() -> tuple[dict[str, float], dict]:
     """Agriculture share of each quoted province (fraction) incl. the derived Western share."""
-    p = fetch(URL["pgdp_press"], "cbsl_pgdp2024_press", "lka/economy", "economynext_pgdp2024.html",
-              headers={"User-Agent": "Mozilla/5.0"})
+    # shared cache file with the economy domain (same source id)
+    p = fetch(URL["pgdp_press"], "cbsl_pgdp2024_press", "lka/economy", "economynext_pgdp2024.html")
     text = _html_text(p).replace("’", "'")
     for _, _, _, phrase in PGDP_2024_QUOTED:
         if phrase not in text:
@@ -960,7 +984,8 @@ def _coa_table30(text: str) -> tuple[dict, dict]:
     pages = _coa_pages(text, r"Table 30\.  Land in Orchards")
     counties, state = {}, None
     for pg in pages:
-        section = None
+        # continuation pages carry on with the county list without repeating the 'Counties' header
+        section = "county" if "(continued)" in pg.splitlines()[0] else None
         for l in pg.splitlines():
             if l.startswith("State Total"):
                 section = "state"
@@ -1108,6 +1133,7 @@ def _us_coa() -> tuple[pd.DataFrame, dict]:
                                                                 cap=cty.cropland_ac)
         info["withheld_filled"][st["abbr"]] = nfill
         info["state_sales_k"][st["abbr"]] = float(tot["sales_k"])
+        info["coa_county_units"] = info.get("coa_county_units", 0) + len(cty)
         mine = counties[counties.parent_id == fips]
         if fips == "02":
             # 5 agricultural census districts with unpublished borough composition: state total ->
@@ -1148,7 +1174,7 @@ def _us_coa() -> tuple[pd.DataFrame, dict]:
     return d, info
 
 
-def _us_state_gdp() -> pd.DataFrame:
+def _us_state_gdp(year: int = US_GDP_YEAR) -> pd.DataFrame:
     z = fetch(URL["sagdp"], "bea_sagdp2", "usa/bea")
     f = unzip(z, f"SAGDP2__ALL_AREAS_1997_{US_GDP_YEAR}.csv")
     d = pd.read_csv(f, dtype=str, encoding="latin-1")
@@ -1157,15 +1183,105 @@ def _us_state_gdp() -> pd.DataFrame:
     d = d[d.fips.isin(US_STATE_FIPS)]
     out = {}
     for line, key in ((3, "naics11"), (4, "farms"), (5, "forfish")):
-        r = d[d.LineCode.str.strip() == str(line)].set_index("fips")[str(US_GDP_YEAR)]
+        r = d[d.LineCode.str.strip() == str(line)].set_index("fips")[str(year)]
         out[key] = pd.to_numeric(r, errors="coerce") * 1e6
     out = pd.DataFrame(out)
     if out.isna().any().any():
-        raise ValueError(f"SAGDP2 {US_GDP_YEAR}: missing values {out[out.isna().any(axis=1)].index.tolist()}")
+        raise ValueError(f"SAGDP2 {year}: missing values {out[out.isna().any(axis=1)].index.tolist()}")
     gap = (out.farms + out.forfish - out.naics11).abs().max()
     if gap > 2e5:
         raise ValueError(f"SAGDP2: line 4 + line 5 != line 3 (max gap {gap:,.0f})")
     return out
+
+
+def _bea_members(units: pd.Index, names: pd.Series) -> dict[str, list[str]]:
+    """BEA county units -> Census 2023 county GEOIDs.  Combination areas are matched by name:
+    'Fairfax, Fairfax City + Falls Church, VA*' -> Fairfax County, Fairfax city, Falls Church city;
+    'Maui + Kalawao, HI*' -> Maui County, Kalawao County."""
+    adm = load_admin("usa", "adm2")
+    census = set(adm.admin_id)
+    keys = {(gid[:2], _us_key(nm)): gid for gid, nm in zip(adm.admin_id, adm.name)}
+    out: dict[str, list[str]] = {}
+    for u in units:
+        if u in census:
+            out[u] = [u]
+            continue
+        nm = re.sub(r",\s*[A-Z]{2}\*?$", "", str(names[u]).strip())
+        parts = [p.strip() for p in re.split(r"\+|,", nm) if p.strip()]
+        ids = []
+        for i, p in enumerate(parts):
+            # Virginia: the first part is the county ('James City'), the others independent cities
+            k = _us_key(re.sub(r"\s+City$", "", p)) + "city" if (i > 0 and u[:2] == "51") else _us_key(p)
+            gid = keys.get((u[:2], k))
+            if gid is None:
+                raise ValueError(f"CAGDP2: cannot match part {p!r} of BEA unit {u} {names[u]!r}")
+            ids.append(gid)
+        out[u] = ids
+    flat = [c for v in out.values() for c in v]
+    dup = sorted({c for c in flat if flat.count(c) > 1})
+    missing = sorted(census - set(flat))
+    if dup or missing:
+        raise ValueError(f"CAGDP2 units vs Census counties: duplicated {dup[:5]}, missing {missing[:5]}")
+    return out
+
+
+def _us_county_ag_gdp(proxy: pd.Series) -> tuple[pd.Series, dict]:
+    """BEA CAGDP2 NAICS 11 GDP (line 3, US_CTY_GDP_YEAR, $) on Census 2023 counties.
+
+    Suppressed '(D)' units share the state residual in proportion to `proxy` (summed over the unit's
+    member counties); combination areas are split to member counties in proportion to `proxy`."""
+    z = fetch(URL["cagdp2"], "bea_cagdp2", "usa/bea")
+    f = unzip(z, f"CAGDP2__ALL_AREAS_2001_{US_CTY_GDP_YEAR}.csv")
+    d = pd.read_csv(f, dtype=str, encoding="latin-1")
+    d = d[d.LineCode.notna()].copy()
+    d["fips"] = d.GeoFIPS.str.strip().str.strip('"').str.strip()
+    d["line"] = d.LineCode.str.strip()
+    d["raw"] = d[str(US_CTY_GDP_YEAR)].astype(str).str.strip()
+    d = d[d.fips.str[:2].isin(US_STATE_FIPS)]
+    # units that exist in the year (old Connecticut counties / Alaska areas are '(NA)')
+    live = set(d.loc[(d.line == "1") & (d.raw != "(NA)"), "fips"])
+    a = d[(d.line == "3") & d.fips.isin(live)].copy()
+    a["val"] = pd.to_numeric(a.raw, errors="coerce") * 1000.0
+    st = a[a.fips.str[2:] == "000"].set_index("fips")
+    un = a[a.fips.str[2:] != "000"].set_index("fips")
+    if st.val.isna().any() or len(st) != len(US_STATE_FIPS):
+        raise ValueError("CAGDP2: missing / suppressed state rows for line 3")
+    odd = un[un.val.isna() & (un.raw != "(D)")]
+    if len(odd):
+        raise ValueError(f"CAGDP2 line 3: unexpected cells {odd.raw.unique().tolist()}")
+    members = _bea_members(un.index, un.GeoName)
+    prox = proxy.fillna(0.0).clip(lower=0.0)
+    prox_u = pd.Series({u: float(prox.reindex(m).fillna(0.0).sum()) for u, m in members.items()})
+    val = un.val.copy()
+    supp = val.index[val.isna()]
+    neg_resid = []
+    for s, grp in val.groupby(val.index.str[:2]):
+        w_ids = grp.index[grp.isna()]
+        if not len(w_ids):
+            continue
+        resid = float(st.val[s + "000"]) - float(grp.sum())
+        if resid < 0:
+            neg_resid.append(s)
+            resid = 0.0
+        w = prox_u.reindex(w_ids)
+        if w.sum() <= 0:
+            w = pd.Series(1.0, index=w_ids)
+        val[w_ids] = resid * w / w.sum()
+    out: dict[str, float] = {}
+    for u, m in members.items():
+        w = prox.reindex(m).fillna(0.0)
+        if w.sum() <= 0:
+            w = pd.Series(1.0, index=m)
+        for c, wi in (w / w.sum()).items():
+            out[c] = float(val[u]) * float(wi)
+    info = {
+        "year": US_CTY_GDP_YEAR,
+        "units": int(len(un)), "suppressed_units": int(len(supp)),
+        "combination_units": {u: m for u, m in members.items() if len(m) > 1},
+        "state_rows_usd": float(st.val.sum()), "disclosed_units_usd": float(un.val.sum()),
+        "states_with_negative_residual": neg_resid,
+    }
+    return pd.Series(out), info
 
 
 def _us_fish() -> tuple[pd.DataFrame, dict]:
@@ -1208,22 +1324,38 @@ def build_usa() -> dict:
     sales_share[st == "11"] = 1.0
     emp_share = emp / emp.groupby(st).transform("sum")
     emp_share = emp_share.fillna(sales_share)
-    gva = st.map(gdp.farms) * sales_share.fillna(0.0) + st.map(gdp.forfish) * emp_share.fillna(0.0)
+    # proxy (farms by sales, forestry/fishing/related by employment): only for BEA-suppressed county
+    # cells and BEA combination areas
+    proxy = st.map(gdp.farms) * sales_share.fillna(0.0) + st.map(gdp.forfish) * emp_share.fillna(0.0)
+    cty_gdp, ginfo = _us_county_ag_gdp(proxy)
+    cty_gdp = cty_gdp.reindex(counties.index)
+    if cty_gdp.isna().any():
+        raise ValueError(f"CAGDP2: counties without a value {cty_gdp[cty_gdp.isna()].index[:5].tolist()}")
+    cshare = (cty_gdp / cty_gdp.groupby(st).transform("sum")).fillna(proxy / proxy.groupby(st).transform("sum"))
+    gva = st.map(gdp.naics11) * cshare.fillna(0.0)
     out = pd.DataFrame(index=counties.index)
     out["ag_gva_usd"] = gva.round(0)
     out["ag_sales_usd"] = sales.where(st != "11").round(0)
-    out["tree_crop_share"] = (100 * coa.orchard_ac / coa.cropland_ac.where(coa.cropland_ac > 0)).clip(upper=100).round(2)
+    # counties with < 200 acres of cropland (urban cores) get no share: the ratio of two tiny, partly
+    # imputed acreages is noise (e.g. 100 % in Brooklyn)
+    out["tree_crop_share"] = (100 * coa.orchard_ac / coa.cropland_ac.where(coa.cropland_ac >= 200)
+                              ).clip(upper=100).round(2)
     out.index.name = "admin_id"
     util.write_admin(cc, DOMAIN, "adm2", out.reset_index())
     fish, fchk = _us_fish()
     util.write_admin(cc, DOMAIN, "adm1", fish.reset_index())
     wb_ag = util.wb_value("NV.AGR.TOTL.CD", "USA")
+    bea_wb_year = _us_state_gdp(wb_ag[1]).naics11.sum() if wb_ag[1] else None
     rep = {
         "gdp_year": US_GDP_YEAR,
         "ag_gva_usd_total": float(out.ag_gva_usd.sum()),
         "bea_states_naics11_usd": float(gdp.naics11.sum()),
         "bea_farms_usd": float(gdp.farms.sum()), "bea_forestry_fishing_usd": float(gdp.forfish.sum()),
+        "cagdp2_county_shares": ginfo,
+        "proxy_vs_cagdp2_log_corr": float(np.corrcoef(np.log(proxy.clip(lower=1e4)),
+                                                      np.log(cty_gdp.clip(lower=1e4)))[0, 1]),
         "worldbank_ag_va_usd_latest": wb_ag,
+        "bea_states_naics11_usd_in_worldbank_year": bea_wb_year,
         "ag_sales_usd_total": float(out.ag_sales_usd.sum()),
         "coa_state_sales_sum_usd": 1000.0 * sum(cinfo["state_sales_k"].values()),
         "orchard_acres_total": float(coa.orchard_ac.sum()), "cropland_acres_total": float(coa.cropland_ac.sum()),

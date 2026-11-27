@@ -9,8 +9,12 @@ Outputs (data/interim/national/):
                    common: {year, LKA, USA, ratio_usa_lka} | null}
                    -- World Bank WDI, latest non-null value per country, series = the last 15 years
                    of the indicator (window ending at the latest year either country reports).
-  metros.json      City View list: 10 Sri Lankan cities (Wikidata centre + population, district by
-                   point-in-polygon) and the 20 most populous US Metropolitan Statistical Areas
+                   ratio_usa_lka is null unless both values are > 0. requested_code differs from
+                   code when an archived code was replaced (RENAMED).
+  metros.json      City View list: 10 Sri Lankan cities (Wikidata centre + population as stated on
+                   Wikidata, with its reference and a reference-kind flag; district / DS division by
+                   point-in-polygon; official Census 2024 total and urban-sector population of the DS
+                   division holding the centre) and the 20 most populous US Metropolitan Statistical Areas
                    (Census Vintage 2025 CBSA estimates, OMB July 2023 delineation counties,
                    principal-city centre from Wikidata, metro GDP = sum of BEA county GDP 2024).
   sources.json     Source records of this domain.
@@ -59,6 +63,11 @@ GAZ_PLACES = ("https://www2.census.gov/geo/docs/maps-data/data/gazetteer/2025_Ga
               "2025_Gaz_place_national.zip")
 BEA_CAGDP1 = "https://apps.bea.gov/regional/zip/CAGDP1.zip"
 N_US_METROS = 20
+WDI_ARCHIVE_META = "https://api.worldbank.org/v2/indicator/{code}"   # resolves archived codes (source 57)
+PORTAL = "https://www.statistics.gov.lk/DashBoard/censusdataportal/"
+DCS_ABSTRACT_10_2 = "https://www.statistics.gov.lk/abstract2025/CHAP10/10.2.pdf"
+CEB_AR_2023 = ("https://www.dropbox.com/scl/fi/xzi7k1ntby3y96ip4nimc/3.-CEB-Annual-Report-2023-English.pdf"
+               "?rlkey=kbjxu6hj4pwdz2it3d7vfuz03&st=48utl0ii&dl=1")
 
 SOURCES = [
     Source("worldbank_wdi", "World Development Indicators (WDI)", "The World Bank",
@@ -69,9 +78,11 @@ SOURCES = [
            "names, definitions (sourceNote) and original publishers (sourceOrganization). Several series "
            "are produced by other agencies and redistributed in WDI: ILO modelled estimates (labour), "
            "SIPRI (military expenditure, arms transfers), IISS (armed forces), UNESCO UIS (education, "
-           "R&D), UN Tourism (tourism), IEA/Ember (energy), EDGAR (emissions), FAO (food, fisheries), "
-           "IDMC (displacement). EG.ELC.PROD.KH (total electricity production) is archived in WDI and "
-           "is derived here as EG.ELC.RNWX.KH / (EG.ELC.RNWX.ZS / 100)."),
+           "R&D), UN Tourism (tourism), IEA (energy use and electricity mix), ESMAP (electricity access), "
+           "EDGAR (emissions), FAO (food, fisheries, land), IDMC (displacement); each record keeps WDI's own "
+           "sourceOrganization text. EG.ELC.PROD.KH (total electricity production) is archived in WDI "
+           "(WDI Database Archives, source 57: metadata only, no data served) and is derived here as "
+           "EG.ELC.RNWX.KH / (EG.ELC.RNWX.ZS / 100); its definition is the archive's sourceNote."),
     Source("wikidata", "Wikidata (coordinate location P625, population P1082 with point in time P585, "
            "GNIS ID P590)", "Wikimedia Foundation / Wikidata contributors", "https://www.wikidata.org",
            "CC0 1.0", "accessed 2026-11", ["lka", "usa"],
@@ -99,8 +110,8 @@ SOURCES = [
            "public domain", "2025", ["usa"],
            "Used only to translate principal-city FIPS place codes to GNIS feature ids (ANSICODE), "
            "which identify the Wikidata items."),
-    Source("bea_cagdp1", "CAGDP1 County and MSA gross domestic product (GDP) summary - "
-           "current-dollar GDP by county, 2001-2024", "U.S. Bureau of Economic Analysis",
+    Source("bea_cagdp1", "CAGDP1: County gross domestic product (GDP) summary, 2001-2024",
+           "U.S. Bureau of Economic Analysis",
            "https://apps.bea.gov/regional/downloadzip.htm", "public domain",
            "2024 (released 2026-02-05)", ["usa"],
            "LineCode 3 'Current-dollar GDP (thousands of current dollars)'. Counties are BEA units: "
@@ -108,6 +119,21 @@ SOURCES = [
            "Fairfax City + Falls Church'); Hawaii 15901 = Maui + Kalawao; Connecticut is published by "
            "planning region from 2024 data. The ALL_AREAS file has no MSA rows, so metro GDP is the "
            "sum of member-county GDP (BEA's own MSA definition)."),
+    Source("dcs_census_portal", "Census Data Portal - Census of Population and Housing 2024 (DS-division tables)",
+           "Department of Census and Statistics Sri Lanka", PORTAL, "open (DCS)", "2024", ["lka"],
+           "fetch_data.php, table ds_table_2024, indicators tot_Ag (total population) and tot_Sec_Ur (urban "
+           "sector population: CPH 2024 defines the urban sector as areas under a Municipal Council or an Urban "
+           "Council that are not classified as Estate Urban) for the DS division whose 2024 polygon "
+           "(2024-dsdivisions-topo.js) contains each city centre. Portal sums over the 340 DS divisions equal the "
+           "CPH 2024 Final Report Table 3.6 (total 21,781,800; urban 3,807,135); build() re-checks the total."),
+    Source("dcs_abstract2025", "Statistical Abstract 2025, Table 10.2: Gross Domestic Product by major economic "
+           "activity at current market prices 2019-2024 (Rs. million)",
+           "Department of Census and Statistics Sri Lanka", DCS_ABSTRACT_10_2, "open (DCS)", "2019-2024",
+           ["lka"], "Row 'Equals GDP at market price', used only to cross-check WDI NY.GDP.MKTP.CD x PA.NUS.FCRF."),
+    Source("ceb_annual_report_2023", "Ceylon Electricity Board Annual Report 2023 (English)",
+           "Ceylon Electricity Board", CEB_AR_2023, "CEB publication", "2019-2023", ["lka"],
+           "Figure FR4 'Generation and Sales (GWh)' gross generation labels 2019-2023, used only to cross-check "
+           "the derived EG.ELC.PROD.KH for Sri Lanka."),
 ] + [s for s in CORE_SOURCES if s.id in ("ocha_codab_lka", "unfpa_codps_lka", "census_cb_2023")]
 
 METRICS: list[Metric] = []   # national-level indicators live in indicators.json, not in admin/hex tables
@@ -232,7 +258,7 @@ INDICATORS: list[tuple[str, str, str | None, str]] = [
     ("EG.ELC.COAL.ZS", V, None, "lower"),
     ("EG.ELC.HYRO.ZS", V, None, "neutral"),
     ("EG.ELC.NUCL.ZS", V, None, "neutral"),
-    ("EN.GHG.CO2.PC.CE.AR5", V, None, "lower"),
+    ("EN.ATM.CO2E.PC", V, None, "lower"),               # archived -> EN.GHG.CO2.PC.CE.AR5 (RENAMED)
     ("EN.GHG.CO2.MT.CE.AR5", V, None, "lower"),
     ("EN.GHG.ALL.PC.CE.AR5", V, None, "lower"),
     ("EN.GHG.ALL.MT.CE.AR5", V, None, "lower"),
@@ -256,24 +282,23 @@ UNIT_OVERRIDE = {
     "IP.PAT.NRES": "applications", "SI.POV.GINI": "index (0-100)", "IP.TMK.RSCT": "applications",
     "EG.ELC.PROD.KH": "kWh", "ER.H2O.FWST.ZS": "%", "AG.PRD.FOOD.XD": "index (2014-2016 = 100)",
     "LP.LPI.OVRL.XQ": "index (1=low to 5=high)", "EN.CLC.DRSK.XQ": "score (1-5; 5=best)",
+    "IS.RRS.TOTL.KM": "route-km",
 }
 # parenthetical groups that qualify the concept rather than give the unit
 QUALIFIER_RE = re.compile(r"^(modeled ILO estimate|DOD|national estimate|cumulative|including construction|"
                           r"total|CO2|CH4|N2O|\d{4} PPP)$")
 
+# name / description / original publisher of a derived code come from the WDI archive metadata
+# (api.worldbank.org/v2/indicator/<code>, source 57 "WDI Database Archives"), fetched at build time.
 DERIVED = {
     "EG.ELC.PROD.KH": {
-        "name": "Electricity production (kWh)",
         "label": "Electricity production",
         "from": ("EG.ELC.RNWX.KH", "EG.ELC.RNWX.ZS"),
-        "method": ("EG.ELC.PROD.KH is archived in WDI (no current data). Derived as "
-                   "EG.ELC.RNWX.KH (electricity from renewables excl. hydro, kWh) / "
-                   "(EG.ELC.RNWX.ZS / 100) (its share of total production, %), for years with a share "
-                   ">= 1% so rounding of the share stays negligible. Same IEA-based production "
-                   "concept as the archived series (gross output at plant terminals)."),
-        "description": ("Electricity production is measured at the terminals of all alternator sets in a "
-                        "station; it covers hydro, coal, oil, gas, nuclear, geothermal, solar, wind, tide "
-                        "and wave, combustible renewables and waste (WDI archive definition)."),
+        "method": ("EG.ELC.PROD.KH is archived in WDI (source 57, metadata only, no data served). Derived as "
+                   "EG.ELC.RNWX.KH (electricity production from renewables excl. hydro, kWh) / "
+                   "(EG.ELC.RNWX.ZS / 100) (the same quantity as a % of total electricity production), for "
+                   "years with a share >= 1% so rounding of the share stays negligible. Both inputs are IEA "
+                   "series (WDI sourceOrganization), as was the archived series."),
     },
 }
 
@@ -287,6 +312,16 @@ def _wdi_catalog() -> dict[str, dict]:
               params={"format": "json", "per_page": 20000})
     js = json.loads(p.read_text())
     return {r["id"]: r for r in js[1]}
+
+
+def _wdi_archive_meta(code: str) -> dict:
+    """Metadata record of an archived WDI code (name, sourceNote, sourceOrganization, source)."""
+    p = fetch(WDI_ARCHIVE_META.format(code=code), "worldbank_wdi", "worldbank", f"{code}_archive_meta.json",
+              params={"format": "json"})
+    js = json.loads(p.read_text())
+    if not isinstance(js, list) or len(js) < 2 or not js[1]:
+        raise RuntimeError(f"WDI archive metadata for {code} not found")
+    return js[1][0]
 
 
 def _split_unit(code: str, name: str) -> tuple[str, str]:
@@ -325,8 +360,13 @@ def build_indicators() -> tuple[list[dict], dict]:
             notes["renamed"][code0] = code
         meta = cat.get(code)
         if code in DERIVED:
-            dm = DERIVED[code]
-            name, desc, org = dm["name"], dm["description"], "World Bank WDI (derived)"
+            am = _wdi_archive_meta(code)
+            src_orgs = sorted({cat[c]["sourceOrganization"].strip() for c in DERIVED[code]["from"] if c in cat})
+            name = am["name"]
+            desc = (f"{am['sourceNote'].strip()} [Definition of the archived series, WDI "
+                    f"{am['source']['value']} (source {am['source']['id']}).]")
+            org = ("Derived in this pipeline from WDI " + " and ".join(DERIVED[code]["from"]) + ": "
+                   + "; ".join(src_orgs) + f". Archived series: {am['sourceOrganization'].strip()}")
         elif meta is None:
             notes["missing_in_catalog"].append(code)
             print(f"  ! {code}: not in the WDI catalogue, skipped", flush=True)
@@ -364,8 +404,10 @@ def build_indicators() -> tuple[list[dict], dict]:
         if {"LKA", "USA"} <= set(both.columns) and len(both):
             yc = int(both.index.max())
             lv, uv = float(both.at[yc, "LKA"]), float(both.at[yc, "USA"])
+            # a ratio is only meaningful for two positive quantities (not for growth rates, balances
+            # or inflation that can be zero or negative)
             rec["common"] = {"year": yc, "LKA": _clean(lv), "USA": _clean(uv),
-                             "ratio_usa_lka": _clean(uv / lv) if lv not in (0.0,) else None}
+                             "ratio_usa_lka": _clean(uv / lv) if (lv > 0 and uv > 0) else None}
         else:
             rec["common"] = None
         out.append(rec)
@@ -452,10 +494,53 @@ def _locate(lat: float, lon: float, adm: gpd.GeoDataFrame) -> tuple[str, str]:
     return adm.admin_id.iloc[i], adm.name.iloc[i]
 
 
-def metros_lka() -> tuple[list[dict], dict]:
+CENSUS_YEAR = 2024
+OFFICIAL_REF_SUFFIX = ".gov.lk"       # e.g. www.statistics.gov.lk (DCS census reports)
+
+
+def _census_ds() -> gpd.GeoDataFrame:
+    """Census 2024 DS divisions (portal polygons) with tot_Ag (total) and tot_Sec_Ur (urban sector)."""
+    topo = fetch(PORTAL + "2024-dsdivisions-topo.js", "dcs_census_portal", "lka/census_portal",
+                 "2024-dsdivisions-topo.json")
+    g = gpd.read_file(topo)
+    if g.crs is None:
+        g = g.set_crs(4326)
+    g["ADM_ID"] = g.ADM_ID.astype(str)
+    ids = g.ADM_ID.tolist()
+    for ind in ("tot_Ag", "tot_Sec_Ur"):
+        p = fetch(PORTAL + "fetch_data.php", "dcs_census_portal", "lka/census_portal", f"ds_table_2024_{ind}.json",
+                  method="POST", data=json.dumps({"year": str(CENSUS_YEAR), "indicator": ind, "ids": ids,
+                                                  "table": "ds_table_2024"}),
+                  headers={"Content-Type": "application/json"}, timeout=120)
+        vals = {str(r["ADM_ID"]): r["value"] for r in json.loads(p.read_text())}
+        g[ind] = pd.to_numeric(g.ADM_ID.map(vals), errors="coerce")
+        if g[ind].isna().any():
+            raise RuntimeError(f"census portal {ind}: {int(g[ind].isna().sum())} DS divisions without a value")
+    return g
+
+
+def _ref_kind(ref: str | None) -> str:
+    """Classify a Wikidata population reference: official (a .gov.lk document), other website, or none."""
+    if not ref:
+        return "unreferenced"
+    urls = re.findall(r"https?://([^/;\s]+)", ref)
+    if any(h.lower().endswith(OFFICIAL_REF_SUFFIX) for h in urls):
+        return "official (DCS / government of Sri Lanka document)"
+    if urls:
+        return "third-party website (not an official statistics source)"
+    return "stated in: " + ref
+
+
+def metros_lka(inds: list[dict] | None = None) -> tuple[list[dict], dict]:
     wd = _wd_items([q for _, _, q in LKA_CITIES], "national_lka_cities")
     a1, a2, a3 = (load_admin("lka", lv) for lv in ("adm1", "adm2", "adm3"))
     pop2 = a2.set_index("admin_id")["pop"]
+    cds = _census_ds()
+    # UN World Urbanization Prospects largest-city series (WDI EN.URB.LCTY) to label matching statements
+    lcty = {}
+    for r in inds or []:
+        if r["code"] == "EN.URB.LCTY":
+            lcty = {int(y): v for y, v in r["LKA"]["series"]}
     out, checks = [], {}
     for rank, (slug, name, q) in enumerate(LKA_CITIES, 1):
         w = wd.get(q)
@@ -467,19 +552,44 @@ def metros_lka() -> tuple[list[dict], dict]:
         d3, d3n = _locate(w["lat"], w["lon"], a3)
         p1 = a2.set_index("admin_id").at[d2, "parent_id"]
         p1n = a1.set_index("admin_id").at[p1, "name"]
-        srcs = ["wikidata", "ocha_codab_lka", "unfpa_codps_lka"]
+        # Census 2024 DS division holding the centre (portal polygons; ids can differ from COD-AB pcodes)
+        cid, _ = _locate(w["lat"], w["lon"], cds.rename(columns={"ADM_ID": "admin_id", "ADM_NAME": "name"}))
+        c = cds.set_index("ADM_ID").loc[cid]
+        pop, py = w["population"], w["population_year"]
+        kind = _ref_kind(w["population_ref"]) if pop is not None else "no population (P1082) statement"
+        note = None
+        if pop is not None and py in lcty and abs(pop - lcty[py]) <= 0.005 * lcty[py]:
+            note = (f"Equals WDI EN.URB.LCTY for {py} ({lcty[py]:,.0f}), the UN World Urbanization Prospects "
+                    f"2018 estimate/projection for Sri Lanka's largest city, not a census count.")
+        srcs = ["wikidata", "ocha_codab_lka", "unfpa_codps_lka", "dcs_census_portal"]
         out.append({
             "id": slug, "name": name, "country": "lka", "lat": round(w["lat"], 6), "lon": round(w["lon"], 6),
-            "population": w["population"], "population_year": w["population_year"],
-            "population_scope": "city proper (Wikidata P1082; municipal / urban council area)",
-            "population_ref": w["population_ref"],
+            "population": pop, "population_year": py,
+            "population_scope": ("as stated on Wikidata (P1082, preferred rank else latest point in time) for "
+                                 "the city item; the statement does not record its area, which varies by city "
+                                 "(municipal / urban council, DS division, or a UN urban-agglomeration "
+                                 "estimate). For a like-for-like official figure use census_ds_population."),
+            "population_ref": w["population_ref"], "population_ref_kind": kind, "population_note": note,
+            "census_ds_id": cid, "census_ds_name": str(c["ADM_NAME"]),
+            "census_ds_population": int(c["tot_Ag"]), "census_ds_urban_population": int(c["tot_Sec_Ur"]),
+            "census_year": CENSUS_YEAR,
+            "census_scope": ("Census of Population and Housing 2024 (DCS): total and urban-sector population "
+                             "(Municipal / Urban Council areas, excluding Estate Urban) of the DS division "
+                             "containing the city centre. A council area that spans several DS divisions "
+                             "(e.g. Colombo, Jaffna) is only partly covered."),
             "admin_level": "adm2", "admin_ids": [d2],
             "district_id": d2, "district_name": d2n, "province_id": p1, "province_name": p1n,
             "ds_division_id": d3, "ds_division_name": d3n,
             "district_population": int(round(float(pop2[d2]))), "district_population_year": 2023,
-            "rank": rank, "gdp_usd": None, "gdp_year": None, "wikidata": q, "sources": srcs,
+            "rank": rank, "rank_basis": "curated City View order (not a population rank)",
+            "gdp_usd": None, "gdp_year": None, "wikidata": q, "sources": srcs,
         })
-        checks[slug] = {"district": f"{d2} {d2n}", "ds": f"{d3} {d3n}", "pop": w["population"]}
+        checks[slug] = {"district": f"{d2} {d2n}", "ds": f"{d3} {d3n}", "census_ds": f"{cid} {c['ADM_NAME']}",
+                        "census_ds_matches_codab": cid == d3.removeprefix("LK"),
+                        "pop": pop, "pop_ref_kind": kind,
+                        "census_ds_pop": int(c["tot_Ag"]), "census_ds_urban_pop": int(c["tot_Sec_Ur"])}
+    checks["census_total"] = int(cds["tot_Ag"].sum())
+    checks["census_urban_total"] = int(cds["tot_Sec_Ur"].sum())
     return out, checks
 
 
@@ -641,7 +751,8 @@ def metros_usa() -> tuple[list[dict], dict]:
             "population": int(getattr(r, f"POPESTIMATE{py}")), "population_year": py,
             "population_scope": "Metropolitan Statistical Area (OMB 2023 delineation)",
             "admin_level": "adm2", "admin_ids": mem,
-            "cbsa": r.CBSA, "title": title, "rank": rank, "states": sorted({c[:2] for c in mem}),
+            "cbsa": r.CBSA, "title": title, "rank": rank,
+            "rank_basis": f"MSA population {py} (Puerto Rico excluded)", "states": sorted({c[:2] for c in mem}),
             "principal_city": first, "principal_city_fips": pg, "principal_city_gnis": g,
             "principal_city_population": w["population"], "principal_city_population_year": w["population_year"],
             "centre_county": cid, "centre_in_members": cid in mem,
@@ -710,11 +821,85 @@ def _sanity(inds: list[dict], checks: dict) -> dict:
               f"counties (50 states + DC) = ${u['bea_sum_counties_usd'] / 1e12:.3f}T, WDI = "
               f"${(wb or float('nan')) / 1e12:.3f}T")
     pop = by["SP.POP.TOTL"]
-    lp = dict(map(tuple, pop["LKA"]["series"])).get(2023)
+    lps = dict(map(tuple, pop["LKA"]["series"]))
+    lp = lps.get(2023)
     a2 = load_admin("lka", "adm2")
-    s["lka_pop_2023"] = {"wdi": lp, "codps_districts": float(a2["pop"].sum())}
+    s["lka_pop_2023"] = {"wdi": lp, "codps_districts": float(a2["pop"].sum()),
+                         "note": "both are DCS mid-year estimates made before the 2024 census"}
     print(f"sanity: Sri Lanka population 2023 WDI = {lp:,.0f}, COD-PS district sum = {a2['pop'].sum():,.0f}")
+    lk = checks.get("lka", {})
+    if lk.get("census_total"):
+        w24 = lps.get(CENSUS_YEAR)
+        s["lka_pop_census_2024"] = {"census_portal_sum": lk["census_total"], "wdi_2024": w24,
+                                    "ratio_wdi_census": (w24 / lk["census_total"]) if w24 else None}
+        print(f"sanity: Sri Lanka Census {CENSUS_YEAR} (portal sum of DS divisions) = {lk['census_total']:,}, "
+              f"WDI {CENSUS_YEAR} = {w24:,.0f}")
+    s["lka_gdp_dcs_vs_wdi"] = _lka_gdp_check(by)
+    s["lka_electricity_ceb_vs_derived"] = _lka_elec_check(by)
     return s
+
+
+def _lka_gdp_check(by: dict) -> dict:
+    """DCS Statistical Abstract Table 10.2 GDP (Rs. million) / WDI exchange rate vs WDI GDP in US$."""
+    import pdfplumber
+    p = fetch(DCS_ABSTRACT_10_2, "dcs_abstract2025", "lka/economy", "abstract2025_10.2.pdf")
+    with pdfplumber.open(p) as pdf:
+        text = "\n".join(pg.extract_text() or "" for pg in pdf.pages)
+    row = next((ln for ln in text.splitlines() if "GDP at market price" in ln), None)
+    if row is None:
+        raise RuntimeError("DCS Table 10.2: row 'GDP at market price' not found")
+    vals = [float(v.replace(",", "")) for v in re.findall(r"\d{1,3}(?:,\d{3})+", row)]
+    years = list(range(2019, 2025))                    # table title: '... 2019 - 2024', one column per year
+    if "2019 - 2024" not in text or len(vals) != len(years):
+        raise RuntimeError(f"DCS Table 10.2: unexpected layout ({len(vals)} values in {row!r})")
+    fx = dict(map(tuple, by["PA.NUS.FCRF"]["LKA"]["series"]))
+    wd = dict(map(tuple, by["NY.GDP.MKTP.CD"]["LKA"]["series"]))
+    out = {}
+    for y, v in zip(years, vals):
+        if y in fx and y in wd:
+            usd = v * 1e6 / fx[y]
+            out[str(y)] = {"dcs_rs_million": v, "lkr_per_usd": fx[y], "dcs_usd": usd, "wdi_usd": wd[y],
+                           "ratio_wdi_dcs": wd[y] / usd}
+    r = out.get("2024", {})
+    if r:
+        print(f"sanity: Sri Lanka GDP 2024 DCS Rs {r['dcs_rs_million'] / 1e6:.3f} trillion / {r['lkr_per_usd']:.2f} "
+              f"= ${r['dcs_usd'] / 1e9:.2f}B vs WDI ${r['wdi_usd'] / 1e9:.2f}B (ratio {r['ratio_wdi_dcs']:.4f})")
+    return out
+
+
+def _lka_elec_check(by: dict) -> dict:
+    """CEB Annual Report 2023 Figure FR4 gross generation (GWh, 2019-2023) vs derived EG.ELC.PROD.KH."""
+    import pypdfium2 as pdfium
+    p = fetch(CEB_AR_2023, "ceb_annual_report_2023", "lka/ceb", "ceb_annual_report_2023_en.pdf")
+    doc = pdfium.PdfDocument(str(p))
+    seg, page = None, None
+    legend = "Sales Unit Gross Generation Unit"            # FR4 legend; the chart labels follow it
+    for i in range(len(doc)):
+        t = doc[i].get_textpage().get_text_range()
+        if "Figure FR4: Generation and Sales (GWh)" in t and legend in t:
+            seg = t[t.index(legend) + len(legend):]
+            seg, page = seg[: seg.index("%")], i + 1       # stop at the next chart (FR6 percentages)
+            break
+    doc.close()
+    if seg is None:
+        raise RuntimeError("CEB AR 2023: Figure FR4 not found")
+    years = sorted({int(y) for y in re.findall(r"\b(20[12]\d)\b", seg)})
+    nums = [float(v.replace(",", "")) for v in re.findall(r"\b\d{1,2},\d{3}\b", seg)]
+    nums = [v for v in nums if v % 5000]                  # drop the axis ticks 5,000 ... 20,000
+    if years != list(range(2019, 2024)) or len(nums) != 10:
+        raise RuntimeError(f"CEB AR 2023 FR4: unexpected layout years={years} values={nums}")
+    a, b = nums[:5], nums[5:]
+    gross = a if all(x > y for x, y in zip(a, b)) else b  # gross generation exceeds sales every year
+    der = dict(map(tuple, by["EG.ELC.PROD.KH"]["LKA"]["series"]))
+    out = {"page": page, "gross_generation_gwh": dict(zip(map(str, years), gross)), "derived_gwh": {},
+           "ratio_derived_ceb": {}}
+    for y, g in zip(years, gross):
+        if y in der:
+            out["derived_gwh"][str(y)] = der[y] / 1e6
+            out["ratio_derived_ceb"][str(y)] = der[y] / 1e6 / g
+    print(f"sanity: Sri Lanka electricity, derived WDI vs CEB gross generation: "
+          + ", ".join(f"{y} {r:.3f}" for y, r in out["ratio_derived_ceb"].items()))
+    return out
 
 
 def build(country: str | None = None) -> None:
@@ -734,7 +919,7 @@ def build(country: str | None = None) -> None:
     metros = [m for m in prev if m.get("country") not in countries]
     checks: dict = {}
     for cc in countries:
-        ms, ck = metros_lka() if cc == "lka" else metros_usa()
+        ms, ck = metros_lka(inds) if cc == "lka" else metros_usa()
         metros += ms
         checks[cc] = ck
         print(f"  metros {cc}: {len(ms)}", flush=True)

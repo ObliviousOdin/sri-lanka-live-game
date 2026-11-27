@@ -115,11 +115,19 @@ METRICS = [
            "the numeric part of the World Heritage Site id (P757; '72bis'/'72ter' -> 72); component items "
            "without an id are merged into a site within 3 km. The representative item is the member with the "
            "most Wikipedia sitelinks that has a coordinate inside the country grid (coordinates are tried in "
-           "turn: grid cell, snap within 6 H3 rings, else nearest land hex within 250 km). Sites whose "
+           "turn: grid cell, snap within 6 H3 rings, else nearest land hex within 250 km). For natural and "
+           "mixed sites the coordinate is checked against the site's WDPA 'World Heritage Site (natural or "
+           "mixed)' polygon (matched by name): a coordinate outside the country (the Yukon point of Kluane / "
+           "Wrangell-St. Elias, the open-ocean point of Papahanaumokuakea) or more than 2 km outside the polygon "
+           "(Sinharaja, whose Wikidata point is ~20 km SW of the reserve) is replaced by a representative point "
+           "of polygon ∩ country (original kept in orig_lat/orig_lon). Sites whose "
            "coordinates are all outside the 50 states + DC (US territories, Mexico-only El Camino Real de "
            "Tierra Adentro, foreign components of transnational sites) are dropped. kind from the selection "
            "criteria (P2614): (i)-(vi) cultural, (vii)-(x) natural, both mixed. inscribed = earliest P580 "
-           "start time of the designation (year).", "higher"),
+           "start time of the designation (year of the original inscription). whs_ref keeps the raw P757 ids; "
+           "a 'bis'/'ter' suffix (extended_or_modified) marks a later extension or boundary change, so the "
+           "national component of a transnational site can be younger than `inscribed` (e.g. Moravian Church "
+           "Settlements, 1468bis).", "higher"),
     Metric("park_visitors", "National park visitors", "visits/yr", "culture", "extensive", "none",
            "points_parks", ["nps_irma_stats", "sltda_year_in_review_2025", "wikidata", "unep_wdpca"], "2025",
            "Annual visitors to national parks (USA: recreation visits; Sri Lanka: ticketed local + foreign "
@@ -136,6 +144,9 @@ METRICS = [
            "Peak Wilderness Sanctuary and 'Bareef - Kalpitiya' as the Bar Reef Marine Sanctuary; Kalawewa and "
            "Girithale are located at the Kala Wewa and Giritale reservoirs (Wikidata). Coordinates from "
            "Wikidata; area_km2 from the WDPA polygon (GIS area) where the park is in WDPA, else Wikidata. "
+           "US park coordinates more than 5 km outside the park's WDPA polygon (designation 'National Park', "
+           "exact name match) are moved to a point inside it (Channel Islands: the Wikidata point is in the "
+           "sea between the islands); original kept in orig_lat/orig_lon. "
            "Definitions differ: NPS counts recreation visits (person-entries, estimated from traffic counts "
            "for most parks); DWC counts tickets sold.", "higher"),
     Metric("museums", "Museums", "count", "culture", "extensive", "none", "points_museums", ["wikidata"],
@@ -146,7 +157,11 @@ METRICS = [
            "(P576) or closure (P3999) date are dropped, one row per item (first coordinate). Items whose only "
            "museum-subclass types are visitor / nature / interpretation centres, heritage railways, film "
            "archives, cinematheques or virtual museums are dropped, as are points that do not snap to the "
-           "country grid (US territories). kind = the most specific museum subclass of the item (P31). Coverage reflects Wikidata completeness, "
+           "country grid (US territories). Duplicate items for one institution are merged (same normalised "
+           "name within 2 km, or the same coordinate with one name containing the other, e.g. a museum and "
+           "its 'Main Building' item), keeping the item with most sitelinks. kind = the shortest English label "
+           "among the item's museum-subclass P31 types other than plain 'museum' (else 'museum'). Coverage "
+           "reflects Wikidata completeness, "
            "not an official museum census (the US IMLS universe lists far more institutions).", "higher"),
     Metric("protected_pct", "Protected area", "%", "environment", "intensive", "land", "hex",
            ["unep_wdpca"], "WDPCA 2026-11",
@@ -163,7 +178,10 @@ METRICS = [
            "land", "hex", ["unep_wdpca"], "WDPCA 2026-11",
            "Share of the hex area covered by protected areas in IUCN categories Ia, Ib, II, III or IV.",
            "As protected_pct, restricted to polygons whose iucn_cat is Ia, Ib, II, III or IV (strict "
-           "reserves, wilderness, national parks, natural monuments, habitat/species management areas).",
+           "reserves, wilderness, national parks, natural monuments, habitat/species management areas). "
+           "Categories are as reported to WDPA: Sri Lanka reports most Forest Department Reserved Forests as "
+           "Ib, so its strict share is close to its total share; most US conservation easements and state "
+           "lands are V or 'Not Assigned'.",
            "higher"),
     Metric("protected_km2", "Protected area", "km2", "environment", "extensive", "none", "hex",
            ["unep_wdpca"], "WDPCA 2026-11", "Area of the hex (land or sea) inside designated protected areas.",
@@ -209,6 +227,7 @@ SLTDA_PARKS_2025 = {
     "Samanala Adaviya": (432, 12, 444, 42214.79),
 }
 SLTDA_PARKS_TOTAL = (1463109, 1141134, 2604243)
+SLTDA_PARKS_REVENUE_TOTAL = 6658666563.61   # TOTAL row, 'Total revenue (including the vehicle and boat income)' 
 
 # DWC table name -> (display name, Wikidata QID, WDPA site_id or None, kind); None = excluded (not a park)
 LKA_PARKS = {
@@ -318,7 +337,58 @@ CULTURAL_CRIT = {"i", "ii", "iii", "iv", "v", "vi"}
 NATURAL_CRIT = {"vii", "viii", "ix", "x"}
 
 
-def heritage(country: str, loc: _Locator) -> pd.DataFrame:
+class _CountryShape:
+    """Country land polygons (COD-AB provinces / Census states) for point-in-country tests and clipping."""
+
+    def __init__(self, country: str):
+        adm = load_admin(country, "adm1")
+        self.geoms = shapely.make_valid(adm.geometry.to_numpy())
+        self.tree = STRtree(self.geoms)
+
+    def contains(self, lat: float, lon: float) -> bool:
+        return len(self.tree.query(shapely.Point(lon, lat), predicate="intersects")) > 0
+
+    def clip(self, geom):
+        """geom ∩ country (None when empty)."""
+        idx = self.tree.query(geom, predicate="intersects")
+        if not len(idx):
+            return None
+        parts = [geom.intersection(self.geoms[i]) for i in idx]
+        parts = [p for p in parts if not p.is_empty and p.area > 0]
+        return shapely.union_all(parts) if parts else None
+
+
+def _match_polys(polys: gpd.GeoDataFrame, labels: list[str], exact: bool = False) -> object | None:
+    """Union of the polygons whose normalised name equals one of labels (or, unless exact, contains one
+    of them / is contained in one)."""
+    if polys is None or not len(polys):
+        return None
+    keys = [_norm(x) for x in labels if x]
+    names = polys.name_eng.map(_norm)
+    hit = names.map(lambda n: any(n == k or (not exact and len(n) > 5 and (n in k or k in n)) for k in keys))
+    if not hit.any():
+        return None
+    return shapely.union_all(shapely.make_valid(polys.geometry[hit].to_numpy()))
+
+
+def _relocate(lat: float, lon: float, poly, shape: _CountryShape, min_km: float, outside_country: bool = True):
+    """(lat, lon, km outside poly) of a representative point of poly ∩ country when (lat, lon) lies more
+    than min_km outside poly, or (if outside_country) outside the country; else None."""
+    if poly is None:
+        return None
+    pt = shapely.Point(lon, lat)
+    d_km = poly.distance(pt) * 111.0   # degrees -> km (upper bound away from the equator)
+    if d_km <= min_km and not (outside_country and not shape.contains(lat, lon)):
+        return None
+    part = shape.clip(poly)
+    if part is None:
+        return None
+    rp = part.representative_point()
+    return rp.y, rp.x, d_km
+
+
+def heritage(country: str, loc: _Locator, whs_polys: gpd.GeoDataFrame | None = None,
+             shape: _CountryShape | None = None) -> pd.DataFrame:
     q = """SELECT ?site ?siteLabel ?sitelinks
       (GROUP_CONCAT(DISTINCT STR(?coord); separator="|") AS ?coords)
       (GROUP_CONCAT(DISTINCT ?whsid; separator=" ") AS ?whsids)
@@ -346,7 +416,8 @@ def heritage(country: str, loc: _Locator) -> pd.DataFrame:
         coords = [util.parse_wkt_point(s) for s in r.coords.split("|") if s.startswith("Point")]
         ids = sorted({re.match(r"\d+", x).group(0) for x in r.whsids.split() if re.match(r"\d+", x)})
         items.append(dict(qid=_qid(r.site), label=r.siteLabel, sitelinks=int(r.sitelinks), coords=coords,
-                          ids=ids, crits=set(r.crits.replace("(", " ").replace(")", " ").split()),
+                          ids=ids, refs=r.whsids.split(),
+                          crits=set(r.crits.replace("(", " ").replace(")", " ").split()),
                           start=_year(r.start1), types=r.types))
     # group by World Heritage Site id; id-less items join a site within 3 km, else stand alone
     groups: dict[str, list[dict]] = {}
@@ -395,17 +466,31 @@ def heritage(country: str, loc: _Locator) -> pd.DataFrame:
         else:
             kind = "natural" if re.search(r"park|protected|forest|reserve", " ".join(m["types"] for m in mem)) \
                 else "cultural"
+        # natural / mixed sites: check the Wikidata coordinate against the site's WDPA World Heritage
+        # polygon; a coordinate outside the country (transnational sites, offshore points) or > 2 km
+        # outside the polygon is replaced by a point inside polygon ∩ country
+        poly = _match_polys(whs_polys, [m["label"] for m in mem]) if kind != "cultural" and shape else None
+        mv = _relocate(orig[0], orig[1], poly, shape, 2.0) if poly is not None else None
+        if mv is not None:
+            p = loc.locate(mv[0], mv[1], max_km=250.0)
+            if p is not None:
+                why = (f"{mv[2]:.0f} km outside the WDPA World Heritage polygon" if mv[2] > 2.0
+                       else "Wikidata coordinate outside the country")
+                la, lo, how = p[0], p[1], f"moved into the WDPA World Heritage polygon ({why})"
         roman = ["i", "ii", "iii", "iv", "v", "vi", "vii", "viii", "ix", "x"]
         starts = [m["start"] for m in mem if np.isfinite(m["start"])]
+        refs = sorted({x for m in mem for x in m["refs"]})
         rows.append(dict(
             id=rep["qid"], name=rep["label"], lat=round(la, 6), lon=round(lo, 6), kind=kind,
             whs_id=gid if not gid.startswith("wd:") else "",
+            whs_ref=" ".join(refs),
+            extended_or_modified=any(re.search(r"\d(bis|ter|quater)$", x) for x in refs),
             inscribed=int(min(starts)) if starts else np.nan,
             criteria=" ".join(f"({c})" for c in roman if c in crits),
             sitelinks=max(m["sitelinks"] for m in mem), wikidata=rep["qid"],
             components=len(mem), location=how if how != "grid" else "",
-            orig_lat=orig[0] if how.startswith("moved") else np.nan,
-            orig_lon=orig[1] if how.startswith("moved") else np.nan,
+            orig_lat=round(orig[0], 6) if how.startswith("moved") else np.nan,
+            orig_lon=round(orig[1], 6) if how.startswith("moved") else np.nan,
             heritage_sites=1))
     df = pd.DataFrame(rows).sort_values(["inscribed", "name"]).reset_index(drop=True)
     print(f"  heritage: {len(df)} World Heritage Sites ({df.kind.value_counts().to_dict()}); "
@@ -484,7 +569,7 @@ def _wd_area_clause(var: str = "?p") -> str:
             "BIND(?a * ?conv / 1000000 AS ?area) }" % var)
 
 
-def parks_usa(loc: _Locator) -> pd.DataFrame:
+def parks_usa(loc: _Locator, wdpa: gpd.GeoDataFrame | None = None, shape: _CountryShape | None = None) -> pd.DataFrame:
     p, year = _nps_ranking_csv()
     lines = p.read_text(encoding="utf-8-sig").splitlines()
     hdr = next(i for i, l in enumerate(lines) if l.startswith("ParkName,"))
@@ -537,6 +622,7 @@ def parks_usa(loc: _Locator) -> pd.DataFrame:
             w2["sitelinks"] = w2.sitelinks.astype(int)
             for r in w2.sort_values("sitelinks").itertuples():
                 fb[_norm(r.l)] = r
+    np_polys = wdpa[wdpa.desig_eng == "National Park"] if wdpa is not None else None
     out, dropped = [], []
     for name, vis, hit, cs in rows:
         if hit is None:
@@ -549,14 +635,28 @@ def parks_usa(loc: _Locator) -> pd.DataFrame:
         if pl is None:
             dropped.append(f"{name} (outside 50 states + DC)")
             continue
+        label = getattr(hit, "pLabel", None) or hit.l
+        # a Wikidata coordinate > 5 km outside the park's WDPA polygon (designation 'National Park', name
+        # matched exactly without the 'National Park [and Preserve]' suffix) is moved into the polygon
+        how, orig = "", (np.nan, np.nan)
+        short = re.sub(r"\s+national park( and preserve)?$", "", _norm(label))
+        mv = _relocate(la, lo, _match_polys(np_polys, [short], exact=True), shape, 5.0, outside_country=False) \
+            if np_polys is not None and shape is not None else None
+        if mv is not None and loc.locate(mv[0], mv[1]) is not None:
+            how, orig = f"moved into the WDPA park polygon ({mv[2]:.0f} km outside it)", (round(la, 6), round(lo, 6))
+            la, lo = mv[0], mv[1]
         qid = _qid(hit.p)
         area = pd.to_numeric(getattr(hit, "area_km2", np.nan), errors="coerce")
-        out.append(dict(id=f"nps:{qid}", name=getattr(hit, "pLabel", None) or hit.l, lat=round(la, 6),
+        out.append(dict(id=f"nps:{qid}", name=label, lat=round(la, 6),
                         lon=round(lo, 6), kind="national park and preserve" if "PRES" in name else "national park",
                         nps_name=name, visitors=vis, park_visitors=vis, visitors_year=year,
                         area_km2=round(float(area), 2) if np.isfinite(area) else np.nan,
-                        area_source="Wikidata" if np.isfinite(area) else "", wikidata=qid))
+                        area_source="Wikidata" if np.isfinite(area) else "", wikidata=qid,
+                        location=how, orig_lat=orig[0], orig_lon=orig[1]))
     df = pd.DataFrame(out).sort_values("park_visitors", ascending=False).reset_index(drop=True)
+    mvd = df[df.location != ""]
+    if len(mvd):
+        print("    placement notes:", dict(zip(mvd.name, mvd.location)))
     print(f"  parks: {len(df)} US national parks, {df.park_visitors.sum():,.0f} recreation visits ({year}); "
           f"report total {nps.visitors.sum():,.0f} for {len(nps)} units; dropped: {dropped}")
     return df
@@ -576,6 +676,7 @@ def parks_lka(loc: _Locator, wdpa: gpd.GeoDataFrame) -> pd.DataFrame:
     assert tuple(int(x) for x in tot) == SLTDA_PARKS_TOTAL, (tot, SLTDA_PARKS_TOTAL)
     for k, (l, f, t, _) in SLTDA_PARKS_2025.items():
         assert l + f == t, k
+    assert abs(sum(v[3] for v in SLTDA_PARKS_2025.values()) - SLTDA_PARKS_REVENUE_TOTAL) < 0.01
     qids = [v[1] for v in LKA_PARKS.values() if v]
     q = """SELECT ?p ?pLabel ?sitelinks (SAMPLE(?coord) AS ?coord1) (MAX(?area) AS ?area_km2) WHERE {
       VALUES ?p { %s } ?p wikibase:sitelinks ?sitelinks . OPTIONAL { ?p wdt:P625 ?coord }
@@ -663,9 +764,38 @@ def museums(country: str, loc: _Locator) -> pd.DataFrame:
         "kind": d.types.map(kind), "sitelinks": d.sitelinks.astype(int), "wikidata": d.m.map(_qid),
         "count": 1, "museums": 1,
     }).sort_values(["sitelinks", "name"], ascending=[False, True]).reset_index(drop=True)
-    print(f"  museums: {len(df)} (dropped {n_out} outside the grid, {n_nm} non-museum facility types); top kinds "
-          f"{df.kind.value_counts().head(5).to_dict()}")
+    df, dups = _dedupe_museums(df)
+    print(f"  museums: {len(df)} (dropped {n_out} outside the grid, {n_nm} non-museum facility types, "
+          f"{len(dups)} duplicate items); top kinds {df.kind.value_counts().head(5).to_dict()}")
+    if dups:
+        print("    duplicates dropped:", dups[:12], "..." if len(dups) > 12 else "")
     return df
+
+
+def _dedupe_museums(df: pd.DataFrame) -> tuple[pd.DataFrame, list[str]]:
+    """Drop duplicate Wikidata items for one institution (df sorted by sitelinks, best first):
+    (a) same normalised name within 2 km; (b) same coordinate (to ~10 m) where the other item's name is
+    contained in this one ('Brooklyn Museum Libraries and Archives', 'West Building of the National
+    Gallery of Art', '... Main Building')."""
+    keyn = df.name.map(_norm).to_numpy()
+    lat, lon = df.lat.to_numpy(float), df.lon.to_numpy(float)
+    drop, notes = np.zeros(len(df), bool), []
+    by_name: dict[str, list[int]] = {}
+    by_xy: dict[tuple, list[int]] = {}
+    for i in range(len(df)):
+        xy = (round(lat[i], 4), round(lon[i], 4))
+        dup = next((j for j in by_name.get(keyn[i], [])
+                    if _haversine_km(lat[i], lon[i], lat[j], lon[j]) <= 2.0), None)
+        if dup is None:
+            dup = next((j for j in by_xy.get(xy, [])
+                        if len(keyn[j].split()) >= 2 and keyn[j] in keyn[i] and keyn[j] != keyn[i]), None)
+        if dup is not None:
+            drop[i] = True
+            notes.append(f"{df.name.iat[i]} ({df.id.iat[i]}) ~ {df.name.iat[dup]} ({df.id.iat[dup]})")
+            continue
+        by_name.setdefault(keyn[i], []).append(i)
+        by_xy.setdefault(xy, []).append(i)
+    return df[~drop].reset_index(drop=True), notes
 
 
 # ---------------------------------------------------------------------------------------------
@@ -798,11 +928,14 @@ def build(country: str) -> None:
     hx = load_hexes(country)
     res: dict = {}
 
-    res["heritage"] = heritage(country, loc)
+    wdpa = _wdpa_lka() if country == "lka" else _wdpa_usa()
+    shape = _CountryShape(country)
+    whs_polys = wdpa[wdpa.desig_eng.str.startswith("World Heritage Site")]
+
+    res["heritage"] = heritage(country, loc, whs_polys, shape)
     util.write_points(country, DOMAIN, "heritage", res["heritage"])
 
-    wdpa = _wdpa_lka() if country == "lka" else _wdpa_usa()
-    res["parks"] = parks_lka(loc, wdpa) if country == "lka" else parks_usa(loc)
+    res["parks"] = parks_lka(loc, wdpa) if country == "lka" else parks_usa(loc, wdpa, shape)
     util.write_points(country, DOMAIN, "parks", res["parks"])
 
     res["museums"] = museums(country, loc)
