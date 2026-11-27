@@ -1,0 +1,249 @@
+{
+ "built_at": "2026-11-27T02:48:56+00:00",
+ "countries": [
+  {
+   "id": "lka",
+   "name": "Sri Lanka",
+   "h3_res": 6,
+   "admin_levels": {
+    "adm1": "Province",
+    "adm2": "District",
+    "adm3": "DS Division"
+   }
+  },
+  {
+   "id": "usa",
+   "name": "United States",
+   "h3_res": 5,
+   "admin_levels": {
+    "adm1": "State",
+    "adm2": "County"
+   }
+  }
+ ],
+ "yields": [
+  "gold",
+  "production",
+  "food",
+  "science",
+  "culture",
+  "faith"
+ ],
+ "yield_scale": {
+  "cap": 12,
+  "bases": {
+   "gold": {
+    "metric": "gdp_usd",
+    "base": 100000.0,
+    "unit": "US$ GDP per km\u00b2"
+   },
+   "production": {
+    "metric": "gdp_industry_usd",
+    "base": 30000.0,
+    "unit": "US$ industrial GVA per km\u00b2"
+   },
+   "food": {
+    "metric": "ag_gva_usd",
+    "base": 3000.0,
+    "unit": "US$ agricultural GVA per km\u00b2"
+   },
+   "food_sea": {
+    "metric": "fish_catch_t",
+    "base": 0.1,
+    "unit": "tonnes of fish landed per km\u00b2 of sea"
+   },
+   "science": {
+    "metric": "cit_engineers",
+    "base": 0.1,
+    "unit": "STEM workers per km\u00b2"
+   },
+   "culture": {
+    "metric": "emp_arts_accommodation",
+    "base": 0.3,
+    "unit": "arts, recreation & hospitality workers per km\u00b2"
+   },
+   "faith": {
+    "metric": "worship_sites",
+    "base": 0.003,
+    "unit": "places of worship per km\u00b2"
+   }
+  },
+  "power_bonus": [
+   [
+    100,
+    1
+   ],
+   [
+    1000,
+    2
+   ],
+   [
+    3000,
+    3
+   ]
+  ],
+  "research_bonus": [
+   [
+    1000,
+    1
+   ],
+   [
+    10000,
+    2
+   ],
+   [
+    50000,
+    3
+   ]
+  ],
+  "culture_bonus": {
+   "per_whs": 2,
+   "max_whs": 2,
+   "museums_min": 3,
+   "museums_bonus": 1,
+   "park_visitors_min": 1000000,
+   "park_bonus": 1
+  },
+  "faith_bonus": {
+   "per_holy_site": 2,
+   "max_holy_sites": 1
+  }
+ },
+ "terrain": {
+  "ocean": "Ocean",
+  "coast": "Coast",
+  "lake": "Lake",
+  "grassland": "Grassland",
+  "plains": "Plains",
+  "desert": "Desert",
+  "tundra": "Tundra",
+  "snow": "Snow",
+  "mountains": "Mountains"
+ },
+ "features": {
+  "forest": "Forest",
+  "rainforest": "Rainforest",
+  "marsh": "Marsh",
+  "mangrove": "Mangrove",
+  "urban": "Urban",
+  "floodplain": "Floodplain",
+  "": ""
+ },
+ "districts": [
+  {
+   "code": "",
+   "label": "",
+   "rule": ""
+  },
+  {
+   "code": "city_center",
+   "label": "City Center",
+   "rule": "Centre tile of a City View city: the most populous tile within one ring of the city's coordinates."
+  },
+  {
+   "code": "spaceport",
+   "label": "Spaceport",
+   "rule": "Launch site that has hosted an orbital or orbital-class launch (Cape Canaveral, Kennedy, Vandenberg, Wallops / Mid-Atlantic Regional Spaceport, Pacific Spaceport Complex \u2013 Alaska, Starbase). Other FAA-listed spaceports (runway, suborbital or reentry-only sites) do not qualify."
+  },
+  {
+   "code": "harbor",
+   "label": "Harbor",
+   "rule": "Seaports in the tile handle \u2265 1 million tonnes of annual cargo, or the tile holds one of the country's 3 busiest ports."
+  },
+  {
+   "code": "aerodrome",
+   "label": "Aerodrome",
+   "rule": "Airports in the tile have \u2265 1 million annual passenger boardings (US: FAA enplanements, about half of all arriving + departing passengers), or the tile holds the country's busiest airport by boardings. Sri Lanka has no open airport-level passenger statistics, so there every large airport with scheduled service (OurAirports classification) qualifies."
+  },
+  {
+   "code": "campus",
+   "label": "Campus",
+   "rule": "\u2265 2,000 research works in 5 years from institutions in the tile (OpenAlex), or STEM (Engineers class) workforce location quotient \u2265 1.8 with \u2265 300 people per km\u00b2 of land."
+  },
+  {
+   "code": "commercial_hub",
+   "label": "Commercial Hub",
+   "rule": "Land tile with finance, real-estate & professional-services employment LQ \u2265 1.15 and either Gold \u2265 7 or GDP density in the top 1% of the country's land tiles."
+  },
+  {
+   "code": "industrial_zone",
+   "label": "Industrial Zone",
+   "rule": "Production yield \u2265 5 and manufacturing employment LQ \u2265 1.5, or an export-processing zone / industrial park in the tile."
+  },
+  {
+   "code": "dam",
+   "label": "Dam",
+   "rule": "Hydroelectric capacity \u2265 100 MW in the tile."
+  },
+  {
+   "code": "power_plant",
+   "label": "Power Plant",
+   "rule": "Other (non-hydro) generating capacity \u2014 thermal, nuclear, wind, solar\u2026 \u2014 \u2265 500 MW in the tile."
+  },
+  {
+   "code": "holy_site",
+   "label": "Holy Site",
+   "rule": "Holds one of the country's most notable religious sites (top 10 in Sri Lanka, top 25 in the US by Wikipedia language editions), or worship-site density in the top 1% of the country's land tiles."
+  },
+  {
+   "code": "theater_square",
+   "label": "Theater Square",
+   "rule": "UNESCO World Heritage cultural or mixed site, \u2265 5 museums (Wikidata), or arts/recreation/hospitality employment LQ \u2265 2 with \u2265 300 people per km\u00b2 of land."
+  },
+  {
+   "code": "encampment",
+   "label": "Encampment",
+   "rule": "Military installation in the tile."
+  },
+  {
+   "code": "entertainment",
+   "label": "Entertainment Complex",
+   "rule": "Arts, recreation & hospitality employment LQ \u2265 2.5 (tourism economy) with \u2265 5,000 residents in the tile."
+  },
+  {
+   "code": "plantation",
+   "label": "Plantation",
+   "rule": "Sri Lanka: \u2265 15% of the tile's land under tea, rubber or coconut (district crop extents of the Economic Census 2013/14, allocated to tiles by tree cover), \u2265 40% tree + crop cover, < 25% built-up, < 75% strictly protected and no national park. US: fruit & nut orchards, citrus and vineyards \u2265 40% of the county's cropland (Census of Agriculture), Food yield \u2265 3 and \u2265 40% tree + crop cover."
+  },
+  {
+   "code": "farmland",
+   "label": "Farmland",
+   "rule": "Land tile with Food yield \u2265 4 and \u2265 40% cropland (ESA WorldCover)."
+  },
+  {
+   "code": "fishery",
+   "label": "Fishery",
+   "rule": "Sea tile with Food yield \u2265 6 from fish landings (\u2265 31.6 t landed per km\u00b2 of tile)."
+  },
+  {
+   "code": "neighborhood",
+   "label": "Neighborhood",
+   "rule": "Land tile with \u2265 1,500 people per km\u00b2 of land (also when the tile has other districts)."
+  },
+  {
+   "code": "preserve",
+   "label": "Preserve",
+   "rule": "Land tile \u2265 75% strictly protected (WDPA, IUCN categories Ia\u2013IV), or holding a national park with visitor statistics."
+  }
+ ],
+ "terrain_codes": [
+  "ocean",
+  "coast",
+  "lake",
+  "grassland",
+  "plains",
+  "desert",
+  "tundra",
+  "snow",
+  "mountains"
+ ],
+ "feature_codes": [
+  "forest",
+  "rainforest",
+  "marsh",
+  "mangrove",
+  "urban",
+  "floodplain",
+  ""
+ ]
+}

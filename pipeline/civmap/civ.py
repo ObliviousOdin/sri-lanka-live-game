@@ -1,0 +1,746 @@
+"""Civilization-style translation of reconciled statistics (rules documented in docs/METHODOLOGY.md).
+
+Inputs: reconciled hex metrics (data/interim/<cc>/reconciled), core hexes, domain point tables.
+Outputs (data/interim/<cc>/civ/): tiles.parquet (terrain, yields, district per hex),
+wonders.json, cities.json.
+
+Every rule here is deterministic and parameterised by the constants below so the methodology
+page and the app's tooltips can quote them.
+"""
+from __future__ import annotations
+
+import json
+import math
+from pathlib import Path
+
+import h3
+import numpy as np
+import pandas as pd
+
+from .config import COUNTRIES, INTERIM
+from .core import load_hexes
+
+# ---------------------------------------------------------------------------------------------
+# Yield scales — shared by both countries.  Yield = floor(2·log10(density / base)) + 1 for
+# density ≥ base (one point per half-decade, i.e. every ×3.16), else 0; capped at YIELD_CAP.
+# Densities are per km² of tile area, so res-6 (LKA) and res-5 (USA) tiles are comparable.
+# ---------------------------------------------------------------------------------------------
+YIELD_CAP = 12
+YIELD_BASES = {
+    # key: (numerator metric, base density per km², unit label)
+    "gold": ("gdp_usd", 1.0e5, "US$ GDP per km²"),
+    "production": ("gdp_industry_usd", 3.0e4, "US$ industrial GVA per km²"),
+    "food": ("ag_gva_usd", 3.0e3, "US$ agricultural GVA per km²"),
+    "food_sea": ("fish_catch_t", 0.1, "tonnes of fish landed per km² of sea"),
+    "science": ("cit_engineers", 0.1, "STEM workers per km²"),
+    "culture": ("emp_arts_accommodation", 0.3, "arts, recreation & hospitality workers per km²"),
+    "faith": ("worship_sites", 0.003, "places of worship per km²"),
+}
+POWER_BONUS = [(100, 1), (1000, 2), (3000, 3)]              # MW in tile -> +Production
+RESEARCH_BONUS = [(1_000, 1), (10_000, 2), (50_000, 3)]      # works in last 5 years -> +Science
+CULTURE_BONUS = {"per_whs": 2, "max_whs": 2, "museums_min": 3, "museums_bonus": 1,
+                 "park_visitors_min": 1_000_000, "park_bonus": 1}
+FAITH_BONUS = {"per_holy_site": 2, "max_holy_sites": 1}
+YIELDS = ["gold", "production", "food", "science", "culture", "faith"]
+
+
+def log_yield(density: np.ndarray, base: float) -> np.ndarray:
+    d = np.asarray(density, dtype=float)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        y = np.floor(2 * np.log10(d / base)) + 1
+    y = np.where(np.isfinite(y) & (d >= base), y, 0)
+    return np.clip(y, 0, YIELD_CAP).astype(int)
+
+
+def step_bonus(v: np.ndarray, steps) -> np.ndarray:
+    v = np.nan_to_num(np.asarray(v, dtype=float))
+    out = np.zeros(len(v), dtype=int)
+    for thr, b in steps:
+        out = np.where(v >= thr, b, out)
+    return out
+
+
+# ---------------------------------------------------------------------------------------------
+# Terrain
+# ---------------------------------------------------------------------------------------------
+TERRAIN = {
+    "ocean": "Ocean", "coast": "Coast", "lake": "Lake", "grassland": "Grassland", "plains": "Plains",
+    "desert": "Desert", "tundra": "Tundra", "snow": "Snow", "mountains": "Mountains",
+}
+FEATURES = {"forest": "Forest", "rainforest": "Rainforest", "marsh": "Marsh", "mangrove": "Mangrove",
+            "urban": "Urban", "floodplain": "Floodplain", "": ""}
+
+
+def col(df: pd.DataFrame, k: str, default=np.nan) -> np.ndarray:
+    return df[k].to_numpy(float) if k in df.columns else np.full(len(df), default, dtype=float)
+
+
+def classify_terrain(H: pd.DataFrame) -> pd.DataFrame:
+    """Base terrain, feature and hills flag from land cover, DEM and climate."""
+    ring = H["ring"].to_numpy(int)
+    lc = {k: np.nan_to_num(col(H, f"lc_{k}", 0.0)) for k in
+          ("tree", "shrub", "grass", "crop", "built", "bare", "snow", "water", "wetland", "mangrove", "moss")}
+    elev = np.nan_to_num(col(H, "elev_mean_m", 0.0))
+    emax = np.nan_to_num(col(H, "elev_max_m", 0.0))
+    relief = np.nan_to_num(col(H, "relief_m", 0.0))
+    slope = np.nan_to_num(col(H, "slope_mean_deg", 0.0))
+    temp = col(H, "temp_mean_c")
+    precip = col(H, "precip_mm")
+    lat = np.abs(H["lat"].to_numpy(float))
+    temp = np.where(np.isfinite(temp), temp, 27 - 0.55 * lat - elev / 160)  # rough fallback
+    precip = np.where(np.isfinite(precip), precip, 800)
+
+    base = np.full(len(H), "plains", dtype=object)
+    veg_open = lc["grass"] + lc["shrub"] + lc["crop"]
+    # Grassland = humid or well-watered farmland; Plains = drier open country (prairie, dry farming)
+    wet = (precip >= 1000) | ((lc["crop"] >= 0.4) & (precip >= 700))
+    base = np.where((lc["crop"] + lc["grass"] + lc["tree"] >= 0.35) & wet, "grassland", base)
+    base = np.where(~wet & (veg_open + lc["tree"] >= 0.3), "plains", base)
+    base = np.where((lc["bare"] >= 0.35) | ((precip < 330) & (lc["bare"] + lc["shrub"] >= 0.5)), "desert", base)
+    base = np.where((lc["moss"] >= 0.2) | ((temp < -3) & (lc["tree"] < 0.3)), "tundra", base)
+    base = np.where(lc["snow"] >= 0.35, "snow", base)
+    mountains = ((slope >= 16) & (emax >= 900)) | ((elev >= 2200) & (slope >= 9)) | ((relief >= 1600) & (slope >= 11))
+    hills = ~mountains & ((slope >= 6) | (relief >= 500))
+    base = np.where(mountains & (ring == 0), "mountains", base)
+    land_frac = np.nan_to_num(H["land_km2"].to_numpy(float) / H["hex_km2"].to_numpy(float))
+    # mostly-sea coastal tiles read as Coast; water inside the boundary reads as Lake
+    base = np.where((ring == 0) & (land_frac < 0.35), "coast", base)
+    base = np.where((ring == 0) & (land_frac >= 0.35) & (lc["water"] >= 0.55), "lake", base)
+    base = np.where(ring == 1, "coast", base)
+    base = np.where(ring >= 2, "ocean", base)
+
+    feat = np.full(len(H), "", dtype=object)
+    tropical = (lat < 23.5) & (precip >= 1400)
+    feat = np.where(lc["tree"] >= 0.45, np.where(tropical, "rainforest", "forest"), feat)
+    feat = np.where(lc["wetland"] >= 0.2, "marsh", feat)
+    feat = np.where(lc["mangrove"] >= 0.08, "mangrove", feat)
+    feat = np.where(lc["built"] >= 0.25, "urban", feat)
+    feat = np.where(np.isin(base, ["ocean", "coast", "lake"]), "", feat)
+    return pd.DataFrame({"terrain": base, "feature": feat, "hills": hills & (ring == 0)}, index=H.index)
+
+
+# ---------------------------------------------------------------------------------------------
+# Districts
+# ---------------------------------------------------------------------------------------------
+DISTRICTS = {
+    "city_center": "City Center", "harbor": "Harbor", "aerodrome": "Aerodrome", "spaceport": "Spaceport",
+    "campus": "Campus", "commercial_hub": "Commercial Hub", "industrial_zone": "Industrial Zone",
+    "dam": "Dam", "power_plant": "Power Plant", "encampment": "Encampment", "holy_site": "Holy Site",
+    "theater_square": "Theater Square", "entertainment": "Entertainment Complex", "preserve": "Preserve",
+    "plantation": "Plantation", "farmland": "Farmland", "fishery": "Fishery", "neighborhood": "Neighborhood",
+}
+# priority order (first match becomes the tile's primary district)
+DISTRICT_ORDER = ["city_center", "spaceport", "harbor", "aerodrome", "campus", "commercial_hub",
+                  "industrial_zone", "dam", "power_plant", "holy_site", "theater_square", "encampment",
+                  "entertainment", "plantation", "farmland", "fishery", "neighborhood", "preserve"]
+# Plantation thresholds. Sri Lanka: share of the tile's land (area inside the boundary) under tea, rubber and
+# coconut, from the district crop extents (Economic Census 2013/14) allocated to tiles by tree cover; the US
+# publishes no crop extents of that kind, so it keeps the county orchard share of cropland (tree_crop_share).
+PLANTATION_CROPS = ("tea_ha", "rubber_ha", "coconut_ha")
+PLANTATION = {"lka_share_min": 0.15, "cover_min": 0.40, "built_max": 0.25, "protected_max": 75.0,
+              "us_tree_crop_share_min": 40.0, "us_food_min": 3}
+
+
+def plantation_land_share(H: pd.DataFrame) -> np.ndarray:
+    """(tea + rubber + coconut ha) / (land_km2 x 100) per row; 0 where land_km2 <= 0.5 km² or no extents."""
+    ha = sum(np.nan_to_num(col(H, k, 0.0)) for k in PLANTATION_CROPS)
+    land = np.nan_to_num(col(H, "land_km2", 0.0))
+    with np.errstate(divide="ignore", invalid="ignore"):
+        return np.where(land > 0.5, ha / (np.maximum(land, 1e-9) * 100), 0.0)
+
+
+DISTRICT_RULES = {
+    "city_center": "Centre tile of a City View city: the most populous tile within one ring of the city's coordinates.",
+    "harbor": "Seaports in the tile handle ≥ 1 million tonnes of annual cargo, or the tile holds one of the "
+              "country's 3 busiest ports.",
+    "aerodrome": "Airports in the tile have ≥ 1 million annual passenger boardings (US: FAA enplanements, about half "
+                 "of all arriving + departing passengers), or the tile holds the country's busiest airport by "
+                 "boardings. Sri Lanka has no open airport-level passenger statistics, so there every large airport "
+                 "with scheduled service (OurAirports classification) qualifies.",
+    "spaceport": "Launch site that has hosted an orbital or orbital-class launch (Cape Canaveral, Kennedy, Vandenberg, "
+                 "Wallops / Mid-Atlantic Regional Spaceport, Pacific Spaceport Complex – Alaska, Starbase). "
+                 "Other FAA-listed spaceports (runway, suborbital or reentry-only sites) do not qualify.",
+    "campus": "≥ 2,000 research works in 5 years from institutions in the tile (OpenAlex), "
+              "or STEM (Engineers class) workforce location quotient ≥ 1.8 with ≥ 300 people per km² of land.",
+    "commercial_hub": "Land tile with finance, real-estate & professional-services employment LQ ≥ 1.15 and either "
+                      "Gold ≥ 7 or GDP density in the top 1% of the country's land tiles.",
+    "industrial_zone": "Production yield ≥ 5 and manufacturing employment LQ ≥ 1.5, "
+                       "or an export-processing zone / industrial park in the tile.",
+    "dam": "Hydroelectric capacity ≥ 100 MW in the tile.",
+    "power_plant": "Other (non-hydro) generating capacity — thermal, nuclear, wind, solar… — ≥ 500 MW in the tile.",
+    "encampment": "Military installation in the tile.",
+    "holy_site": "Holds one of the country's most notable religious sites (top 10 in Sri Lanka, top 25 in the US by "
+                 "Wikipedia language editions), or worship-site density in the top 1% of the country's land tiles.",
+    "theater_square": "UNESCO World Heritage cultural or mixed site, ≥ 5 museums (Wikidata), or "
+                      "arts/recreation/hospitality employment LQ ≥ 2 with ≥ 300 people per km² of land.",
+    "entertainment": "Arts, recreation & hospitality employment LQ ≥ 2.5 (tourism economy) with ≥ 5,000 residents "
+                     "in the tile.",
+    "preserve": "Land tile ≥ 75% strictly protected (WDPA, IUCN categories Ia–IV), or holding a national park with "
+                "visitor statistics.",
+    "plantation": f"Sri Lanka: ≥ {PLANTATION['lka_share_min'] * 100:.0f}% of the tile's land under tea, rubber or "
+                  "coconut (district crop extents of the Economic Census 2013/14, allocated to tiles by tree cover), "
+                  f"≥ {PLANTATION['cover_min'] * 100:.0f}% tree + crop cover, < "
+                  f"{PLANTATION['built_max'] * 100:.0f}% built-up, < {PLANTATION['protected_max']:.0f}% strictly "
+                  "protected and no national park. US: fruit & nut orchards, citrus and vineyards ≥ "
+                  f"{PLANTATION['us_tree_crop_share_min']:.0f}% of the county's cropland (Census of Agriculture), "
+                  f"Food yield ≥ {PLANTATION['us_food_min']} and ≥ {PLANTATION['cover_min'] * 100:.0f}% tree + crop "
+                  "cover.",
+    "farmland": "Land tile with Food yield ≥ 4 and ≥ 40% cropland (ESA WorldCover).",
+    "fishery": "Sea tile with Food yield ≥ 6 from fish landings (≥ 31.6 t landed per km² of tile).",
+    "neighborhood": "Land tile with ≥ 1,500 people per km² of land (also when the tile has other districts).",
+}
+
+
+# Sites that have hosted at least one orbital (or orbital-class) launch, by Wikidata item; the FAA
+# 'Spaceports by State' list also carries runway spaceports (Mojave, Houston, Midland ...), suborbital
+# sites (Spaceport America, Launch Site One) and sites that never launched (Spaceport Camden).
+ORBITAL_LAUNCH_SITES = {
+    "Q334465": "Cape Canaveral Space Force Station",
+    "Q48821": "Kennedy Space Center",
+    "Q461492": "Vandenberg Space Force Base",
+    "Q182348": "Wallops Flight Facility",
+    "Q2660820": "Mid-Atlantic Regional Spaceport",
+    "Q283842": "Pacific Spaceport Complex – Alaska",
+    "Q16950811": "Starbase (Boca Chica)",
+}
+# FAA-listed pads inside an orbital range that have no Wikidata item of their own (matched by name)
+ORBITAL_LAUNCH_PADS = {"Space Florida Launch Complex 46"}
+
+
+def orbital_mask(df: pd.DataFrame | None) -> pd.Series:
+    """True for spaceport rows that are orbital launch sites (ORBITAL_LAUNCH_SITES / ORBITAL_LAUNCH_PADS)."""
+    if df is None or not len(df):
+        return pd.Series(dtype=bool)
+    qid = df["wikidata"].astype(str).str.strip() if "wikidata" in df.columns else pd.Series("", index=df.index)
+    return qid.isin(set(ORBITAL_LAUNCH_SITES)) | df["name"].astype(str).isin(ORBITAL_LAUNCH_PADS)
+
+
+def lq(H: pd.DataFrame, num: list[str], den: str = "employed") -> np.ndarray:
+    """Location quotient of employment in `num` industries vs the national share."""
+    if den not in H.columns or not all(k in H.columns for k in num):
+        return np.full(len(H), np.nan)
+    n = H[num].sum(axis=1).to_numpy(float)
+    d = H[den].to_numpy(float)
+    nat = np.nansum(n) / max(np.nansum(d), 1e-9)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        return (n / d) / nat
+
+
+def load_points(country: str) -> dict[str, pd.DataFrame]:
+    out = {}
+    for f in sorted((INTERIM / country).glob("*/points_*.csv")):
+        name = f.stem[len("points_"):]
+        df = pd.read_csv(f, dtype={"h3": str, "wikidata": str})
+        df["domain"] = f.parent.name
+        if name == "spaceports":
+            df["orbital"] = orbital_mask(df).to_numpy(bool) if len(df) else np.zeros(0, bool)
+        out[name] = df
+    return out
+
+
+def point_sum(pts: pd.DataFrame | None, col_: str, index, where=None) -> pd.Series:
+    if pts is None or col_ not in pts.columns:
+        return pd.Series(0.0, index=index)
+    p = pts if where is None else pts[where(pts)]
+    return pd.to_numeric(p[col_], errors="coerce").groupby(p.h3).sum().reindex(index).fillna(0.0)
+
+
+def point_count(pts: pd.DataFrame | None, index, where=None) -> pd.Series:
+    if pts is None or len(pts) == 0:
+        return pd.Series(0.0, index=index)
+    p = pts if where is None else pts[where(pts)]
+    return p.groupby("h3").size().reindex(index).fillna(0).astype(float)
+
+
+def first_col(df: pd.DataFrame | None, *names) -> str | None:
+    if df is None:
+        return None
+    for n in names:
+        if n in df.columns:
+            return n
+    return None
+
+
+# ---------------------------------------------------------------------------------------------
+# Main
+# ---------------------------------------------------------------------------------------------
+
+def build_tiles(country: str) -> tuple[pd.DataFrame, dict]:
+    R = pd.read_parquet(INTERIM / country / "reconciled" / "hexes.parquet")
+    core = load_hexes(country).set_index("h3")
+    H = core[["ring", "lat", "lon", "hex_km2", "land_km2"] + list(COUNTRIES[country]["admin_levels"])].join(
+        R.drop(columns=[c for c in ("pop", "land_km2") if c in R.columns]), how="left")
+    H["pop"] = core["pop"]
+    area = H["hex_km2"].to_numpy(float)
+    pts = load_points(country)
+    idx = H.index
+
+    T = classify_terrain(H)
+
+    # --- yields
+    Y = pd.DataFrame(index=idx)
+    dens = lambda k: col(H, k, 0.0) / area  # noqa: E731
+    Y["gold"] = log_yield(dens("gdp_usd"), YIELD_BASES["gold"][1])
+    plants = pts.get("power_plants")
+    cap = point_sum(plants, "capacity_mw", idx)
+    Y["production"] = log_yield(dens("gdp_industry_usd"), YIELD_BASES["production"][1]) + step_bonus(cap, POWER_BONUS)
+    food_land = log_yield(dens("ag_gva_usd"), YIELD_BASES["food"][1])
+    food_sea = log_yield(dens("fish_catch_t"), YIELD_BASES["food_sea"][1])
+    Y["food"] = np.where(H.ring > 0, food_sea, np.maximum(food_land, food_sea))
+    inst = pts.get("institutions")
+    wcol = first_col(inst, "research_works_5y", "works_5y")
+    works = point_sum(inst, wcol, idx) if wcol else pd.Series(0.0, index=idx)
+    Y["science"] = log_yield(dens("cit_engineers"), YIELD_BASES["science"][1]) + step_bonus(works, RESEARCH_BONUS)
+    heritage = pts.get("heritage")
+    whs = point_count(heritage, idx)
+    museums = point_count(pts.get("museums"), idx)
+    parks = pts.get("parks")
+    vcol = first_col(parks, "park_visitors", "visitors")
+    park_vis = point_sum(parks, vcol, idx) if vcol else pd.Series(0.0, index=idx)
+    cb = CULTURE_BONUS
+    Y["culture"] = (log_yield(dens("emp_arts_accommodation"), YIELD_BASES["culture"][1])
+                    + cb["per_whs"] * np.minimum(whs, cb["max_whs"]).astype(int)
+                    + cb["museums_bonus"] * (museums >= cb["museums_min"]).astype(int)
+                    + cb["park_bonus"] * (park_vis >= cb["park_visitors_min"]).astype(int))
+    holy = pts.get("holy_sites")
+    holy_n = point_count(holy, idx)
+    Y["faith"] = (log_yield(dens("worship_sites"), YIELD_BASES["faith"][1])
+                  + FAITH_BONUS["per_holy_site"] * np.minimum(holy_n, FAITH_BONUS["max_holy_sites"]).astype(int))
+    Y = Y.clip(upper=YIELD_CAP + 4).astype(int)
+    sea = H.ring.to_numpy() > 0
+    for c in ("science", "culture", "faith"):
+        Y.loc[sea, c] = 0
+
+    # --- districts
+    popd = col(H, "pop", 0.0) / np.maximum(col(H, "land_km2", 0.0), 1e-6)
+    popd = np.where(col(H, "land_km2", 0.0) > 0.5, popd, 0.0)
+    lq_stem = lq(H, ["cit_engineers"])
+    lq_fin = lq(H, ["emp_finance", "emp_professional"])
+    lq_mfg = lq(H, ["emp_manufacturing"])
+    lq_arts = lq(H, ["emp_arts_accommodation"])
+    ports = pts.get("ports")
+    pcol = first_col(ports, "port_cargo_t", "cargo_tonnes")
+    port_t = point_sum(ports, pcol, idx) if pcol else pd.Series(0.0, index=idx)
+    top_ports = set()
+    if ports is not None and pcol:
+        top_ports = set(ports.sort_values(pcol, ascending=False).dropna(subset=["h3"]).h3.head(3))
+    airports = pts.get("airports")
+    acol = first_col(airports, "airport_pax", "passengers")
+    pax_v = pd.to_numeric(airports[acol], errors="coerce") if acol else None
+    has_pax = pax_v is not None and bool(pax_v.notna().any())
+    pax = point_sum(airports, acol, idx) if has_pax else pd.Series(0.0, index=idx)
+    top_air = set()
+    if has_pax:
+        top_air = set(airports.assign(_v=pax_v).dropna(subset=["_v", "h3"]).sort_values("_v", ascending=False).h3.head(1))
+    elif airports is not None and len(airports):
+        # no airport-level passenger statistics (Sri Lanka): every large airport with scheduled service
+        big = airports["kind"].astype(str).eq("large_airport")
+        if "scheduled_service" in airports.columns:
+            big &= airports["scheduled_service"].astype(str).str.lower().eq("yes")
+        top_air = set(airports.loc[big, "h3"].dropna())
+    fuel_col = first_col(plants, "primary_fuel", "kind")
+    hydro = point_sum(plants, "capacity_mw", idx,
+                      where=(lambda p: p[fuel_col].astype(str).str.lower().str.contains("hydro")) if fuel_col else None)
+    other_cap = cap - hydro
+    mil = point_count(pts.get("military"), idx)
+    sp = pts.get("spaceports")
+    space = point_count(sp, idx, where=(lambda p: p["orbital"].astype(bool))) if sp is not None and len(sp) \
+        else pd.Series(0.0, index=idx)
+    ez = point_count(pts.get("industrial_zones"), idx)
+    cultural_whs = point_count(heritage, idx, where=(lambda p: ~p["kind"].astype(str).str.lower().eq("natural"))) \
+        if heritage is not None and "kind" in heritage.columns else whs
+    holy_top = pd.Series(False, index=idx)
+    if holy is not None and len(holy):
+        hs = holy.sort_values("sitelinks", ascending=False) if "sitelinks" in holy.columns else holy
+        holy_top = pd.Series(idx.isin(set(hs.h3.dropna().head(10 if country == "lka" else 25))), index=idx)
+    gdp_dens = dens("gdp_usd")
+    gdp_top1 = np.nanquantile(gdp_dens[H.ring.to_numpy() == 0], 0.99) if (H.ring == 0).any() else np.inf
+    ws = dens("worship_sites")
+    land_mask = H.ring.to_numpy() == 0
+    ws_thr = np.nanquantile(ws[land_mask], 0.99) if land_mask.any() else np.inf
+    protected = np.nan_to_num(col(H, "protected_strict_pct", np.nan)) if "protected_strict_pct" in H.columns \
+        else np.nan_to_num(col(H, "protected_pct", 0.0))
+    park_tile = point_count(parks, idx) > 0
+    tree_share = np.nan_to_num(col(H, "tree_crop_share", 0.0))
+    lc_tree = np.nan_to_num(col(H, "lc_tree", 0.0))
+    lc_crop = np.nan_to_num(col(H, "lc_crop", 0.0))
+    lc_built = np.nan_to_num(col(H, "lc_built", 0.0))
+    PL = PLANTATION
+    if all(k in H.columns for k in PLANTATION_CROPS):
+        # Sri Lanka: plantation crops' share of the tile's own land (tea estates up-country, rubber, coconut)
+        # (the extents follow tree cover, so strictly protected forest and national parks would otherwise
+        # "hold" tea: excluded)
+        plantation = ((plantation_land_share(H) >= PL["lka_share_min"]) & (lc_tree + lc_crop >= PL["cover_min"])
+                      & (lc_built < PL["built_max"]) & (protected < PL["protected_max"]) & ~park_tile.to_numpy()
+                      & land_mask)
+    else:
+        plantation = ((tree_share >= PL["us_tree_crop_share_min"]) & (Y["food"].to_numpy() >= PL["us_food_min"])
+                      & (lc_tree + lc_crop >= PL["cover_min"]) & land_mask)
+
+    D = {
+        "harbor": (port_t >= 1e6).to_numpy() | idx.isin(top_ports),
+        "aerodrome": (pax >= 1e6).to_numpy() | idx.isin(top_air),
+        "spaceport": (space > 0).to_numpy(),
+        "campus": (works >= 2000).to_numpy() | ((np.nan_to_num(lq_stem) >= 1.8) & (popd >= 300)),
+        "commercial_hub": ((Y["gold"].to_numpy() >= 7) | (gdp_dens >= gdp_top1)) & (np.nan_to_num(lq_fin) >= 1.15) & land_mask,
+        "industrial_zone": ((Y["production"].to_numpy() >= 5) & (np.nan_to_num(lq_mfg) >= 1.5)) | (ez > 0).to_numpy(),
+        "dam": (hydro >= 100).to_numpy(),
+        "power_plant": (other_cap >= 500).to_numpy(),
+        "encampment": (mil > 0).to_numpy(),
+        "holy_site": holy_top.to_numpy() | ((ws >= ws_thr) & land_mask & (ws > 0)),
+        "theater_square": (cultural_whs > 0).to_numpy() | (museums >= 5).to_numpy()
+        | ((np.nan_to_num(lq_arts) >= 2) & (popd >= 300)),
+        "entertainment": (np.nan_to_num(lq_arts) >= 2.5) & (col(H, "pop", 0.0) >= 5000),
+        "preserve": ((protected >= 75) | park_tile.to_numpy()) & land_mask,
+        "plantation": plantation,
+        "farmland": (Y["food"].to_numpy() >= 4) & (lc_crop >= 0.4) & land_mask,
+        "fishery": (H.ring.to_numpy() > 0) & (Y["food"].to_numpy() >= 6),
+        "neighborhood": (popd >= 1500) & land_mask,
+    }
+    D = pd.DataFrame(D, index=idx)
+    D["city_center"] = False
+    primary = pd.Series("", index=idx, dtype=object)
+    for k in reversed(DISTRICT_ORDER):
+        if k in D.columns:
+            primary = primary.where(~D[k], k)
+    tiles = pd.concat([H[["ring", "lat", "lon", "hex_km2"]], T, Y.add_prefix("y_")], axis=1)
+    tiles["district"] = primary
+    tiles["districts_all"] = D.apply(lambda r: ",".join(k for k in DISTRICT_ORDER if k in r.index and r[k]), axis=1)
+    extras = {"works_5y": works, "capacity_mw": cap, "port_cargo_t": port_t, "airport_pax": pax,
+              "whs": whs, "museums": museums, "holy_sites": holy_n, "park_visitors": park_vis,
+              "military_sites": mil, "lq_stem": lq_stem, "lq_finance": lq_fin, "lq_manufacturing": lq_mfg,
+              "lq_arts": lq_arts}
+    for k, v in extras.items():
+        tiles[k] = np.asarray(v, dtype=float)
+    return tiles, {"pts": pts, "H": H}
+
+
+# ---------------------------------------------------------------------------------------------
+# Wonders
+# ---------------------------------------------------------------------------------------------
+WONDER_RULES = [
+    # (category, points table, value column(s), N lka, N usa, rule text, default unit, value metric key).
+    # The unit is taken from the value metric when the domain publishes one ({unit} in the rule text).
+    ("Great University", "universities", ("research_works_5y", "works_5y"), 5, 10,
+     "Top research universities by research articles & reviews published 2021–2025 (OpenAlex).", "works",
+     "research_works_5y"),
+    ("Great Port", "ports", ("port_cargo_t", "cargo_tonnes"), 3, 10,
+     "Busiest seaports by annual cargo volume (IMF PortWatch import + export tonnes).", "tonnes", "port_cargo_t"),
+    ("Great Power Station", "power_plants", ("capacity_mw",), 5, 10,
+     "Largest power stations by installed capacity.", "MW", "power_capacity_mw"),
+    ("Natural Wonder", "parks", ("park_visitors", "visitors"), 5, 10,
+     "Most visited national parks (annual visits).", "visits/yr", "park_visitors"),
+    ("Great Airport", "airports", ("airport_pax", "passengers"), 1, 10,
+     "Busiest airports by annual passenger boardings ({unit}: each boarding passenger is counted once, "
+     "so about half of all arriving + departing passengers).", "enplanements", "airport_pax"),
+    ("World Heritage", "heritage", (None,), 99, 99,
+     "All UNESCO World Heritage Sites inscribed in the country.", "", "heritage_sites"),
+    ("Holy Wonder", "holy_sites", ("sitelinks",), 3, 5,
+     "Most widely documented religious sites (number of Wikipedia language editions).", "Wikipedia editions", None),
+]
+# Sources cited by every wonder of a category (the dataset that produced its value first), plus
+# row-level provenance columns.  Only ids present in the country's source registry are kept.
+WONDER_SOURCES = {
+    "Great University": ["openalex"],
+    "Great Port": ["imf_portwatch"],
+    "Great Power Station": [],                     # per row: capacity_source, location_source
+    "Natural Wonder": ["nps_irma_stats", "sltda_year_in_review_2025"],
+    "Great Airport": ["faa_enplanements_cy2025", "ourairports"],
+    "World Heritage": ["unesco_whc_via_wikidata", "wikidata"],
+    "Holy Wonder": ["wikidata"],
+}
+# shown instead of "none qualify" when a country publishes no values for a category's ranking metric
+WONDER_NO_DATA = {
+    "Great Airport": "No open airport-level passenger statistics for {country}: no airport can be ranked.",
+}
+
+
+def _row_sources(cat: str, r: pd.Series, known: set[str]) -> list[str]:
+    out = list(WONDER_SOURCES.get(cat, []))
+    if cat == "Great Power Station":
+        for c in ("capacity_source", "location_source"):
+            v = r.get(c)
+            if isinstance(v, str):
+                out += [s.strip() for s in v.split("|")]
+    if cat == "Great University":
+        if str(r.get("coord_source", "")).startswith("wikidata"):
+            out.append("wikidata")
+        if pd.notna(r.get("rd_usd")) and float(r.get("rd_usd") or 0) > 0:
+            out.append("nsf_herd_fy2024")
+    if cat == "Natural Wonder":
+        out.append("wikidata")
+        if str(r.get("area_source", "")).upper() == "WDPA":
+            out.append("unep_wdpca")
+    return [s for s in dict.fromkeys(out) if s in known]
+
+
+def build_wonders(country: str, pts: dict, tiles: pd.DataFrame, metric_by_key: dict,
+                  known_sources: set[str]) -> tuple[list[dict], list[dict]]:
+    """Ranked wonders, plus one status row per category (ranked / no published values / no candidates)."""
+    out, cats = [], []
+    cname = COUNTRIES[country]["name"]
+    for cat, table, cols, n_l, n_u, rule, unit, mkey in WONDER_RULES:
+        m = metric_by_key.get(mkey) or {}
+        if any(cols):                                  # ranked by a value: its unit comes from the metric
+            unit = m.get("unit") or unit
+        rule = rule.format(unit=unit)
+        n = n_l if country == "lka" else n_u
+        df = pts.get(table)
+        cand = 0 if df is None else int(len(df))
+        vc = next((c for c in cols if c and df is not None and c in df.columns), None)
+        d = pd.DataFrame() if df is None else df.dropna(subset=["h3"]).copy()
+        if vc and len(d):
+            d[vc] = pd.to_numeric(d[vc], errors="coerce")
+            d = d.dropna(subset=[vc]).sort_values(vc, ascending=False)
+        with_value = int(len(d))
+        status, note = "ranked", None
+        if cand == 0:
+            status = "no_candidates"
+        elif with_value == 0:
+            status = "no_data"
+            note = WONDER_NO_DATA.get(cat, "No published figures for this ranking in {country}.").format(country=cname)
+        cat_sources = [s for s in dict.fromkeys(WONDER_SOURCES.get(cat, []) + m.get("sources", [])) if s in known_sources]
+        cats.append({"category": cat, "rule": rule, "unit": unit, "metric": mkey, "metric_vintage": m.get("vintage"),
+                     "cap": n if n < 99 else None, "candidates": cand, "with_value": with_value,
+                     "ranked": min(n, with_value), "status": status, "note": note, "sources": cat_sources})
+        d = d.head(n)
+        for rank, (_, r) in enumerate(d.iterrows(), start=1):
+            w = {
+                "category": cat, "rank": rank, "name": str(r["name"]), "lat": float(r["lat"]), "lon": float(r["lon"]),
+                "h3": r["h3"], "kind": str(r.get("kind", "")), "rule": rule,
+                "value": (float(r[vc]) if vc else None), "unit": unit,
+                "domain": r.get("domain"), "sources": _row_sources(cat, r, known_sources) or cat_sources,
+                "cap": n if n < 99 else None, "candidates": cand,
+            }
+            for extra in ("visitors_year", "year", "pax_year", "data_year", "rd_usd", "primary_fuel", "wikidata",
+                          "iata", "inscribed"):
+                if extra in r.index and pd.notna(r[extra]):
+                    v = r[extra]
+                    w[extra] = v.item() if hasattr(v, "item") else v
+            if "year" not in w and ("pax_year" in w or "data_year" in w):
+                w["year"] = int(w.get("pax_year") or w.get("data_year"))   # vintage of the ranked value
+            out.append(w)
+    return out, cats
+
+
+# ---------------------------------------------------------------------------------------------
+# Cities (City View)
+# ---------------------------------------------------------------------------------------------
+CITY_RADIUS = {"lka": 3, "usa": 3}
+CITIZEN_CLASSES = ["cit_farmers", "cit_workers", "cit_merchants", "cit_engineers", "cit_scholars",
+                   "cit_healers", "cit_service", "cit_administrators", "cit_artists", "cit_soldiers"]
+
+FALLBACK_METROS = {
+    "lka": [("colombo", "Colombo", 6.9271, 79.8612), ("kandy", "Kandy", 7.2906, 80.6337),
+            ("galle", "Galle", 6.0535, 80.2210), ("jaffna", "Jaffna", 9.6615, 80.0255)],
+    "usa": [("nyc", "New York", 40.7128, -74.0060), ("la", "Los Angeles", 34.0522, -118.2437),
+            ("chicago", "Chicago", 41.8781, -87.6298), ("houston", "Houston", 29.7604, -95.3698)],
+}
+
+
+# What the official population of a City View city covers: US metros carry Census MSA estimates;
+# Sri Lankan cities only the population statement on the city's Wikidata item (city proper).
+POPULATION_SCOPE = {"usa": "metro area (Census MSA)", "lka": "city proper (Wikidata)"}
+POPULATION_SOURCES = {"usa": ["census_pep_cbsa_2025", "census_delineation_2023"], "lka": ["wikidata"]}
+
+
+def city_population_fields(country: str, m: dict) -> dict:
+    """population_scope (short), population_note (what the figure covers, caveats) and
+    population_sources of a metro's official population, plus the Census 2024 DS-division
+    figures for Sri Lanka whenever metros.json has them (also for cities without a Wikidata figure)."""
+    out = {"population_scope": None, "population_note": None, "population_sources": []}
+    if m.get("population") is not None:
+        out = (_us_population(m) if country == "usa" else _lka_population(m))
+    if m.get("census_ds_population") is not None:
+        out.update({
+            "census_ds_population": m["census_ds_population"],
+            "census_ds_urban_population": m.get("census_ds_urban_population"),
+            "census_ds_id": m.get("census_ds_id"), "census_ds_name": m.get("census_ds_name"),
+            "census_year": m.get("census_year"), "census_scope": m.get("census_scope"),
+            "census_sources": list(m.get("census_sources") or ["dcs_census_portal"]),
+        })
+    return out
+
+
+def _us_population(m: dict) -> dict:
+    yr = m.get("population_year")
+    srcs = list(m.get("population_sources") or POPULATION_SOURCES["usa"])
+    title = m.get("title") or m.get("name")
+    n_cty = len(m.get("admin_ids") or [])
+    city = ""
+    if m.get("principal_city_population"):
+        pyr = m.get("principal_city_population_year")
+        city = (f" (the city of {m.get('principal_city') or m.get('name')} itself: "
+                f"{float(m['principal_city_population']):,.0f}{', ' + str(pyr) if pyr else ''}, Wikidata)")
+        if "wikidata" not in srcs:
+            srcs.append("wikidata")
+    note = (f"{title} Metropolitan Statistical Area (OMB 2023 delineation, {n_cty} "
+            f"{'county' if n_cty == 1 else 'counties'}): Census Bureau population estimate"
+            f"{' for ' + str(yr) if yr else ''}. A metro area, not the city proper{city}.")
+    return {"population_scope": POPULATION_SCOPE["usa"], "population_note": note, "population_sources": srcs}
+
+
+def _lka_population(m: dict) -> dict:
+    yr = m.get("population_year")
+    srcs = list(m.get("population_sources") or POPULATION_SOURCES["lka"])
+    parts = [f"Population statement on the city's Wikidata item (P1082{', ' + str(yr) if yr else ''}). Wikidata "
+             "does not record the area it covers (usually the municipal / urban council area); not a metro area, "
+             "so not comparable with US metro figures."]
+    kind = str(m.get("population_ref_kind") or "")
+    if kind == "unreferenced":
+        parts.append("The Wikidata statement cites no reference.")
+    elif kind.startswith("third-party"):
+        parts.append(f"The Wikidata statement cites a {kind}.")
+    elif kind:
+        parts.append(f"Wikidata reference: {kind}.")
+    if m.get("population_note"):
+        parts.append(str(m["population_note"]))
+        if "WDI" in str(m["population_note"]) and "worldbank_wdi" not in srcs:
+            srcs.append("worldbank_wdi")
+    return {"population_scope": POPULATION_SCOPE["lka"], "population_note": " ".join(parts),
+            "population_sources": srcs}
+
+
+def city_size(pop: float) -> int:
+    return max(1, int(round((max(pop, 0) ** 0.4) / 20)))
+
+
+def largest_remainder(shares: dict[str, float], total: int) -> dict[str, int]:
+    s = sum(v for v in shares.values() if v > 0)
+    if s <= 0 or total <= 0:
+        return {k: 0 for k in shares}
+    raw = {k: max(v, 0) / s * total for k, v in shares.items()}
+    base = {k: int(math.floor(v)) for k, v in raw.items()}
+    rest = total - sum(base.values())
+    for k in sorted(raw, key=lambda k: raw[k] - base[k], reverse=True)[:rest]:
+        base[k] += 1
+    return base
+
+
+def build_cities(country: str, tiles: pd.DataFrame, H: pd.DataFrame, wonders: list[dict]) -> list[dict]:
+    metros_f = INTERIM / "national" / "metros.json"
+    metros = []
+    if metros_f.exists():
+        metros = [m for m in json.loads(metros_f.read_text()) if m.get("country") == country]
+    if not metros:
+        metros = [{"id": i, "name": n, "lat": la, "lon": lo, "country": country} for i, n, la, lo in FALLBACK_METROS[country]]
+    res = COUNTRIES[country]["h3_res"]
+    rad = CITY_RADIUS[country]
+    grid = set(tiles.index)
+    out = []
+    lq_keys = [k for k in H.columns if k.startswith("emp_")]
+    nat_emp = H[lq_keys].sum() if lq_keys else None
+    nat_tot = H["employed"].sum() if "employed" in H.columns else None
+    tpop = lambda c: float(H.at[c, "pop"]) if c in H.index else 0.0  # noqa: E731
+
+    # pass 1: centre = most populous tile within 1 ring of the city's coordinates (not another city's centre)
+    placed, centres = [], set()
+    for m in metros:
+        c0 = h3.latlng_to_cell(float(m["lat"]), float(m["lon"]), res)
+        near = [c for c in h3.grid_disk(c0, 1) if c in grid and c not in centres]
+        if not near:
+            continue
+        centre = max(near, key=tpop)
+        centres.add(centre)
+        placed.append((m, centre, [c for c in h3.grid_disk(centre, rad) if c in grid]))
+
+    # pass 2: where rings overlap, each tile belongs to the nearest city centre only (grid steps, then
+    # great-circle distance, then the larger official population), so no person, job, yield, district
+    # or wonder is counted in two cities.
+    best: dict[str, tuple] = {}
+    for ci, (m, centre, ring_cells) in enumerate(placed):
+        clat, clon = h3.cell_to_latlng(centre)
+        for c in ring_cells:
+            la, lo = h3.cell_to_latlng(c)
+            key = (h3.grid_distance(centre, c), h3.great_circle_distance((la, lo), (clat, clon), unit="km"),
+                   -float(m.get("population") or 0), ci)
+            if c not in best or key < best[c]:
+                best[c] = key
+    owner = {c: v[-1] for c, v in best.items()}
+
+    for ci, (m, centre, full_ring) in enumerate(placed):
+        ring_cells = [c for c in full_ring if owner.get(c) == ci]
+        ceded: dict[int, list[str]] = {}          # tiles of this ring that belong to a nearer city
+        for c in full_ring:
+            if owner.get(c) != ci:
+                ceded.setdefault(owner[c], []).append(c)
+        overlap = [{"id": str(placed[j][0].get("id")), "name": placed[j][0].get("name"), "tiles": len(cs),
+                    "pop": float(sum(tpop(c) for c in cs))} for j, cs in sorted(ceded.items())]
+        sub = H.loc[ring_cells]
+        t = tiles.loc[ring_cells]
+        pop = float(sub["pop"].sum())
+        gdp = float(sub["gdp_usd"].sum()) if "gdp_usd" in sub else None
+        cit = {k: float(sub[k].sum()) for k in CITIZEN_CLASSES if k in sub.columns}
+        size = city_size(pop)
+        icons = largest_remainder(cit, size) if cit else {}
+        industries = []
+        if lq_keys and nat_tot:
+            emp_tot = sub["employed"].sum() if "employed" in sub else 0
+            for k in lq_keys:
+                if emp_tot > 0 and nat_emp[k] > 0:
+                    industries.append({"key": k, "jobs": float(sub[k].sum()),
+                                       "lq": float((sub[k].sum() / emp_tot) / (nat_emp[k] / nat_tot))})
+            industries.sort(key=lambda r: r["lq"], reverse=True)
+        tile_rows = []
+        for c in ring_cells:
+            r = t.loc[c]
+            tile_rows.append({
+                "h3": c, "d": int(h3.grid_distance(centre, c)), "terrain": r["terrain"], "feature": r["feature"],
+                "hills": bool(r["hills"]), "district": "city_center" if c == centre else r["district"],
+                "yields": [int(r[f"y_{y}"]) for y in YIELDS], "pop": float(H.at[c, "pop"]),
+            })
+        ring_set = set(ring_cells)
+        out.append({
+            "id": str(m.get("id")), "name": m.get("name"), "lat": float(m["lat"]), "lon": float(m["lon"]),
+            "centre": centre, "radius": rad, "tiles": tile_rows,
+            "ring_tiles": len(full_ring), "overlap": overlap,
+            "pop": pop, "gdp_usd": gdp, "gdp_per_capita": (gdp / pop if gdp and pop else None),
+            "official_pop": m.get("population"), "official_pop_year": m.get("population_year"),
+            **city_population_fields(country, m),
+            "official_gdp_usd": m.get("gdp_usd"), "official_gdp_year": m.get("gdp_year"),
+            # BEA county GDP summed over the metro's member counties (OMB delineation)
+            "official_gdp_sources": (["bea_cagdp1", "census_delineation_2023"] if m.get("gdp_usd") else []),
+            # sources of the metro list itself (definition, principal-city point, boundaries)
+            "metro_sources": list(m.get("sources") or []),
+            "admin_ids": m.get("admin_ids"), "wikidata": m.get("wikidata"),
+            "size": size, "citizens": cit, "citizen_icons": icons,
+            "employed": float(sub["employed"].sum()) if "employed" in sub else None,
+            "yields": {y: int(t[f"y_{y}"].sum()) for y in YIELDS},
+            "industries": industries[:6],
+            "wonders": [w["name"] for w in wonders if w.get("h3") in ring_set],
+            "districts": sorted({r["district"] for r in tile_rows if r["district"]}),
+        })
+        tiles.at[centre, "district"] = "city_center"
+        rest = [x for x in str(tiles.at[centre, "districts_all"] or "").split(",") if x and x != "city_center"]
+        tiles.at[centre, "districts_all"] = ",".join(["city_center"] + rest)
+    return out
+
+
+def build(country: str) -> dict:
+    tiles, ctx = build_tiles(country)
+    out = INTERIM / country / "civ"
+    out.mkdir(parents=True, exist_ok=True)
+    rmetrics = json.loads((INTERIM / country / "reconciled" / "metrics.json").read_text())
+    metric_by_key = {m["key"]: m for m in rmetrics}
+    # the registry the web app's sources.json is built from, so every cited id resolves to a chip
+    known = {s["id"] for s in json.loads((INTERIM / country / "reconciled" / "sources.json").read_text())}
+    wonders, wonder_cats = build_wonders(country, ctx["pts"], tiles, metric_by_key, known)
+    cities = build_cities(country, tiles, ctx["H"], wonders)
+    tiles.to_parquet(out / "tiles.parquet")
+    (out / "wonders.json").write_text(json.dumps(wonders, indent=1, default=str))
+    (out / "wonder_categories.json").write_text(json.dumps(wonder_cats, indent=1, default=str))
+    (out / "cities.json").write_text(json.dumps(cities, indent=1, default=str))
+    summary = {
+        "terrain": tiles.terrain.value_counts().to_dict(),
+        "districts": tiles.district.value_counts().to_dict(),
+        "yield_totals": {y: int(tiles[f"y_{y}"].sum()) for y in YIELDS},
+        "wonders": len(wonders), "cities": len(cities),
+    }
+    (out / "summary.json").write_text(json.dumps(summary, indent=2, default=str))
+    return summary
+
+
+if __name__ == "__main__":
+    import sys
+    for cc in sys.argv[1:] or ["lka", "usa"]:
+        print(cc, json.dumps(build(cc), indent=1, default=str))

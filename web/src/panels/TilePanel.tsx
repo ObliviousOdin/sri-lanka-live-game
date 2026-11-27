@@ -1,0 +1,643 @@
+// Inspect tab: tile / admin-unit inspector and, with nothing selected, a Civilization summary.
+import { memo, useMemo } from 'react'
+import { cellToLatLng, getHexagonEdgeLengthAvg, latLngToCell, UNITS } from 'h3-js'
+import { COUNTRY_META, DISTRICT_META, TERRAIN_META, YIELD_META, terrainLabel } from '../civ'
+import { rgbCss } from '../color'
+import { SourceChips } from '../components/SourceChip'
+import { YieldIcon, YieldRow } from '../components/YieldIcon'
+import { adminUnitOfHex, hexesOfAdmin, value } from '../data/load'
+import { useNational, type AppData } from '../data/useData'
+import { useStore, type PickLevel } from '../store'
+import { COUNTRIES, YIELDS, type CountryData, type CountryId, type IndexJson, type Metric, type NationalIndicator, type Selection, type YieldKey } from '../types'
+import { fmtInt, fmtNumber, fmtUsd } from '../format'
+import { WONDER_ICON } from '../map/MapPane'
+import { countryVintage } from './explorerData'
+import { PlaceSearch } from './PlaceSearch'
+import { MetricGroups, type MetricRowData } from './TilePanelMetrics'
+import {
+  adminParents, adminRank, adminZoom, explainYields, fmtDensity, fmtLandDensity, fmtVal, hasDensity, hexPercentile, isLandDensity,
+  landYieldMeans, LOADING_STATS, plural, POINT_LAYER_META, pointsInHex, pointValue, STATS_FAILED, statsState, tieInfo, wonderUnit,
+  type StatsState, type YieldExplain,
+} from './tilePanelStats'
+import './TilePanel.css'
+
+const ordinal = (p: number) => {
+  const n = Math.round(p)
+  const s = n % 100 >= 11 && n % 100 <= 13 ? 'th' : ({ 1: 'st', 2: 'nd', 3: 'rd' } as Record<number, string>)[n % 10] ?? 'th'
+  return `${n}${s}`
+}
+
+// memo: App re-renders on every store change (e.g. map pan/zoom); this panel only needs `app` + its own store slices
+export const TilePanel = memo(function TilePanel({ app }: { app: AppData }) {
+  const selection = useStore((s) => s.selection)
+  // the search box stays mounted (same position) whatever is selected, so it keeps focus
+  return (
+    <>
+      <PlaceSearch app={app} />
+      <TileBody app={app} selection={selection} />
+    </>
+  )
+})
+
+function TileBody({ app, selection }: { app: AppData; selection: Selection | null }) {
+  const idx = app.index
+  if (!idx) return <div className="loading">Loading…</div>
+  if (!selection) return <Overview app={app} idx={idx} />
+  const d = app.countries[selection.country]
+  if (!d) return <div className="loading">Loading {COUNTRY_META[selection.country].name}…</div>
+  if (selection.kind === 'hex') {
+    const i = d.hexIndex.get(selection.id)
+    if (i == null) return <NotFound what={`Tile ${selection.id}`} />
+    return <HexInspector key={`${d.id}:${i}`} d={d} idx={idx} i={i} stats={statsState(d, app.errors)} />
+  }
+  if (selection.kind === 'admin') {
+    const [level, s] = selection.id.split(':')
+    const ui = Number(s)
+    if (!d.admin[level]?.units[ui]) return <NotFound what={`Unit ${selection.id}`} />
+    return <AdminInspector key={`${d.id}:${selection.id}`} d={d} idx={idx} level={level} ui={ui} />
+  }
+  return <OtherSelection d={d} sel={selection} />
+}
+
+function NotFound({ what }: { what: string }) {
+  return (
+    <div className="tilepanel">
+      <div className="card"><p>{what} is not in the current data export (the pipeline may have regenerated the grid).</p>
+        <button className="btn" onClick={() => useStore.getState().select(null)}>Clear selection</button></div>
+    </div>
+  )
+}
+
+function CountryChip({ id }: { id: CountryId }) {
+  return <span className={`chip ${id}`}>{COUNTRY_META[id].name}</span>
+}
+
+function CloseButton() {
+  return (
+    <button className="tilepanel-close" onClick={() => useStore.getState().select(null)} aria-label="Clear selection" title="Clear selection (Esc)">✕</button>
+  )
+}
+
+// ---------------------------------------------------------------------------------------------
+// Hex
+// ---------------------------------------------------------------------------------------------
+function HexInspector({ d, idx, i, stats }: { d: CountryData; idx: IndexJson; i: number; stats: StatsState }) {
+  const h3 = d.hexes.h3[i]
+  const country = d.id
+  const t = idx.terrain_codes[d.hexes.terrain[i]] ?? 'plains'
+  const f = idx.feature_codes[d.hexes.feature[i]] ?? ''
+  const hills = !!d.hexes.hills[i]
+  const ring = d.hexes.ring[i]
+  const dist = idx.districts[d.hexes.district[i]] ?? { code: '', label: '', rule: '' }
+  const allDistricts = (d.hexes.districts_all?.[i] ?? '').split(',').filter(Boolean)
+  const [lat, lon] = useMemo(() => cellToLatLng(h3), [h3])
+  const yields = useMemo(() => Object.fromEntries(YIELDS.map((y) => [y, d.hexes.yields?.[y]?.[i] ?? 0])) as Record<YieldKey, number>, [d, i])
+  const explain = useMemo(() => explainYields(d, idx, i, stats === 'failed'), [d, idx, i, stats])
+  const facilities = useMemo(() => pointsInHex(d, h3), [d, h3])
+  const wonders = useMemo(() => d.wonders.filter((w) => w.h3 === h3), [d, h3])
+  const crumbs = useMemo(() => Object.keys(d.meta.admin_levels).map((lvl) => ({ lvl, u: adminUnitOfHex(d, lvl, i) })).filter((c) => c.u), [d, i])
+  const terrainRgb = TERRAIN_META[t]?.rgb ?? [120, 120, 120]
+  const scope = `Percentiles rank this ${ring > 0 ? 'sea ' : ''}tile against ${d.meta.name}'s ${fmtInt(d.meta.land_hex_count)} land tiles (totals such as population or GDP per km² of tile, like the map lens; population density is per km² of land).`
+  const tileKm2 = d.hexArea[i]
+  const landKm2 = value(d, 'land_km2', i)
+
+  const rows = useMemo<MetricRowData[]>(() => d.meta.metrics.map((m) => {
+    const raw = d.matrix[m.col * d.n + i]
+    const landDens = isLandDensity(m)
+    const landTxt = Number.isFinite(landKm2) ? `${fmtNumber(landKm2)} km² of land in this ${fmtNumber(tileKm2)} km² tile` : 'land area of the tile'
+    return {
+      key: m.key, metric: m, label: m.label, category: m.category || 'other', raw,
+      valueText: landDens ? fmtLandDensity(raw, m.unit) : fmtVal(raw, m.unit),
+      densityText: hasDensity(m) && Number.isFinite(raw) && raw !== 0 ? fmtDensity(raw / tileKm2, m.unit, 'tile')
+        : landDens && Number.isFinite(raw) ? 'per km² of land' : undefined,
+      densityTitle: hasDensity(m) ? `Value ÷ tile area (${fmtNumber(tileKm2)} km², including any water) — the basis of yields and the map lenses`
+        : landDens ? `Divided by land only (${landTxt}), so it differs from population per km² of tile on coasts and lakes` : undefined,
+      rank: () => hexRankInfo(d, m, i),
+    }
+  }), [d, i, tileKm2, landKm2])
+
+  return (
+    <div className="tilepanel">
+      <header className="tilepanel-head">
+        <div className="tilepanel-title">
+          <span className="tilepanel-hex" style={{ background: rgbCss(terrainRgb) }} aria-hidden />
+          <h2>{terrainLabel(t, f, hills)}</h2>
+          <CloseButton />
+        </div>
+        <div className="row tilepanel-sub">
+          <CountryChip id={country} />
+          <span className="chip">{ring === 0 ? 'Land tile' : ring === 1 ? 'Coastal waters' : `Open sea (ring ${ring})`}</span>
+          <span className="chip">H3 r{d.meta.h3_res} · {fmtNumber(d.hexArea[i])} km²</span>
+        </div>
+        {crumbs.length > 0 && (
+          <nav className="tilepanel-crumbs" aria-label="Administrative units">
+            {crumbs.map(({ lvl, u }, k) => (
+              <span key={lvl}>
+                {k > 0 && <span className="tilepanel-sep" aria-hidden>›</span>}
+                <button onClick={() => useStore.getState().select({ country, kind: 'admin', id: `${lvl}:${u!.index}` }, 'tile')}
+                  title={`Inspect ${d.meta.admin_levels[lvl]?.label ?? lvl} ${u!.unit.name}`}>
+                  {u!.unit.name}
+                </button>
+                <span className="tilepanel-lvl">{d.meta.admin_levels[lvl]?.label}</span>
+              </span>
+            ))}
+          </nav>
+        )}
+        <div className="tilepanel-ids">
+          <code title="H3 cell index">{h3}</code>
+          <span>{lat.toFixed(4)}°, {lon.toFixed(4)}°</span>
+          <button className="tilepanel-link" onClick={() => useStore.getState().fly(country, lon, lat)}>Zoom to</button>
+        </div>
+      </header>
+
+      <div className="card tilepanel-yieldcard">
+        <YieldRow values={yields} size={20} />
+      </div>
+
+      <div className="card tilepanel-district">
+        {dist.code ? (
+          <>
+            <div className="tilepanel-dname">
+              <span aria-hidden className="tilepanel-dicon">{DISTRICT_META[dist.code]?.icon}</span>
+              <strong>{dist.label || DISTRICT_META[dist.code]?.label}</strong>
+              <span className="muted">specialist district</span>
+            </div>
+            <p className="tilepanel-rule">{dist.rule}</p>
+          </>
+        ) : (
+          <div className="tilepanel-dname muted">No specialist district on this tile</div>
+        )}
+        {allDistricts.some((c) => c !== dist.code) && (
+          <div className="tilepanel-dall" title="Every district rule this tile meets, in priority order; the first one becomes the tile's district.">
+            <span className="muted">{dist.code ? 'All qualifying:' : 'Qualifies for:'}</span>
+            {allDistricts.map((c) => {
+              const def = idx.districts.find((x) => x.code === c)
+              return <span key={c} className="chip" title={def?.rule}>{DISTRICT_META[c]?.icon} {def?.label || DISTRICT_META[c]?.label || c}</span>
+            })}
+          </div>
+        )}
+      </div>
+
+      <YieldBreakdown explain={explain} idx={idx} failed={stats === 'failed'} />
+
+      {(facilities.length > 0 || wonders.length > 0) && (
+        <div className="card">
+          <h3>In this tile</h3>
+          <ul className="tilepanel-facilities">
+            {wonders.map((w) => (
+              <li key={`w-${w.category}-${w.name}`}>
+                <button className="tilepanel-link" onClick={() => useStore.getState().select({ country, kind: 'wonder', id: w.name }, 'wonders')}>
+                  <span aria-hidden>{WONDER_ICON[w.category] ?? '★'}</span> {w.name}
+                </button>
+                <span className="muted"> · {w.category} #{w.rank}{w.value != null ? ` · ${fmtNumber(w.value)} ${wonderUnit(w)}` : ''}</span>
+              </li>
+            ))}
+            {facilities.slice(0, 12).map((p) => {
+              const meta = POINT_LAYER_META[p.layer] ?? { label: p.layer, icon: '•' }
+              const v = pointValue(p)
+              const none = !Number.isFinite(v) ? meta.noValue?.[country] : undefined
+              return (
+                <li key={`${p.layer}-${p.row.id}`}>
+                  <span aria-hidden>{meta.icon}</span> {p.row.name}
+                  <span className="muted"> · {meta.label}{Number.isFinite(v) ? ` · ${fmtNumber(v)} ${meta.unit ?? ''}` : ''}</span>
+                  {none && <span className="muted tilepanel-novalue" title="Missing data, not a zero"> · {none}</span>}
+                </li>
+              )
+            })}
+            {facilities.length > 12 && <li className="muted">+ {facilities.length - 12} more facilities</li>}
+          </ul>
+        </div>
+      )}
+
+      <h3 className="section-title">All metrics</h3>
+      <MetricGroups rows={rows} scopeLabel={scope} country={country} loading={stats === 'ready' ? undefined : stats} />
+    </div>
+  )
+}
+
+/** Percentile cell of a tile row; big tie blocks (e.g. the ~98% of tiles with 0 airports) are not shown as a mid-rank. */
+function hexRankInfo(d: CountryData, m: Metric, i: number) {
+  const r = hexPercentile(d, m, i)
+  if (r.pct == null) return null
+  const per = hasDensity(m) ? ' (per km² of tile)' : ''
+  const pool = `${fmtInt(r.n)} ${d.meta.name} land tiles`
+  const tie = tieInfo(r)
+  if (tie) {
+    const sh = tie.share < 1 ? `${Math.min(99, Math.round(tie.share * 100))}%` : 'all'
+    if (tie.atMin) return { pct: null, text: 'lowest', title: `Tied for the lowest value${per} with ${sh} of ${pool}, so no percentile is shown` }
+    const a = Math.floor(tie.loPct), b = Math.min(99, Math.floor(tie.hiPct))
+    return { pct: null, text: `P${a}–${b}`, title: `Same value${per} as ${sh} of ${pool}: between the ${ordinal(a)} and ${ordinal(b)} percentile` }
+  }
+  const p = Math.min(99, Math.floor(r.pct))
+  return { pct: r.pct, text: `P${p}`, title: `${ordinal(p)} percentile of ${pool}${per}` }
+}
+
+// open by default on desktop, collapsed in the phone bottom sheet; remembers the user's last toggle
+let whyOpen: boolean | null = null
+
+function YieldBreakdown({ explain, idx, failed }: { explain: YieldExplain[]; idx: IndexJson; failed?: boolean }) {
+  const open = whyOpen ?? (typeof window === 'undefined' || window.innerWidth >= 900)
+  return (
+    <details className="card tilepanel-why" open={open} onToggle={(e) => { whyOpen = (e.currentTarget as HTMLDetailsElement).open }}>
+      <summary><h3>Why these yields</h3></summary>
+      <p className="tilepanel-formula">
+        Yield = ⌊2·log<sub>10</sub>(density ÷ base)⌋ + 1 when density ≥ base — one point per ×3.16 — capped at {idx.yield_scale.cap}, plus facility bonuses. Density = value ÷ tile area (km², including any water). The same scale is used in both countries.
+      </p>
+      {explain.map((e) => (
+        <div key={e.key} className="tilepanel-ybox">
+          <div className="tilepanel-yhead">
+            <YieldIcon y={e.key} size={16} />
+            <strong>{YIELD_META[e.key].label}</strong>
+            <span className="tilepanel-ytotal" style={{ color: YIELD_META[e.key].color }}>{e.actual}</span>
+            {e.loading ? (
+              <span className="tilepanel-ydiff is-loading" title={failed ? 'The tile statistics (metrics.bin) did not load, so the breakdown cannot be recomputed; the yield itself comes from the map data.' : 'The tile statistics (metrics.bin) are still downloading; the breakdown fills in when they arrive.'}>
+                {failed ? STATS_FAILED : LOADING_STATS}
+              </span>
+            ) : e.computed !== e.actual && (
+              <span className="tilepanel-ydiff" title="Recomputed in the browser from the published metrics and point layers. Differences come from facilities not shipped to the browser or data that changed since the yields were built.">
+                recomputed {e.computed}
+              </span>
+            )}
+          </div>
+          <ul className="tilepanel-parts">
+            {e.parts.map((p) => (
+              <li key={p.label} className={`${p.counted ? '' : 'is-uncounted'} ${p.missing || p.loading ? 'is-missing' : ''}`}>
+                <div className="tilepanel-part-main">
+                  <span className="tilepanel-part-label">{p.label}</span>
+                  <span className="tilepanel-part-amt">{p.amount}</span>
+                  <span className="tilepanel-part-pts">{p.loading ? '…' : p.counted ? `+${p.points}` : `(${p.points})`}</span>
+                </div>
+                <div className="tilepanel-part-detail">
+                  {p.detail}
+                  {p.sources && p.sources.length > 0 && <> <SourceChips ids={p.sources} /></>}
+                </div>
+              </li>
+            ))}
+          </ul>
+          {e.note && <div className="tilepanel-ynote">{e.note}</div>}
+        </div>
+      ))}
+    </details>
+  )
+}
+
+// ---------------------------------------------------------------------------------------------
+// Admin unit
+// ---------------------------------------------------------------------------------------------
+function AdminInspector({ d, idx, level, ui }: { d: CountryData; idx: IndexJson; level: string; ui: number }) {
+  const table = d.admin[level]
+  const unit = table.units[ui]
+  const country = d.id
+  const levels = Object.keys(d.meta.admin_levels)
+  const levelLabel = d.meta.admin_levels[level]?.label ?? table.label ?? level
+  // "DS Division" → "DS division" (acronyms keep their capitals)
+  const levelLower = levelLabel.split(' ').map((w) => (/^[A-Z]{2,}$/.test(w) ? w : w.toLowerCase())).join(' ')
+  const parents = useMemo(() => adminParents(d, level, ui), [d, level, ui])
+  const tiles = useMemo(() => hexesOfAdmin(d, level, ui), [d, level, ui])
+  const agg = useMemo(() => {
+    const y = Object.fromEntries(YIELDS.map((k) => [k, 0])) as Record<YieldKey, number>
+    const dc = new Map<string, number>()
+    for (const i of tiles) {
+      for (const k of YIELDS) y[k] += d.hexes.yields?.[k]?.[i] ?? 0
+      const code = idx.districts[d.hexes.district[i]]?.code
+      if (code) dc.set(code, (dc.get(code) ?? 0) + 1)
+    }
+    return { yields: y, districts: [...dc.entries()].sort((a, b) => b[1] - a[1]) }
+  }, [d, idx, tiles])
+  const children = useMemo(() => {
+    const cl = levels[levels.indexOf(level) + 1]
+    const ct = cl ? d.admin[cl] : undefined
+    if (!ct) return null
+    const pop = ct.metrics.pop
+    const list = ct.units.map((u, k) => ({ u, k, pop: pop?.[k] ?? 0 })).filter((x) => x.u.parent === unit.id)
+    list.sort((a, b) => (b.pop ?? 0) - (a.pop ?? 0))
+    return { level: cl, label: d.meta.admin_levels[cl]?.label ?? cl, list }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [d, level, unit])
+  const landKm2 = table.metrics.land_km2?.[ui] ?? null
+  const pop = table.metrics.pop?.[ui] ?? null
+  const gdp = table.metrics.gdp_usd?.[ui] ?? null
+  const scope = `Ranks compare this ${levelLower} with all ${fmtInt(table.units.length)} ${levelLower} units of ${d.meta.name} (#1 = highest value).`
+
+  const rows = useMemo<MetricRowData[]>(() => Object.keys(table.metrics).map((key) => {
+    const m = d.metricByKey.get(key)
+    const raw = table.metrics[key][ui] ?? NaN
+    const unitStr = m?.unit ?? ''
+    const dens = m && hasDensity(m) && landKm2 && landKm2 > 0 && Number.isFinite(raw) ? raw / landKm2 : NaN
+    const landDens = !!m && isLandDensity(m)
+    return {
+      key, metric: m, label: m?.label ?? key, category: m?.category || 'other', raw,
+      valueText: landDens ? fmtLandDensity(raw, unitStr) : fmtVal(raw, unitStr),
+      densityText: Number.isFinite(dens) ? fmtDensity(dens, unitStr, 'land') : landDens && Number.isFinite(raw) ? 'per km² of land' : undefined,
+      densityTitle: Number.isFinite(dens) || landDens ? `Divided by the ${levelLower}'s land area (${fmtNumber(landKm2)} km²)` : undefined,
+      rank: () => {
+        const r = adminRank(table, key, ui)
+        if (!r) return null
+        const tie = r.ties > 1
+        return {
+          pct: r.pct, text: `#${fmtInt(r.rank)}${tie ? '=' : ''}/${fmtInt(r.n)}`,
+          title: `#${fmtInt(r.rank)} of ${fmtInt(r.n)} ${levelLower} units with data (highest first)${tie ? `, tied with ${fmtInt(r.ties - 1)} other${r.ties > 2 ? 's' : ''}` : ''}`,
+        }
+      },
+    }
+  }), [d, table, ui, landKm2, levelLower])
+
+  const zoom = adminZoom(country, level, landKm2, unit.lat)
+  const noTiles = tiles.length === 0
+  // a unit that is no tile's dominant unit: offer the tile at its centroid instead
+  const centreTile = useMemo(() => {
+    if (!noTiles) return null
+    try {
+      const h = latLngToCell(unit.lat, unit.lon, d.meta.h3_res)
+      return d.hexIndex.has(h) ? h : null
+    } catch { return null }
+  }, [noTiles, unit, d])
+
+  return (
+    <div className="tilepanel">
+      <header className="tilepanel-head">
+        <div className="tilepanel-title">
+          <span className="tilepanel-hex is-admin" aria-hidden />
+          <h2>{unit.name}</h2>
+          <CloseButton />
+        </div>
+        <div className="row tilepanel-sub">
+          <CountryChip id={country} />
+          <span className="chip">{levelLabel}</span>
+          <code className="tilepanel-code" title="Admin code">{unit.id}</code>
+        </div>
+        <nav className="tilepanel-crumbs" aria-label="Parent units">
+          <span><span className="tilepanel-plain">{d.meta.name}</span></span>
+          {parents.map((p) => (
+            <span key={p.level}>
+              <span className="tilepanel-sep" aria-hidden>›</span>
+              <button onClick={() => useStore.getState().select({ country, kind: 'admin', id: `${p.level}:${p.index}` }, 'tile')}
+                title={`Inspect ${d.meta.admin_levels[p.level]?.label ?? p.level} ${p.name}`}>{p.name}</button>
+              <span className="tilepanel-lvl">{d.meta.admin_levels[p.level]?.label}</span>
+            </span>
+          ))}
+          <span><span className="tilepanel-sep" aria-hidden>›</span><span className="tilepanel-plain">{unit.name}</span></span>
+        </nav>
+        <div className="tilepanel-ids">
+          <span>{unit.lat.toFixed(3)}°, {unit.lon.toFixed(3)}°</span>
+          <button className="tilepanel-link" onClick={() => useStore.getState().fly(country, unit.lon, unit.lat, zoom)}>Zoom to</button>
+        </div>
+      </header>
+
+      <div className="card">
+        <div className="tilepanel-stats">
+          <div><span className="k">Population</span><b>{pop != null ? fmtNumber(pop) : '–'}</b></div>
+          <div><span className="k">Land</span><b>{landKm2 != null ? `${fmtNumber(landKm2)} km²` : '–'}</b></div>
+          <div><span className="k">GDP</span><b>{gdp != null ? fmtUsd(gdp) : '–'}</b></div>
+          {!noTiles && <div><span className="k">Tiles</span><b>{fmtInt(tiles.length)}</b></div>}
+        </div>
+        {noTiles ? (
+          <div className="tilepanel-agg tilepanel-notiles">
+            <p className="tilepanel-small">
+              {landKm2 != null && landKm2 < d.meta.avg_hex_km2
+                ? <>This {levelLower} ({fmtNumber(landKm2)} km² of land) is smaller than one {d.meta.name} tile (~{fmtNumber(d.meta.avg_hex_km2)} km²), so no tile is mostly in it.</>
+                : <>No tile has {unit.name} as its main {levelLower} by population: every tile it overlaps has more people in a neighbouring unit.</>}
+              {' '}Its statistics are blended into the neighbouring tiles it overlaps, so it has no tiles, yields or specialist districts of its own.
+              The figures above are the unit’s own published values.
+            </p>
+            {centreTile && (
+              <button className="btn tilepanel-notiles-btn" onClick={() => useStore.getState().select({ country, kind: 'hex', id: centreTile }, 'tile')}>
+                Inspect the tile at its centre
+              </button>
+            )}
+          </div>
+        ) : (
+          <div className="tilepanel-agg">
+            <div className="muted tilepanel-small">Summed yields of its {fmtInt(tiles.length)} tiles</div>
+            <YieldRow values={agg.yields} size={18} />
+          </div>
+        )}
+        {agg.districts.length > 0 && (
+          <div className="tilepanel-dall">
+            <span className="muted" title="Civ specialist districts (Neighborhood, Campus, Harbor…) of the tiles counted here — not administrative districts">Specialist districts:</span>
+            {agg.districts.map(([c, n]) => (
+              <span key={c} className="chip" title={idx.districts.find((x) => x.code === c)?.rule}>{DISTRICT_META[c]?.icon} {DISTRICT_META[c]?.label ?? c} × {n}</span>
+            ))}
+          </div>
+        )}
+        {!noTiles && <p className="muted tilepanel-small">Tiles are those whose dominant {levelLower} (by population) is {unit.name}.</p>}
+      </div>
+
+      {children && children.list.length > 0 && (
+        <div className="card">
+          <h3>{children.list.length} {plural(children.label, children.list.length)}</h3>
+          <div className="tilepanel-children">
+            {children.list.slice(0, 16).map(({ u, k, pop: p }) => (
+              <button key={u.id} className="chip tilepanel-childchip" onClick={() => useStore.getState().select({ country, kind: 'admin', id: `${children.level}:${k}` }, 'tile')}
+                title={p ? `${fmtNumber(p)} people` : undefined}>
+                {u.name}
+              </button>
+            ))}
+            {children.list.length > 16 && <span className="muted tilepanel-small">+ {children.list.length - 16} more</span>}
+          </div>
+        </div>
+      )}
+
+      <h3 className="section-title">All {levelLower} metrics</h3>
+      <MetricGroups rows={rows} scopeLabel={scope} country={country} />
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------------------------------
+// City / wonder selections
+// ---------------------------------------------------------------------------------------------
+function OtherSelection({ d, sel }: { d: CountryData; sel: Selection }) {
+  const isCity = sel.kind === 'city'
+  const city = isCity ? d.cities.find((c) => c.id === sel.id) : undefined
+  const wonder = !isCity ? d.wonders.find((w) => w.name === sel.id) : undefined
+  const name = city?.name ?? wonder?.name ?? sel.id
+  const tileH3 = city?.centre ?? wonder?.h3
+  return (
+    <div className="tilepanel">
+      <header className="tilepanel-head">
+        <div className="tilepanel-title">
+          <span aria-hidden className="tilepanel-dicon">{isCity ? '🏛️' : (wonder && WONDER_ICON[wonder.category]) ?? '★'}</span>
+          <h2>{name}</h2>
+          <CloseButton />
+        </div>
+        <div className="row tilepanel-sub"><CountryChip id={d.id} /><span className="chip">{isCity ? 'City' : wonder?.category ?? 'Wonder'}</span></div>
+      </header>
+      <div className="card">
+        <p>{isCity ? 'This is a metro selection. Its tiles, citizens, districts and yields are shown in City View.' : 'This is a wonder. Its ranking rule, value and source are shown in the Wonders tab.'}</p>
+        <div className="row">
+          <button className="btn primary" onClick={() => useStore.getState().set({ panel: isCity ? 'city' : 'wonders', panelOpen: true })}>
+            Open {isCity ? 'City View' : 'Wonders'}
+          </button>
+          {tileH3 && d.hexIndex.has(tileH3) && (
+            <button className="btn" onClick={() => useStore.getState().select({ country: d.id, kind: 'hex', id: tileH3 }, 'tile')}>
+              Inspect its {isCity ? 'centre ' : ''}tile
+            </button>
+          )}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------------------------------
+// No selection: how-to + Civilization summary
+// ---------------------------------------------------------------------------------------------
+const PICKS: { v: PickLevel; label: string }[] = [
+  { v: 'hex', label: 'Tile' }, { v: 'adm1', label: 'Province / state' }, { v: 'adm2', label: 'District / county' },
+]
+
+function Overview({ app, idx }: { app: AppData; idx: IndexJson }) {
+  const pickLevel = useStore((s) => s.pickLevel)
+  const national = useNational()
+  const tiles = COUNTRIES.map((c) => app.countries[c]).filter(Boolean) as CountryData[]
+  return (
+    <div className="tilepanel">
+      <div className="card tilepanel-howto">
+        <h3>Inspect a tile</h3>
+        <ul>
+          <li><b>Click any hex</b> on either map to see its terrain, specialist district, yields — and exactly which statistics produced them — plus every metric with its percentile in the country.</li>
+          <li>Change <b>Click:</b> in the top bar (or here) to select whole provinces / states, districts / counties or DS divisions instead.</li>
+          <li><b>Find a place</b> (above) jumps to any province / state, district / county, DS division or City View city of either country.</li>
+          <li><b>Lenses</b> above the maps recolour both countries; “Shared scale” puts them on one colour ramp. Esc clears the selection.</li>
+        </ul>
+        <div className="tilepanel-pick" role="group" aria-label="Click selects">
+          <span className="muted">Click selects:</span>
+          {PICKS.map((p) => (
+            <button key={p.v} className={`btn ${pickLevel === p.v ? 'primary' : ''}`} aria-pressed={pickLevel === p.v} onClick={() => useStore.getState().set({ pickLevel: p.v })}>{p.label}</button>
+          ))}
+        </div>
+      </div>
+      <h3 className="section-title">Civilization summary</h3>
+      <div className="tilepanel-civgrid">
+        {COUNTRIES.map((c) => <CivSummary key={c} id={c} d={app.countries[c]} idx={idx} national={national} />)}
+      </div>
+      <p className="muted tilepanel-small">
+        Each tile’s yield comes from its density (per km² of tile) on one shared log scale, whatever the tile’s size, so a yield is an
+        intensity index: compare the two civs with the <b>mean per land tile</b>.
+        {tiles.length > 0 && <> Sums count tiles ({tiles.map((d) => `${COUNTRY_META[d.id].name} ${fmtInt(d.meta.land_hex_count)} land tiles of ~${fmtNumber(d.meta.avg_hex_km2)} km²`).join(', ')}), so they are not comparable per km² or per person — use the real totals (population, GDP) for that.</>}
+        {' '}Population and GDP are the sums of the map’s tiles; the Advisors quote the World Bank’s latest national figures.
+        {' '}Data built {(idx.built_at ?? '').slice(0, 16).replace('T', ' ')} UTC. <SourceChips ids={['worldpop_2020', 'uber_h3']} />
+      </p>
+    </div>
+  )
+}
+
+/** Up to two compact chips, the rest in a "+n" tooltip (keeps half-width cards readable). */
+function FewSources({ ids }: { ids: string[] }) {
+  const u = [...new Set(ids)]
+  if (!u.length) return null
+  return (
+    <span className="tilepanel-civsrc">
+      <SourceChips ids={u.slice(0, 2)} />
+      {u.length > 2 && <span className="muted" title={u.slice(2).join(', ')}>+{u.length - 2}</span>}
+    </span>
+  )
+}
+
+function CivSummary({ id, d, idx, national }: { id: CountryId; d?: CountryData; idx: IndexJson; national: NationalIndicator[] }) {
+  const cm = COUNTRY_META[id]
+  const means = useMemo(() => (d ? landYieldMeans(d) : null), [d])
+  if (!d || !means) {
+    return (
+      <section className={`card tilepanel-civ ${id}`} aria-label={`${cm.name} summary`}>
+        <h3><span className="tilepanel-dot" style={{ background: cm.accent }} />{cm.name}</h3>
+        <p className="muted">Loading tiles…</p>
+      </section>
+    )
+  }
+  const m = d.meta
+  const pop = m.totals.pop ?? NaN
+  const land = m.totals.land_km2 ?? NaN
+  const gdp = m.totals.gdp_usd
+  const sea = m.hex_count - m.land_hex_count
+  const edge = getHexagonEdgeLengthAvg(m.h3_res, UNITS.km)
+  const terr = Object.entries(m.terrain_counts ?? {}).sort((a, b) => b[1] - a[1])
+  const terrTotal = terr.reduce((s, [, n]) => s + n, 0) || 1
+  const dists = Object.entries(m.district_counts ?? {}).filter(([k]) => k).sort((a, b) => b[1] - a[1]).slice(0, 8)
+  const mk = (k: string) => d.metricByKey.get(k)
+  const vin = (k: string) => { const v = mk(k)?.vintage; return v ? countryVintage(v, id) : '' }
+  const wb = (code: string) => {
+    const s = national.find((r) => r.code === code)?.[id === 'lka' ? 'LKA' : 'USA']
+    return s && s.value != null && s.year != null ? s : null
+  }
+  const wbPop = wb('SP.POP.TOTL'), wbGdp = wb('NY.GDP.MKTP.CD')
+  const popV = vin('pop'), gdpV = vin('gdp_usd'), landV = vin('land_km2')
+  return (
+    <section className={`card tilepanel-civ ${id}`} aria-label={`${cm.name} summary`}>
+      <h3><span className="tilepanel-dot" style={{ background: cm.accent }} />{cm.name}</h3>
+      <dl className="tilepanel-civstats">
+        <div>
+          <dt>Population{popV ? ` (${popV} est.)` : ''}</dt>
+          <dd title="Sum of the map's tiles: WorldPop 2020 rescaled to official 2023 estimates">{fmtNumber(pop)}</dd>
+          <dd className="tilepanel-civnote">
+            <FewSources ids={mk('pop')?.sources ?? []} />
+            {wbPop && <span title="World Bank WDI SP.POP.TOTL, as quoted by the Advisors">WB {wbPop.year}: {fmtNumber(wbPop.value)}</span>}
+          </dd>
+        </div>
+        <div>
+          <dt>Land area{landV ? ` (${landV})` : ''}</dt>
+          <dd>{fmtNumber(land)} km²</dd>
+          <dd className="tilepanel-civnote"><FewSources ids={mk('land_km2')?.sources ?? []} /></dd>
+        </div>
+        <div>
+          <dt>GDP{gdpV ? ` (${gdpV})` : ''}</dt>
+          <dd title="Sum of the map's tiles (current US$)">{gdp != null ? fmtUsd(gdp) : <span className="muted">pending</span>}</dd>
+          <dd className="tilepanel-civnote">
+            <FewSources ids={mk('gdp_usd')?.sources ?? []} />
+            {wbGdp && <span title="World Bank WDI NY.GDP.MKTP.CD (current US$), as quoted by the Advisors">WB {wbGdp.year}: {fmtUsd(wbGdp.value)}</span>}
+          </dd>
+        </div>
+        <div><dt>Tiles</dt><dd>{fmtInt(m.land_hex_count)} land · {fmtInt(sea)} sea</dd></div>
+        <div><dt>Grid</dt><dd>H3 r{m.h3_res} · {fmtNumber(m.avg_hex_km2)} km² · ~{fmtNumber(edge * 2)} km across</dd></div>
+      </dl>
+      <table className="tilepanel-ytable">
+        <caption className="tilepanel-sr">Yields for {cm.name}: mean per land tile and sum over all tiles</caption>
+        <thead>
+          <tr>
+            <th scope="col"><span className="tilepanel-sr">Yield</span></th>
+            <th scope="col" title={`Mean yield of ${cm.name}'s ${fmtInt(means.n)} land tiles — comparable between the two civs`}>Mean / land tile</th>
+            <th scope="col" title="Sum over all tiles (land and sea). Grows with the number of tiles, so it does not compare the two grids">Σ tiles</th>
+          </tr>
+        </thead>
+        <tbody>
+          {YIELDS.map((y) => {
+            const v = m.yield_totals?.[y] ?? 0
+            return (
+              <tr key={y} className={v ? '' : 'is-zero'}>
+                <th scope="row"><YieldIcon y={y} size={13} /></th>
+                <td><b>{fmtNumber(means.mean[y])}</b></td>
+                <td className="muted">{fmtNumber(v)}</td>
+              </tr>
+            )
+          })}
+        </tbody>
+      </table>
+      <div className="tilepanel-minihead">Terrain</div>
+      <div className="tilepanel-tbar" aria-hidden>
+        {terr.map(([k, n]) => <i key={k} style={{ width: `${(n / terrTotal) * 100}%`, background: rgbCss(TERRAIN_META[k]?.rgb ?? [120, 120, 120]) }} />)}
+      </div>
+      <ul className="tilepanel-mini">
+        {terr.slice(0, 5).map(([k, n]) => (
+          <li key={k}>
+            <i className="tilepanel-sw" style={{ background: rgbCss(TERRAIN_META[k]?.rgb ?? [120, 120, 120]) }} />
+            <span className="tilepanel-mini-label">{TERRAIN_META[k]?.label ?? idx.terrain[k] ?? k}</span>
+            <span className="tilepanel-mini-val">{((n / terrTotal) * 100).toFixed(n / terrTotal < 0.1 ? 1 : 0)}%</span>
+          </li>
+        ))}
+      </ul>
+      <div className="tilepanel-minihead">Specialist districts</div>
+      {dists.length ? (
+        <ul className="tilepanel-mini">
+          {dists.map(([k, n]) => (
+            <li key={k} title={idx.districts.find((x) => x.code === k)?.rule}>
+              <span className="tilepanel-sw-icon" aria-hidden>{DISTRICT_META[k]?.icon}</span>
+              <span className="tilepanel-mini-label">{DISTRICT_META[k]?.label ?? k}</span>
+              <span className="tilepanel-mini-val">{fmtInt(n)}</span>
+            </li>
+          ))}
+        </ul>
+      ) : <p className="muted tilepanel-small">None yet</p>}
+    </section>
+  )
+}

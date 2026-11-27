@@ -1,0 +1,168 @@
+/* City View panel — all classes prefixed `cityview-` */
+.cityview { min-width: 0; }
+.cityview .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+.cityview-title { margin-top: 2px; }
+.cityview-lede { margin: 0 0 10px; color: var(--muted); font-size: 12.5px; }
+.cityview-note { margin: 2px 0 8px; font-size: 12.5px; }
+.cityview-foot { margin: 6px 0 6px; font-size: 11px; color: var(--muted); }
+.cityview .card h3 { display: flex; align-items: center; gap: 6px; }
+.cityview-h3b { margin-top: 10px; }
+
+/* segmented control */
+.cityview-seg { display: inline-flex; background: #0a1220; border: 1px solid var(--line2); border-radius: 999px; padding: 2px; margin-bottom: 10px; max-width: 100%; }
+.cityview-seg button { background: none; border: 0; padding: 3px 11px; border-radius: 999px; color: var(--muted); font-size: 12.5px; white-space: nowrap; }
+.cityview-seg button.active { background: var(--brass); color: #1a1206; font-weight: 600; }
+.cityview-seg button:focus-visible { outline: 2px solid var(--brass2); outline-offset: 1px; }
+.cityview-seg.small { margin-bottom: 0; }
+.cityview-seg.small button { padding: 2px 8px; font-size: 11.5px; }
+
+/* size badge */
+.cityview-size {
+  flex: none; display: inline-grid; place-items: center; width: 30px; height: 30px; border-radius: 50%;
+  font: 700 13px/1 var(--serif); color: #1a1206; background: radial-gradient(circle at 35% 30%, var(--brass2), var(--brass) 70%);
+  border: 2px solid #0b1422; box-shadow: 0 0 0 1.5px var(--brass);
+}
+.cityview-size.lka { box-shadow: 0 0 0 1.5px var(--lka); }
+.cityview-size.usa { box-shadow: 0 0 0 1.5px var(--usa); }
+.cityview-size.big { width: 46px; height: 46px; font-size: 20px; border-width: 3px; box-shadow: 0 0 0 2px var(--brass), 0 4px 14px #0007; }
+
+/* list */
+.cityview-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+.cityview-li {
+  width: 100%; display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 10px; align-items: center; text-align: left;
+  background: var(--bg2); border: 1px solid var(--line); border-radius: var(--radius); padding: 8px 10px;
+}
+.cityview-li:hover, .cityview-li:focus-visible { border-color: var(--brass); background: #1a2b45; outline: none; }
+.cityview-li-main { display: grid; gap: 3px; min-width: 0; }
+.cityview-li-name { display: flex; align-items: center; gap: 6px; font-weight: 600; flex-wrap: wrap; font-family: var(--serif); font-size: 15px; }
+.cityview-li-name small { font: 400 11px var(--font); }
+.cityview-li .yield-row { gap: 6px; font-size: 11.5px; }
+.cityview-li-pop { display: grid; text-align: right; font-variant-numeric: tabular-nums; }
+.cityview-li-pop b { font-size: 14px; }
+.cityview-li-pop small { color: var(--muted); font-size: 10.5px; white-space: nowrap; }
+
+/* nav row */
+.cityview-nav { display: flex; gap: 8px; align-items: center; margin-bottom: 10px; }
+.cityview-jump { flex: 1; min-width: 0; color: var(--text); }
+
+/* banner */
+.cityview-banner { background: linear-gradient(160deg, #1b2e4b 0%, var(--bg2) 60%); border-color: var(--line2); }
+.cityview-banner-head { display: flex; gap: 12px; align-items: center; margin-bottom: 8px; }
+.cityview-banner-name { min-width: 0; }
+.cityview-banner-name h2 { font-size: 22px; color: var(--brass2); line-height: 1.1; margin-bottom: 3px; overflow-wrap: anywhere; }
+.cityview-banner-name .row { gap: 6px; font-size: 12px; }
+.cityview-banner-yields { padding: 6px 8px; background: #0b1422; border: 1px solid var(--line); border-radius: 8px; margin-bottom: 8px; }
+.cityview-banner-yields .yield-row { gap: 4px 12px; font-size: 14px; }
+.cityview-kv { font-size: 12.5px; }
+.cityview-kv > span:nth-child(even) { text-align: right; font-variant-numeric: tabular-nums; }
+.cityview-src { margin-top: 8px; }
+
+/* hex ring */
+.cityview-ring { position: relative; width: 100%; max-width: 420px; margin: 0 auto; }
+.cityview-ring svg { display: block; width: 100%; height: auto; overflow: visible; user-select: none; -webkit-user-select: none; }
+.cityview-tile { cursor: pointer; outline: none; }
+.cityview-hex { stroke: #0b1422; stroke-width: 2; transition: filter .12s; }
+.cityview-tile.hot .cityview-hex { filter: brightness(1.18); }
+.cityview-overlay { pointer-events: none; }
+.cityview-hexring { fill: none; stroke: rgba(255, 255, 255, .8); stroke-width: 2.5; }
+.cityview-hexring.centre { stroke: var(--brass2); stroke-width: 4; }
+.cityview-hexring.sel { stroke: #fff; stroke-width: 3.5; stroke-dasharray: 6 3; }
+.cityview-ghost { fill: none; stroke: var(--line2); stroke-width: 1.2; stroke-dasharray: 4 4; opacity: .6; }
+.cityview-emoji { font-size: 17px; text-anchor: middle; dominant-baseline: central; pointer-events: none; }
+.cityview-emoji.faint { opacity: .55; font-size: 14px; }
+.cityview-emoji.small { font-size: 12px; }
+.cityview-plate { fill: rgba(8, 14, 24, .74); pointer-events: none; }
+.cityview-yv { font: 700 11.5px/1 var(--font); text-anchor: middle; dominant-baseline: central; pointer-events: none; font-variant-numeric: tabular-nums; }
+
+.cityview-tip {
+  position: absolute; z-index: 3; width: 216px; pointer-events: none; transform: translate(-50%, -100%);
+  background: #0b1422f2; border: 1px solid var(--brass); border-radius: 8px; padding: 6px 9px; font-size: 12px; box-shadow: 0 6px 18px #0009;
+}
+.cityview-tip.below { transform: translate(-50%, 0); }
+.cityview-tip-title { font-weight: 700; color: var(--brass2); }
+.cityview-tip .yield-row { gap: 4px 9px; margin: 3px 0; }
+.cityview-tip-meta { display: flex; justify-content: space-between; gap: 6px; }
+.cityview-tip-wonder { color: var(--brass2); margin-top: 2px; }
+.cityview-tip-hint { color: var(--muted); font-size: 10.5px; margin-top: 3px; }
+
+.cityview-ringlegend { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; font-size: 11px; color: var(--muted); margin-top: 6px; }
+.cityview-slots { display: inline-grid; grid-template-columns: repeat(3, 11px); gap: 1px 2px; padding: 2px 3px; background: #0b1422; border-radius: 4px; }
+.cityview-legitem { display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; margin-left: 6px; }
+.cityview-key { display: inline-block; width: 13px; height: 13px; clip-path: polygon(50% 0, 100% 25%, 100% 75%, 50% 100%, 0 75%, 0 25%); }
+.cityview-key.centre { background: var(--brass2); }
+.cityview-key.ghost { background: var(--line2); opacity: .7; }
+
+/* citizens */
+.cityview-cits { display: flex; flex-wrap: wrap; gap: 5px; margin-bottom: 10px; }
+.cityview-citgroup { flex: 0 1 auto; max-width: 100%; background: #0b1422; border: 1px solid var(--line); border-radius: 8px; padding: 4px 7px 3px; min-width: 0; }
+.cityview-citicons { display: block; font-size: 16px; line-height: 1.25; letter-spacing: -1px; overflow-wrap: anywhere; word-break: break-all; }
+.cityview-citlabel { font-size: 11.5px; color: var(--muted); }
+.cityview-citlabel b { color: var(--text); }
+.cityview-barhead { display: flex; flex-wrap: wrap; gap: 4px 12px; align-items: center; font-size: 11.5px; color: var(--muted); margin-bottom: 4px; }
+.cityview-barhead > span:first-child { font-weight: 600; color: var(--text); margin-right: auto; }
+.cityview-legend-sw { display: inline-flex; align-items: center; gap: 4px; }
+.cityview-legend-sw .sw { width: 12px; height: 8px; border-radius: 2px; display: inline-block; }
+.sw.lka { background: var(--lka); } .sw.usa { background: var(--usa); } .sw.nat { background: transparent; border: 1.5px solid var(--text); opacity: .7; }
+.cityview-bars { display: grid; gap: 4px; }
+.cityview-bar { display: grid; grid-template-columns: minmax(96px, 34%) minmax(0, 1fr) 72px; gap: 6px; align-items: center; font-size: 12px; }
+.cityview-bar-label { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.cityview-bar-track { position: relative; height: 14px; background: #0b1422; border-radius: 3px; }
+.cityview-bar-city { position: absolute; left: 0; top: 2px; bottom: 2px; border-radius: 2px; }
+.cityview-bar-city.lka { background: var(--lka); } .cityview-bar-city.usa { background: var(--usa); }
+.cityview-bar-nat { position: absolute; left: 0; top: 0; bottom: 0; border: 1.5px solid #e9e4d6b3; border-left: 0; border-radius: 0 3px 3px 0; }
+.cityview-bar-val { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.cityview-bar-val small { margin-left: 4px; color: var(--muted); font-size: 10.5px; }
+.cityview-bar-val small.up { color: var(--good); }
+.cityview-bar-val small.down { color: var(--bad); }
+
+/* industries */
+.cityview-inds { list-style: none; margin: 0; padding: 0; display: grid; gap: 7px; }
+.cityview-ind-top { display: flex; justify-content: space-between; gap: 8px; font-size: 12.5px; align-items: baseline; }
+.cityview-ind-top > span:first-child { min-width: 0; overflow-wrap: anywhere; }
+.cityview-ind-val { white-space: nowrap; font-variant-numeric: tabular-nums; }
+.cityview-ind-track { position: relative; height: 8px; background: #0b1422; border-radius: 4px; margin-top: 2px; }
+.cityview-ind-track i { position: absolute; left: 0; top: 0; bottom: 0; border-radius: 4px; background: linear-gradient(90deg, var(--brass), var(--brass2)); }
+.cityview-ind-track i.under { background: var(--muted); }
+.cityview-ind-one { position: absolute; top: -3px; bottom: -3px; width: 0; border-left: 1.5px dashed var(--text); opacity: .7; }
+
+/* districts & wonders */
+.cityview-dists { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 4px 8px; }
+.cityview-dists details { font-size: 12.5px; }
+.cityview-dists summary { cursor: pointer; padding: 2px 0; }
+.cityview-dists summary:focus-visible { outline: 2px solid var(--brass2); border-radius: 4px; }
+.cityview-dists details p { margin: 2px 0 6px 16px; font-size: 11.5px; color: var(--muted); }
+.cityview-wonders { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; }
+.cityview-wonder { width: 100%; display: flex; gap: 6px; align-items: baseline; flex-wrap: wrap; text-align: left; background: #0b1422; border: 1px solid var(--line); border-radius: 7px; padding: 4px 8px; }
+.cityview-wonder:hover:not(:disabled) { border-color: var(--brass); }
+.cityview-wonder:disabled { cursor: default; }
+
+/* sister city */
+.cityview-sister-head { display: flex; justify-content: space-between; align-items: center; gap: 6px; flex-wrap: wrap; margin-bottom: 6px; }
+.cityview-sister-head h3 { margin: 0; }
+table.data.cityview-sister { table-layout: fixed; }
+table.data.cityview-sister th, table.data.cityview-sister td { padding: 3px 5px; overflow-wrap: anywhere; }
+table.data.cityview-sister thead th { background: var(--bg2); font-size: 12px; color: var(--text); z-index: 1; }
+table.data.cityview-sister thead th:first-child { width: 36%; }
+table.data.cityview-sister tbody th { font-weight: 400; color: var(--muted); font-size: 12px; position: static; background: none; }
+table.data.cityview-sister tbody th svg { vertical-align: -2px; }
+table.data.cityview-sister td.lead { color: var(--brass2); font-weight: 700; }
+.cityview-open { margin-top: 8px; width: 100%; }
+
+@media (max-width: 900px) {
+  .cityview-banner-name h2 { font-size: 19px; }
+  .cityview-bar { grid-template-columns: minmax(84px, 33%) minmax(0, 1fr) 66px; }
+}
+
+/* official-figure provenance under the banner */
+.cityview-src { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; }
+.cityview-srclab { font-size: 10px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin-right: 2px; }
+.cityview-official { margin-top: 8px; padding-top: 6px; border-top: 1px dashed var(--line); }
+.cityview-official p { margin: 0 0 4px; font-size: 11.5px; color: var(--muted); }
+.cityview-official p b { color: var(--text); font-weight: 600; }
+
+/* ring de-duplication note and per-class caveats */
+.cityview-overlap { margin: 8px 0 0; font-size: 11.5px; color: var(--muted); }
+.cityview-link { background: none; border: 0; padding: 0; color: var(--brass2); font-size: inherit; text-decoration: underline dotted; text-underline-offset: 2px; }
+.cityview-link:hover { color: var(--brass); }
+.cityview-bar-label sup { color: var(--brass2); margin-left: 1px; }
+.cityview-bar-note { grid-column: 2 / -1; margin-top: -2px; font-size: 10.5px; line-height: 1.3; color: var(--muted); }
