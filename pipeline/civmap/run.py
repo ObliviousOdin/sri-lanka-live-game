@@ -17,7 +17,7 @@ import traceback
 
 from .config import COUNTRIES
 
-DOMAINS = ["terrain", "economy", "labor", "food", "science", "society", "culture", "hazards", "infra"]
+DOMAINS = ["terrain", "economy", "labor", "food", "science", "society", "culture", "hazards", "infra", "history"]
 STAGES = ["core", "domains", "national", "reconcile", "civ", "export"]
 
 

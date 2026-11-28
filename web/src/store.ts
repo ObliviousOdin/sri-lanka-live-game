@@ -2,7 +2,7 @@ import { create } from 'zustand'
 import type { CountryId, Selection } from './types'
 
 export type ViewMode = 'split' | 'lka' | 'usa'
-export type PanelTab = 'tile' | 'city' | 'advisors' | 'explorer' | 'wonders' | 'sources'
+export type PanelTab = 'tile' | 'city' | 'advisors' | 'explorer' | 'wonders' | 'history' | 'sources'
 export type PickLevel = 'hex' | 'adm1' | 'adm2' | 'adm3'
 
 export interface FlyTo { country: CountryId; lon: number; lat: number; zoom?: number; ts: number }
@@ -35,6 +35,9 @@ interface State {
     colorBy?: 'country' | 'lens'
   }
   flyTo: FlyTo | null
+  /** timeline (History lens): current year, playback, enabled event kinds (null = all), focused event */
+  history: { year: number; playing: boolean; kinds: string[] | null; focus: string | null }
+  setHistory: (p: Partial<State['history']>) => void
   set: (p: Partial<State>) => void
   setLens: (id: string, metric?: string) => void
   select: (s: Selection | null, openPanel?: PanelTab) => void
@@ -61,6 +64,8 @@ export const useStore = create<State>((set) => ({
   panelOpen: typeof window !== 'undefined' ? window.innerWidth >= 900 : true,
   explorer: { scope: 'both', level: 'admin', x: 'pop_density', y: 'gdp_per_capita_usd', logX: true, logY: true, brushed: {} },
   flyTo: null,
+  history: { year: 2026, playing: false, kinds: null, focus: null },
+  setHistory: (p) => set((s) => ({ history: { ...s.history, ...p } })),
   set: (p) => set(p),
   setLens: (id, metric) =>
     set((s) => ({ lensId: id, lensMetric: metric ? { ...s.lensMetric, [id]: metric } : s.lensMetric })),

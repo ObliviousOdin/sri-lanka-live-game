@@ -1,4 +1,4 @@
-import { CITIZEN_META, COUNTRY_META, DISTRICT_META, FEATURE_META, TERRAIN_META, YIELD_META, type RGB } from './civ'
+import { CITIZEN_META, COUNTRY_META, DISTRICT_META, FEATURE_META, TERRAIN_META, YIELD_META, type RGB, EVENT_KIND_META } from './civ'
 import { CATEGORICAL, PALETTES, mix, ramp, scaleT, shade, sortedDomain, sortedQuantile, yieldColor } from './color'
 import { column } from './data/load'
 import { fmtNumber, fmtUsd, prettyUnit } from './format'
@@ -11,7 +11,7 @@ export interface LensDef {
   label: string
   group: LensGroup
   icon: string
-  kind: 'terrain' | 'district' | 'yield' | 'metric' | 'dominant'
+  kind: 'terrain' | 'district' | 'yield' | 'metric' | 'dominant' | 'history'
   yield?: YieldKey
   /** candidate metric keys, first available is the default */
   metrics?: string[]
@@ -30,6 +30,7 @@ export const LENSES: LensDef[] = [
   { id: 'terrain', label: 'Terrain', group: 'Map', icon: '⛰️', kind: 'terrain', description: 'Base terrain from ESA WorldCover land cover, Copernicus DEM relief and WorldClim climate.' },
   // id stays 'districts'; the UI says "Specialist districts" so it is not read as an admin district
   { id: 'districts', label: 'Specialist districts', group: 'Map', icon: '🏛️', kind: 'district', description: 'Specialist districts assigned by published-data rules (see each district’s rule). Rings: US spaceport sites, filled when they host orbital launches.', pointLayers: ['spaceports'] },
+  { id: 'history', label: 'Historic moments', group: 'Map', icon: '📜', kind: 'history', description: 'Dated founding, opening, commissioning and World Heritage inscription of the places on the map, replayed on a timeline (History tab). Dates from Wikidata, EIA-860, CEB / GPPD and UNESCO.' },
   { id: 'gold', label: 'Gold', group: 'Yields', icon: YIELD_META.gold.glyph, kind: 'yield', yield: 'gold', description: YIELD_META.gold.blurb },
   { id: 'production', label: 'Production', group: 'Yields', icon: YIELD_META.production.glyph, kind: 'yield', yield: 'production', description: YIELD_META.production.blurb },
   { id: 'food', label: 'Food', group: 'Yields', icon: YIELD_META.food.glyph, kind: 'yield', yield: 'food', description: YIELD_META.food.blurb },
@@ -424,6 +425,15 @@ export function computeLens(
   const dimTerrain = (i: number) => set(i, shade(terrainRGB(d, idx, i), 0.32))
   const dimAll = () => { for (let i = 0; i < n; i++) dimTerrain(i) }
   const name = COUNTRY_META[d.id].name
+
+  if (lens.kind === 'history') {
+    // the timeline draws dated events on top; the land is a quiet backdrop
+    for (let i = 0; i < n; i++) set(i, shade(terrainRGB(d, idx, i), 0.5))
+    return {
+      colors, elevation,
+      legend: { kind: 'categorical', title: 'Historic moments (History tab: timeline)', items: Object.values(EVENT_KIND_META).map((k) => ({ label: `${k.icon} ${k.label}`, rgb: k.rgb })) },
+    }
+  }
 
   if (lens.kind === 'terrain') {
     terrainAll()

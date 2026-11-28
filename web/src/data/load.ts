@@ -1,7 +1,7 @@
 import { cellArea } from 'h3-js'
 import type {
   AdminTable, City, CountryData, CountryId, HexesJson, IndexJson, Meta, Metric, NationalIndicator,
-  PointLayers, Source, Wonder,
+  PointLayers, Source, Wonder, HistoryEvent,
 } from '../types'
 
 const BASE = `${import.meta.env.BASE_URL}data`
@@ -301,6 +301,20 @@ let nationalP: Promise<NationalIndicator[]> | null = null
 export const loadNational = () => (nationalP ??= loadIndex().catch(() => null).then(() => json<NationalIndicator[]>('national.json')).catch(() => []))
 
 const geoCache = new Map<string, Promise<GeoJSON.FeatureCollection>>()
+const eventsCache = new Map<CountryId, Promise<HistoryEvent[]>>()
+/** Historic moments for the timeline (fetched on first use; ~60 kB LK, ~0.8 MB US uncompressed). */
+export function loadEvents(country: CountryId): Promise<HistoryEvent[]> {
+  let p = eventsCache.get(country)
+  if (!p) {
+    p = loadIndex().catch(() => null).then(() => json<HistoryEvent[]>(`${country}/events.json`)).catch((e) => {
+      eventsCache.delete(country)
+      throw e
+    })
+    eventsCache.set(country, p)
+  }
+  return p
+}
+
 export function loadAdminGeo(country: CountryId, level: string) {
   const k = `${country}/${level}`
   let p = geoCache.get(k)

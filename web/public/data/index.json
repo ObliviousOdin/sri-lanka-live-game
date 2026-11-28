@@ -1,5 +1,5 @@
 {
- "built_at": "2026-11-27T02:48:56+00:00",
+ "built_at": "2026-11-28T00:03:24+00:00",
  "countries": [
   {
    "id": "lka",
@@ -129,6 +129,50 @@
   "floodplain": "Floodplain",
   "": ""
  },
+ "eras": [
+  {
+   "id": "ancient",
+   "label": "Ancient",
+   "start": null,
+   "end": 499
+  },
+  {
+   "id": "medieval",
+   "label": "Medieval",
+   "start": 500,
+   "end": 1449
+  },
+  {
+   "id": "renaissance",
+   "label": "Renaissance",
+   "start": 1450,
+   "end": 1749
+  },
+  {
+   "id": "industrial",
+   "label": "Industrial",
+   "start": 1750,
+   "end": 1899
+  },
+  {
+   "id": "modern",
+   "label": "Modern",
+   "start": 1900,
+   "end": 1944
+  },
+  {
+   "id": "atomic",
+   "label": "Atomic",
+   "start": 1945,
+   "end": 1989
+  },
+  {
+   "id": "information",
+   "label": "Information",
+   "start": 1990,
+   "end": null
+  }
+ ],
  "districts": [
   {
    "code": "",

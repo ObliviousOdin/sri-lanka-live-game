@@ -190,7 +190,34 @@ A city's **size** is `round(population^0.4 / 20)`; its citizen icons split that 
 by the largest-remainder method. Where Sri Lankan tables are only published by province, the
 domain module documents how they were split to districts (see each metric's *method*).
 
-## 7. Known limitations
+## 7. Historic moments (timeline)
+
+The History tab and the *Historic moments* lens replay when the places on the map were founded,
+opened, commissioned or inscribed. Every moment is a located place that a source dates; nothing is
+dated by hand (`pipeline/civmap/domains/history.py`).
+
+| Kind | Year used | Source |
+|---|---|---|
+| Power stations (US, ≥ 250 MW) | Operating Year of the earliest generator still operating or on standby (so a plant whose original units were retired shows its oldest *surviving* unit) | EIA-860 2025 |
+| Power stations (Sri Lanka) | commissioning year, else the service-entry / opening / inception date of the nearest Wikidata power station or dam within 5 km | CEB, Global Power Plant Database, Wikidata |
+| World Heritage Sites | UNESCO inscription year, plus the site's own founding date when Wikidata records one earlier | Wikidata (P1435 qualifier, P571) |
+| Universities, museums, parks, holy sites, airports, spaceports | Wikidata inception (P571), official opening (P1619), service entry (P729) or start time (P580), in a per-kind order of preference; the verb shown follows the property (founded / opened / entered service / began) | Wikidata, matched by Wikidata id, ROR id (universities) or IATA code (airports) |
+| Cities and monuments | Wikidata inception of items located in the country (before 1800, or before 1900 for the better-documented ones); whole countries, states and administrative divisions are excluded | Wikidata |
+
+* **Precision is kept.** A date recorded as a century is shown as "5th century", not as a year.
+  Wikidata writes BCE years with a minus sign and no year zero, so −399 is 399 BCE.
+* **Eras** pace the slider (each era gets the same width): Ancient (to 499), Medieval (500–1449),
+  Renaissance (1450–1749), Industrial (1750–1899), Modern (1900–1944), Atomic (1945–1989),
+  Information (1990–today). These are conventional periods of world history, not data.
+* **Coverage follows the sources.** Wikidata dates Sri Lanka's ancient monuments unevenly (many
+  World Heritage components have no founding date), US power stations start at 250 MW, and US
+  universities / museums are limited to the 300 most-researched / 200 most-documented. Counts of
+  moments therefore describe the sources' coverage as much as history, and are not compared as
+  achievement scores.
+* On the map, moments of the current era are badges (capped when zoomed out to the most notable:
+  wonders first, then the highest within-kind value) and earlier eras are small dots.
+
+## 8. Known limitations
 
 * Sri Lankan GDP is officially published only by province; district and tile values are
   model-based disaggregations (method in the metric's provenance).

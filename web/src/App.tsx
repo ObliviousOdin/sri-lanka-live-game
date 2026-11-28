@@ -8,6 +8,7 @@ import { Advisors } from './panels/Advisors'
 import { CityView } from './panels/CityView'
 import { Explorer } from './panels/Explorer'
 import { Sources } from './panels/Sources'
+import { HistoryPanel } from './panels/HistoryPanel'
 import { TilePanel } from './panels/TilePanel'
 import { WondersPanel } from './panels/WondersPanel'
 import { LENS_BY_ID, type Legend as LegendT } from './lenses'
@@ -20,6 +21,7 @@ const TABS: { id: PanelTab; label: string; icon: string }[] = [
   { id: 'city', label: 'Cities', icon: '🏛️' },
   { id: 'explorer', label: 'Explorer', icon: '📈' },
   { id: 'wonders', label: 'Wonders', icon: '🏯' },
+  { id: 'history', label: 'History', icon: '📜' },
   { id: 'sources', label: 'Sources', icon: '📚' },
 ]
 
@@ -218,6 +220,7 @@ export default function App() {
               {panel === 'advisors' && <Advisors app={app} />}
               {panel === 'explorer' && <Explorer app={app} />}
               {panel === 'wonders' && <WondersPanel app={app} />}
+              {panel === 'history' && <HistoryPanel app={app} />}
               {panel === 'sources' && <Sources app={app} />}
             </>
           )}
