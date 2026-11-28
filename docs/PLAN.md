@@ -108,7 +108,7 @@ which quote the World Bank PPP indicators in `national.json`.
 ## 5. Web data contract (web/public/data/)
 
 ```
-index.json                    countries, build date, global yield scales, district rule texts
+index.json                    countries, build date, global yield scales, timeline eras, district rule texts
 sources.json                  all sources (id, title, publisher, url, license, vintage, accessed, metrics per
                               country, used_in {cc: ['cities' | 'wonders'], national: ['advisors']},
                               provenance 'download' | 'software' | 'none', n_downloads, total_bytes and the
@@ -130,6 +130,7 @@ national.json                 World Bank national indicators for both countries
 <cc>/points.json              facilities used for wonders/districts (with source ids)
 <cc>/wonders.json             wonders with rule, rank, value, source (meta.json wonder_categories: status
                               per category, e.g. no_data for Sri Lanka's Great Airport, with note and rule)
+<cc>/events.json             historic moments for the timeline (year, precision, date text, kind, source, wonder link)
 <cc>/cities.json              City View payload: centre hex, ring tiles (after de-duplication) and
                               ring_tiles / overlap (tiles ceded to a nearer city), citizens, districts,
                               official_pop + population_scope ('metro area (Census MSA)' |

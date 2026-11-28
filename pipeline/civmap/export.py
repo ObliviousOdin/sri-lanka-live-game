@@ -16,6 +16,7 @@ from .civ import (CULTURE_BONUS, DISTRICT_ORDER, DISTRICT_RULES, DISTRICTS, FAIT
                   plantation_land_share)
 from .config import COUNTRIES, INTERIM, WEB_DATA, web_dir
 from .core import load_admin, load_hexes
+from .domains.history import ERAS
 from .fetch import manifest
 
 # point layers shipped to the browser: (table, value column for sizing, max rows, extra columns)
@@ -327,6 +328,31 @@ def export_country(country: str) -> dict:
         points_out[name] = {"domain": df["domain"].iloc[0], "rows": rows, "total": int(len(df))}
     dump(out / "points.json", points_out)
 
+    # historic moments (timeline): every dated event, linked to its wonder when it is one
+    ev_f = INTERIM / country / "history" / "points_events.csv"
+    if ev_f.exists():
+        ev = pd.read_csv(ev_f, dtype={"h3": str})
+        wonders = json.loads((INTERIM / country / "civ" / "wonders.json").read_text())
+        by_key = {}
+        for w in wonders:
+            by_key.setdefault((w.get("h3"), str(w.get("name", "")).lower()), w["category"])
+            if w.get("wikidata"):
+                by_key.setdefault(("qid", w["wikidata"]), w["category"])
+        rows = []
+        for _, r in ev.iterrows():
+            wonder = by_key.get(("qid", r.get("wikidata"))) or by_key.get((r.get("h3"), str(r["name"]).lower()))
+            rows.append({
+                "id": r["id"], "name": r["name"], "lat": _round(float(r["lat"]), 6), "lon": _round(float(r["lon"]), 6),
+                "h3": r.get("h3"), "kind": r["kind"], "event": r["event"], "year": int(r["year"]),
+                "precision": int(r["precision"]), "date": r["date_text"],
+                "value": _round(float(r["value"])) if pd.notna(r.get("value")) else None,
+                "unit": r.get("value_unit") if isinstance(r.get("value_unit"), str) else "",
+                "wikidata": r.get("wikidata") if isinstance(r.get("wikidata"), str) else None,
+                "source": r["source"], "basis": r.get("date_basis") if isinstance(r.get("date_basis"), str) else "",
+                "wonder": wonder,
+            })
+        dump(out / "events.json", rows)
+
     # wonders & cities
     for f in ("wonders", "cities"):
         dump(out / f"{f}.json", json.loads((INTERIM / country / "civ" / f"{f}.json").read_text()))
@@ -448,6 +474,7 @@ def export_global() -> dict:
                         "power_bonus": POWER_BONUS, "research_bonus": RESEARCH_BONUS,
                         "culture_bonus": CULTURE_BONUS, "faith_bonus": FAITH_BONUS},
         "terrain": TERRAIN, "features": FEATURES,
+        "eras": ERAS,
         "districts": [{"code": c, "label": DISTRICTS.get(c, ""), "rule": DISTRICT_RULES.get(c, "")} for c in [""] + DISTRICT_ORDER],
         "terrain_codes": list(TERRAIN), "feature_codes": list(FEATURES),
     }

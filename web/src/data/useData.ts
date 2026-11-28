@@ -2,9 +2,9 @@ import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore
 import { COUNTRY_META } from '../civ'
 import { computeLens, LENS_BY_ID, reliefElevation, type LensResult } from '../lenses'
 import { useStore } from '../store'
-import { COUNTRIES, type CountryData, type CountryId, type IndexJson, type NationalIndicator, type Source } from '../types'
+import { COUNTRIES, type CountryData, type CountryId, type HistoryEvent, type IndexJson, type NationalIndicator, type Source } from '../types'
 import {
-  DataError, loadCountry, loadIndex, loadMatrix, loadNational, loadSources, matrixProgress, onMatrixProgress, resetCountry,
+  DataError, loadCountry, loadEvents, loadIndex, loadMatrix, loadNational, loadSources, matrixProgress, onMatrixProgress, resetCountry,
   type MatrixProgress,
 } from './load'
 
@@ -151,4 +151,16 @@ export function useLens(d: CountryData | undefined, all: AppData): LensResult | 
   // terrain / district columns: mean elevation, from the matrix once it has arrived
   const relief = useMemo(() => (reliefOnly && d?.matrixReady ? reliefElevation(d) : null), [reliefOnly, d])
   return useMemo(() => (base && relief ? { ...base, elevation: relief } : base), [base, relief])
+}
+
+/** Historic moments of one country, loaded on first use (null while loading or when disabled). */
+export function useEvents(country: CountryId, enabled = true): HistoryEvent[] | null {
+  const [ev, setEv] = useState<HistoryEvent[] | null>(null)
+  useEffect(() => {
+    if (!enabled) return
+    let alive = true
+    loadEvents(country).then((e) => alive && setEv(e)).catch(() => alive && setEv([]))
+    return () => { alive = false }
+  }, [country, enabled])
+  return enabled ? ev : null
 }

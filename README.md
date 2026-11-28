@@ -14,7 +14,9 @@ assigned by published-data rules, and every number links back to its source.
   appear only in the Advisors' national remarks.
 * 6 yields, 18+ lenses (income, education, religion, ethnicity, workforce, disasters, energy, trade,
   population, land cover, elevation…), City View, five Advisors, an Explorer (linked table + scatter),
-  a Wonders race and a full source catalogue with download provenance.
+  a Wonders race, a **History timeline** (founding, opening, commissioning and World Heritage
+  inscription of the places on the map, replayed era by era) and a full source catalogue with
+  download provenance.
 
 [![Deploy to GitHub Pages](https://github.com/ObliviousOdin/sri-lanka-live-game/actions/workflows/deploy-pages.yml/badge.svg)](https://github.com/ObliviousOdin/sri-lanka-live-game/actions/workflows/deploy-pages.yml)
 
@@ -94,6 +96,7 @@ download records (URL, size, time, SHA-256 prefix).
 | culture | Wikidata (UNESCO WHS, museums), DWC/SLTDA park visitors, WDPA | Wikidata, NPS visitor statistics, WDPA |
 | hazards | IBTrACS, USGS earthquakes, NOAA tsunami run-ups, DesInventar | same + FEMA National Risk Index |
 | infra | WRI Global Power Plant Database, PortWatch, OurAirports (no open airport-level passenger statistics), Wikidata | EIA-860, PortWatch, OurAirports + FAA enplanements (boardings), Wikidata |
+| history | CEB / Global Power Plant Database commissioning years, Wikidata founding & opening dates, UNESCO inscriptions | EIA-860 earliest operating unit, Wikidata founding & opening dates, UNESCO inscriptions |
 
 The app's **Sources** tab lists every dataset with publisher, vintage, licence, access date and the
 metrics (or City View, Wonders, Advisors) it feeds.

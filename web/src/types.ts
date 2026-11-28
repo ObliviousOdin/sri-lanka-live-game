@@ -198,8 +198,38 @@ export interface DistrictDef {
   top?: Partial<Record<CountryId, number>>
 }
 
+/** A dated historic moment (pipeline/civmap/domains/history.py). Years are astronomical-free:
+ *  negative = BCE as written by Wikidata (no year zero). */
+export interface HistoryEvent {
+  id: string
+  name: string
+  lat: number
+  lon: number
+  h3: string | null
+  kind: string
+  event: string
+  year: number
+  /** Wikidata precision: 11 day, 10 month, 9 year, 8 decade, 7 century, 6 millennium */
+  precision: number
+  date: string
+  value: number | null
+  unit: string
+  wikidata: string | null
+  source: string
+  basis: string
+  wonder: string | null
+}
+
+export interface Era {
+  id: string
+  label: string
+  start: number | null
+  end: number | null
+}
+
 export interface IndexJson {
   built_at: string
+  eras?: Era[]
   countries: { id: CountryId; name: string; h3_res: number; admin_levels: Record<string, string> }[]
   yields: YieldKey[]
   yield_scale: {

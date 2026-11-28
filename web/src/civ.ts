@@ -71,6 +71,20 @@ export const CITIZEN_META: Record<string, { label: string; icon: string; desc: s
   cit_soldiers: { label: 'Soldiers', icon: '💂', desc: 'Armed forces' },
 }
 
+/** Kinds of historic moments on the timeline (History lens). */
+export const EVENT_KIND_META: Record<string, { label: string; icon: string; rgb: RGB }> = {
+  settlement: { label: 'Cities founded', icon: '🏘️', rgb: [240, 214, 120] },
+  landmark: { label: 'Monuments', icon: '🗿', rgb: [200, 170, 130] },
+  heritage: { label: 'World Heritage', icon: '🏯', rgb: [192, 127, 240] },
+  holy_site: { label: 'Holy sites', icon: '🛐', rgb: [242, 234, 208] },
+  university: { label: 'Universities', icon: '🎓', rgb: [83, 179, 240] },
+  museum: { label: 'Museums', icon: '🖼️', rgb: [230, 140, 190] },
+  park: { label: 'Parks', icon: '🏞️', rgb: [96, 200, 120] },
+  power: { label: 'Power stations', icon: '⚡', rgb: [250, 210, 60] },
+  airport: { label: 'Airports', icon: '✈️', rgb: [150, 200, 240] },
+  spaceport: { label: 'Spaceports', icon: '🚀', rgb: [230, 230, 255] },
+}
+
 export const COUNTRY_META = {
   lka: { name: 'Sri Lanka', short: 'LKA', flagColor: '#f2a900', accent: '#f2a900' },
   usa: { name: 'United States', short: 'USA', flagColor: '#5b8def', accent: '#5b8def' },

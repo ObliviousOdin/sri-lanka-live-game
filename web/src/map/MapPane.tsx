@@ -8,13 +8,15 @@ import { COUNTRY_META, DISTRICT_META, YIELD_META, terrainLabel } from '../civ'
 import { ScaleBar } from '../components/ScaleBar'
 import { SourceChips } from '../components/SourceChip'
 import { adminUnitOfHex, finestLevel, hexesOfAdmin, loadAdminGeo, value } from '../data/load'
-import { useSources, type AppData } from '../data/useData'
+import { useEvents, useSources, type AppData } from '../data/useData'
+import { DEFAULT_ERAS, eraIndexOf, resolveEras } from '../history/eraScale'
+import { historyIcons, historyLayers, historyTooltip } from './historyLayer'
 import { fmtInt, fmtNumber, fmtUnit } from '../format'
 import { LENS_BY_ID, isDensity, landOnlyMetric, lensMetricKey, lensMetricKeys, metricLabel, type LensDef, type LensResult } from '../lenses'
 import { CITY_ZOOM, openCity } from '../panels/cityViewNav'
 import { plural } from '../panels/tilePanelStats'
 import { useStore } from '../store'
-import { YIELDS, type City, type CountryData, type CountryId, type PointRow } from '../types'
+import { YIELDS, type City, type CountryData, type CountryId, type HistoryEvent, type PointRow } from '../types'
 import { adminFeature, adminIdAt, adminIndexOf, frameLon, geoForMap, mapLon } from './adminPick'
 import { BaseMap } from './BaseMap'
 import { emojiAtlas } from './emojiAtlas'
@@ -117,6 +119,14 @@ export function MapPane({ country, data, app, lens, compact }: Props) {
   const panelOpen = useStore((s) => s.panelOpen)
   const sources = useSources()
   const lensDef = LENS_BY_ID.get(lensId) ?? LENS_BY_ID.get('terrain')!
+  // ---- timeline (Historic moments lens)
+  const histOn = lensDef.kind === 'history'
+  const events = useEvents(country, histOn)
+  const histYear = useStore((s) => s.history.year)
+  const histKinds = useStore((s) => s.history.kinds)
+  const histFocus = useStore((s) => s.history.focus)
+  const histSpans = useMemo(() => resolveEras(app.index?.eras ?? DEFAULT_ERAS, -10_000), [app.index])
+  const histEraStart = histSpans[eraIndexOf(histYear, histSpans)].start
   /** admin level clicks resolve to here: DS divisions fall back to US counties on the US map */
   const pickLv = pickLevel === 'hex' ? 'hex' : data.meta.admin_levels[pickLevel] ? pickLevel : finestLevel(data)
   const pickFallback = pickLevel !== 'hex' && pickLv !== pickLevel
@@ -347,6 +357,7 @@ export function MapPane({ country, data, app, lens, compact }: Props) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [data.hexes, data.wonders, data.points, data.n, idx, country, zoom >= iconMinZoom + 1.2])
   const atlas = useMemo(() => emojiAtlas([...new Set(iconData.map((d) => d.icon))]), [iconData])
+  const histAtlas = useMemo(() => (histOn ? emojiAtlas(historyIcons()) : null), [histOn])
 
   // pane overlays in pane pixels (measured below): city banners are not drawn under them
   const [overlays, setOverlays] = useState<Box[]>([])
@@ -412,7 +423,7 @@ export function MapPane({ country, data, app, lens, compact }: Props) {
     getElevation: (i: number) => (lens ? lens.elevation[i] : 0),
     // raw metres of relief (terrain, district and dominant lenses) are exaggerated ×6; metric and
     // yield lenses already scale their columns (normalised value × 60 km, yield × 1.5 km)
-    elevationScale: lensDef.kind === 'terrain' || lensDef.kind === 'district' || lensDef.kind === 'dominant' ? 6 : 1,
+    elevationScale: lensDef.kind === 'terrain' || lensDef.kind === 'district' || lensDef.kind === 'dominant' || lensDef.kind === 'history' ? 6 : 1,
     extruded: extrude,
     coverage: extrude ? 0.92 : 0.955,
     highPrecision: false,
@@ -451,7 +462,12 @@ export function MapPane({ country, data, app, lens, compact }: Props) {
       pickable: false, modelMatrix: shiftBy(0), parameters: ON_TOP,
     }),
     ...pointLayers,
-    showIcons && zoom >= iconMinZoom && new IconLayer<IconDatum>({
+    ...(histOn && histAtlas ? historyLayers({
+      country, events, year: histYear, eraStart: histEraStart, kinds: histKinds, focus: histFocus, atlas: histAtlas,
+      lon: mapLon, modelMatrix: shiftBy(0), onTop: ON_TOP as unknown as Record<string, unknown>,
+      maxBadges: zoom < (country === 'usa' ? 5.5 : 8.2) ? (country === 'usa' ? 90 : 45) : 600,
+    }) : []),
+    showIcons && !histOn && zoom >= iconMinZoom && new IconLayer<IconDatum>({
       id: `icons-${country}`, data: iconData, iconAtlas: atlas.canvas as unknown as string, iconMapping: atlas.mapping,
       getIcon: (d) => d.icon, getPosition: (d) => d.pos, getSize: (d) => d.size, sizeUnits: 'pixels',
       pickable: true, updateTriggers: { getIcon: [atlas] }, modelMatrix: shiftBy(0), parameters: ON_TOP,
@@ -536,6 +552,12 @@ export function MapPane({ country, data, app, lens, compact }: Props) {
       useStore.getState().fly(country, cLon, cLat, z)
       return
     }
+    if (id.startsWith('hist-') && info.object) {
+      const e = info.object as HistoryEvent
+      useStore.getState().setHistory({ focus: e.id })
+      if (e.h3) useStore.getState().select({ country, kind: 'hex', id: e.h3 }, 'history')
+      return
+    }
     // facilities and icons select the tile they sit in; anything else the point under the cursor
     let lonView: number, lat: number
     if (id.startsWith('icons-') && info.object) [lonView, lat] = [(info.object as IconDatum).pos[0] + lonOffset, (info.object as IconDatum).pos[1]]
@@ -552,6 +574,7 @@ export function MapPane({ country, data, app, lens, compact }: Props) {
       return { html: hexTooltip(data, app, info.object, lensDef, lensMetricSel), className: 'deck-tip' }
     }
     if (id.startsWith('icons-')) return { html: `<b>${escapeHtml((info.object as IconDatum).label)}</b>`, className: 'deck-tip' }
+    if (id.startsWith('hist-') && info.object) return { html: historyTooltip(info.object as HistoryEvent), className: 'deck-tip' }
     if (id.startsWith('pts-') && info.object) {
       const name = id.slice(4).replace(/-ring$/, '')
       return { html: pointTooltip(data, name, info.object as PointRow, sources), className: 'deck-tip' }
